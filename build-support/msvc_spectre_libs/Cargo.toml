@@ -1,0 +1,11 @@
+# ponytail: stub do msvc_spectre_libs — o VS 2019 desta máquina não tem as libs
+# spectre-mitigated e o crate original (via pet/python-environment-tools) faz panic
+# sem elas. Para build local, linkar com a CRT normal é equivalente. Remova este
+# patch quando o toolchain tiver as libs spectre instaladas.
+[package]
+name = "msvc_spectre_libs"
+version = "0.1.3"
+edition = "2021"
+
+[features]
+error = []

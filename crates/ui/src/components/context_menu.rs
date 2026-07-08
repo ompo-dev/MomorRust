@@ -2260,18 +2260,47 @@ impl Render for ContextMenu {
                 _ => None,
             };
 
+            let window_width = window.viewport_size().width;
+
             div()
                 .relative()
                 .child(render_menu(cx, window))
                 // Only render the aside once we have trigger bounds to avoid flicker.
                 .when_some(trigger_position, |this, (top, height)| {
                     this.children(aside.map(|(_, aside)| {
+                        // ponytail: escolhe o lado pelo espaço REAL na janela em vez de
+                        // confiar no lado configurado — aside nunca nasce cortado na
+                        // borda. Se nenhum lado couber, fica no mais largo.
+                        let aside_width = if is_wide_window { px(392.) } else { px(200.) };
+                        let side = match menu_bounds {
+                            Some(menu_bounds) => {
+                                let space_left = menu_bounds.origin.x;
+                                let space_right = window_width
+                                    - (menu_bounds.origin.x + menu_bounds.size.width);
+                                match aside.side {
+                                    DocumentationSide::Left
+                                        if space_left < aside_width
+                                            && space_right > space_left =>
+                                    {
+                                        DocumentationSide::Right
+                                    }
+                                    DocumentationSide::Right
+                                        if space_right < aside_width
+                                            && space_left > space_right =>
+                                    {
+                                        DocumentationSide::Left
+                                    }
+                                    side => side,
+                                }
+                            }
+                            None => aside.side,
+                        };
                         h_flex()
                             .absolute()
-                            .when(aside.side == DocumentationSide::Left, |el| {
+                            .when(side == DocumentationSide::Left, |el| {
                                 el.right_full().mr_1()
                             })
-                            .when(aside.side == DocumentationSide::Right, |el| {
+                            .when(side == DocumentationSide::Right, |el| {
                                 el.left_full().ml_1()
                             })
                             .top(top)

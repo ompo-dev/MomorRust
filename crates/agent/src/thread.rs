@@ -2,8 +2,9 @@ use crate::{
     ApplyCodeActionTool, CodeActionStore, ContextServerRegistry, CopyPathTool, CreateDirectoryTool,
     DbLanguageModel, DbThread, DeletePathTool, DiagnosticsTool, EditFileTool, FetchTool,
     FindPathTool, FindReferencesTool, GetCodeActionsTool, GoToDefinitionTool, GrepTool,
-    ListDirectoryTool, MovePathTool, NowTool, OpenTool, ProjectSnapshot, ReadFileTool, RenameTool,
-    RestoreFileFromDiskTool, SaveFileTool, SpawnAgentTool, SystemPromptTemplate, Template,
+    ListDirectoryTool, MovePathTool, NotebookTool, NowTool, OpenTool, ProjectSnapshot, ReadFileTool,
+    RenameTool,
+    RestoreFileFromDiskTool, SaveFileTool, SkillTool, SpawnAgentTool, SystemPromptTemplate, Template,
     Templates, TerminalTool, ToolPermissionDecision, UpdatePlanTool, WebSearchTool, WriteFileTool,
     decide_permission_from_settings,
 };
@@ -1561,7 +1562,9 @@ impl Thread {
         self.add_tool(GrepTool::new(self.project.clone()));
         self.add_tool(ListDirectoryTool::new(self.project.clone()));
         self.add_tool(MovePathTool::new(self.project.clone()));
+        self.add_tool(NotebookTool);
         self.add_tool(NowTool);
+        self.add_tool(SkillTool);
         self.add_tool(OpenTool::new(self.project.clone()));
         if cx.has_flag::<UpdatePlanToolFeatureFlag>() {
             self.add_tool(UpdatePlanTool);
@@ -3021,6 +3024,7 @@ impl Thread {
             project: self.project_context.read(cx),
             available_tools,
             model_name: self.model.as_ref().map(|m| m.name().0.to_string()),
+            skills: crate::skills::all(),
         }
         .render(&self.templates)
         .context("failed to build system prompt")

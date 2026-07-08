@@ -47,6 +47,7 @@ impl WindowsWindowInner {
             }
             WM_ACTIVATE => self.handle_activate_msg(wparam),
             WM_CREATE => self.handle_create_msg(handle),
+            crate::window::WM_APP_TRAY => self.handle_tray_msg(handle, lparam),
             WM_MOVE => self.handle_move_msg(handle, lparam),
             WM_SIZE => self.handle_size_msg(wparam, lparam),
             WM_GETMINMAXINFO => self.handle_get_min_max_info_msg(lparam),
@@ -121,7 +122,32 @@ impl WindowsWindowInner {
         }
     }
 
+    fn handle_tray_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SW_SHOW, SetForegroundWindow, ShowWindow, WM_LBUTTONDBLCLK, WM_LBUTTONUP,
+        };
+        // O evento do mouse vem no low word do lparam.
+        let event = (lparam.0 as u32) & 0xFFFF;
+        if event == WM_LBUTTONUP || event == WM_LBUTTONDBLCLK {
+            unsafe {
+                let _ = ShowWindow(handle, SW_SHOW);
+                let _ = SetForegroundWindow(handle);
+            }
+        }
+        Some(0)
+    }
+
     fn handle_move_msg(&self, handle: HWND, lparam: LPARAM) -> Option<isize> {
+        // ponytail: re-aplica o ghost mode — o move loop do Windows reseta a display
+        // affinity, então sem isso a janela vaza na captura enquanto é arrastada.
+        if self.state.capture_protection.get() {
+            use windows::Win32::UI::WindowsAndMessaging::{
+                SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE,
+            };
+            unsafe {
+                SetWindowDisplayAffinity(handle, WDA_EXCLUDEFROMCAPTURE).ok();
+            }
+        }
         let origin = logical_point(
             lparam.signed_loword() as f32,
             lparam.signed_hiword() as f32,
@@ -243,6 +269,15 @@ impl WindowsWindowInner {
     fn handle_size_move_loop_exit(&self, handle: HWND) -> Option<isize> {
         unsafe {
             KillTimer(Some(handle), SIZE_MOVE_LOOP_TIMER_ID).log_err();
+        }
+        // ponytail: garante o ghost mode de volta ao terminar o arrasto/redimensionamento.
+        if self.state.capture_protection.get() {
+            use windows::Win32::UI::WindowsAndMessaging::{
+                SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE,
+            };
+            unsafe {
+                SetWindowDisplayAffinity(handle, WDA_EXCLUDEFROMCAPTURE).ok();
+            }
         }
         None
     }
@@ -873,6 +908,8 @@ impl WindowsWindowInner {
             if let Some(area) = area {
                 match area {
                     WindowControlArea::Drag => Some(HTCAPTION as _),
+                    // ponytail: área interativa dentro da titlebar recebe clique normal
+                    WindowControlArea::Client => return Some(HTCLIENT as _),
                     WindowControlArea::Close => return Some(HTCLOSE as _),
                     WindowControlArea::Max => return Some(HTMAXBUTTON as _),
                     WindowControlArea::Min => return Some(HTMINBUTTON as _),

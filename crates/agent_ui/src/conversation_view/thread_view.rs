@@ -465,6 +465,25 @@ impl ThreadView {
             Self::handle_message_editor_event,
         ));
 
+        // ponytail: STT — no modo Prompt, cada trecho final rotulado entra no editor.
+        // No modo Contexto (padrão), NÃO toca na caixa: a transcrição é injetada por
+        // baixo dos panos no envio (ver send_impl).
+        subscriptions.push(cx.subscribe_in(
+            &stt::Stt::global(cx),
+            window,
+            |this, stt, event, window, cx| {
+                if let stt::SttEvent::FinalSegment(segment) = event
+                    && stt.read(cx).delivery() == stt::DeliveryMode::Prompt
+                {
+                    // ponytail: modo Prompt = só o meu mic (ditado), sem rótulo de falante.
+                    let line = format!("{} ", segment.text);
+                    this.message_editor.update(cx, |editor, cx| {
+                        editor.insert_text(&line, window, cx);
+                    });
+                }
+            },
+        ));
+
         subscriptions.push(cx.observe(&message_editor, |this, editor, cx| {
             let is_empty = editor.read(cx).text(cx).is_empty();
             let draft_contents_task = if is_empty {
@@ -991,6 +1010,19 @@ impl ThreadView {
     ) {
         let contents = self.resolve_message_contents(&message_editor, cx);
 
+        // ponytail: STT modo Contexto — injeta a transcrição acumulada como bloco de
+        // texto no envio, sem ter passado pela caixa de mensagem.
+        let stt_context = {
+            let stt = stt::Stt::global(cx);
+            if stt.read(cx).delivery() == stt::DeliveryMode::Context {
+                stt.update(cx, |stt, _| stt.take_transcript_for_ai())
+            } else {
+                None
+            }
+        };
+        // ponytail: contexto de notas/reuniões arrastadas — enviado escondido.
+        let dropped_context = message_editor.update(cx, |e, _| e.take_pending_context());
+
         self.thread_error.take();
         self.thread_feedback.clear();
         self.editing_message.take();
@@ -1004,10 +1036,34 @@ impl ThreadView {
         }
 
         let contents_task = cx.spawn_in(window, async move |_this, cx| {
-            let (contents, tracked_buffers) = contents.await?;
+            let (mut contents, tracked_buffers) = contents.await?;
 
-            if contents.is_empty() {
+            if contents.is_empty() && stt_context.is_none() && dropped_context.is_empty() {
                 return Ok(None);
+            }
+
+            // Contexto arrastado (notas/reuniões) — blocos escondidos no topo.
+            for ctx in dropped_context.into_iter().rev() {
+                if ctx.trim().is_empty() {
+                    continue;
+                }
+                contents.insert(
+                    0,
+                    acp::ContentBlock::Text(acp::TextContent::new(format!(
+                        "{}\n{ctx}\n\n",
+                        crate::message_editor::STT_CONTEXT_MARKER
+                    ))),
+                );
+            }
+
+            if let Some(transcript) = stt_context {
+                contents.insert(
+                    0,
+                    acp::ContentBlock::Text(acp::TextContent::new(format!(
+                        "{}\n{transcript}\n\n",
+                        crate::message_editor::STT_CONTEXT_MARKER
+                    ))),
+                );
             }
 
             let _ = cx.update(|window, cx| {
@@ -4993,105 +5049,8 @@ impl ThreadView {
                 },
             );
 
-        let enable_thread_feedback = util::maybe!({
-            let project = thread.read(cx).project().read(cx);
-            let user_store = project.user_store();
-            if let Some(configuration) = user_store.read(cx).current_organization_configuration() {
-                if !configuration.is_agent_thread_feedback_enabled {
-                    return false;
-                }
-            }
-
-            AgentSettings::get_global(cx).enable_feedback
-                && self.thread.read(cx).connection().telemetry().is_some()
-        });
-
-        if enable_thread_feedback {
-            let feedback = self.thread_feedback.feedback;
-
-            let tooltip_meta = || {
-                SharedString::new(
-                    "Rating the thread sends all of your current conversation to the Zed team.",
-                )
-            };
-
-            container = container
-                    .child(
-                        IconButton::new("feedback-thumbs-up", IconName::ThumbsUp)
-                            .shape(ui::IconButtonShape::Square)
-                            .icon_size(IconSize::Small)
-                            .icon_color(match feedback {
-                                Some(ThreadFeedback::Positive) => Color::Accent,
-                                _ => Color::Ignored,
-                            })
-                            .tooltip(move |window, cx| match feedback {
-                                Some(ThreadFeedback::Positive) => {
-                                    Tooltip::text("Thanks for your feedback!")(window, cx)
-                                }
-                                _ => {
-                                    Tooltip::with_meta("Helpful Response", None, tooltip_meta(), cx)
-                                }
-                            })
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.handle_feedback_click(ThreadFeedback::Positive, window, cx);
-                            })),
-                    )
-                    .child(
-                        IconButton::new("feedback-thumbs-down", IconName::ThumbsDown)
-                            .shape(ui::IconButtonShape::Square)
-                            .icon_size(IconSize::Small)
-                            .icon_color(match feedback {
-                                Some(ThreadFeedback::Negative) => Color::Accent,
-                                _ => Color::Ignored,
-                            })
-                            .tooltip(move |window, cx| match feedback {
-                                Some(ThreadFeedback::Negative) => {
-                                    Tooltip::text(
-                                    "We appreciate your feedback and will use it to improve in the future.",
-                                )(window, cx)
-                                }
-                                _ => {
-                                    Tooltip::with_meta(
-                                        "Not Helpful Response",
-                                        None,
-                                        tooltip_meta(),
-                                        cx,
-                                    )
-                                }
-                            })
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.handle_feedback_click(ThreadFeedback::Negative, window, cx);
-                            })),
-                    );
-        }
-
-        if let Some(project) = self.project.upgrade()
-            && let Some(server_view) = self.server_view.upgrade()
-            && cx.has_flag::<AgentSharingFeatureFlag>()
-            && project.read(cx).client().status().borrow().is_connected()
-        {
-            let button = if self.is_imported_thread(cx) {
-                IconButton::new("sync-thread", IconName::ArrowCircle)
-                    .shape(ui::IconButtonShape::Square)
-                    .icon_size(IconSize::Small)
-                    .icon_color(Color::Ignored)
-                    .tooltip(Tooltip::text("Sync with source thread"))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.sync_thread(project.clone(), server_view.clone(), window, cx);
-                    }))
-            } else {
-                IconButton::new("share-thread", IconName::ArrowUpRight)
-                    .shape(ui::IconButtonShape::Square)
-                    .icon_size(IconSize::Small)
-                    .icon_color(Color::Ignored)
-                    .tooltip(Tooltip::text("Share Thread"))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.share_thread(window, cx);
-                    }))
-            };
-
-            container = container.child(button);
-        }
+        // ponytail: chat-only — feedback (👍👎 envia a conversa pro time do Zed) e
+        // share/sync de thread (upload pra zed.dev) removidos
 
         container
             .child(open_as_markdown)

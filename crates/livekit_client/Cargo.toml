@@ -43,7 +43,8 @@ smallvec.workspace = true
 ui.workspace = true
 util.workspace = true
 
-[target.'cfg(not(any(all(target_os = "windows", target_env = "gnu"), target_os = "freebsd")))'.dependencies]
+# ponytail: MSVC 2019 não compila webrtc-sys (exige SDK Win11 + C++20); Windows usa o mock_client
+[target.'cfg(not(any(target_os = "windows", target_os = "freebsd")))'.dependencies]
 libwebrtc.workspace = true
 livekit.workspace = true
 

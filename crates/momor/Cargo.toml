@@ -1,0 +1,24 @@
+[package]
+name = "momor"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[[bin]]
+name = "momor"
+path = "src/main.rs"
+
+# Momor — chat-only app built on Zed's REAL stack (gpui/ui/theme/icons/assets).
+# No settings, no tree-sitter, no wasmtime: nothing outside the chat exists.
+[dependencies]
+anyhow.workspace = true
+assets.workspace = true
+futures.workspace = true
+gpui.workspace = true
+gpui_platform.workspace = true
+http_client.workspace = true
+reqwest_client.workspace = true
+serde_json.workspace = true
+theme.workspace = true
+ui.workspace = true
+unicode-segmentation.workspace = true

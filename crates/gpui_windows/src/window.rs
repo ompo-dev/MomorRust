@@ -71,6 +71,9 @@ pub struct WindowsWindowState {
     pub nc_button_pressed: Cell<Option<u32>>,
 
     pub display: Cell<WindowsDisplay>,
+    /// Ghost mode: WDA_EXCLUDEFROMCAPTURE precisa ser re-aplicado após mover/redimensionar
+    /// a janela (o move loop do Windows reseta a display affinity), senão vaza na captura.
+    pub capture_protection: Cell<bool>,
     /// Flag to instruct the `VSyncProvider` thread to invalidate the directx devices
     /// as resizing them has failed, causing us to have lost at least the render target.
     pub invalidate_devices: Arc<AtomicBool>,
@@ -94,7 +97,42 @@ pub(crate) struct WindowsWindowInner {
     pub(crate) parent_hwnd: Option<HWND>,
 }
 
+/// Mensagem de callback do ícone da bandeja (ghost mode). WM_APP = 0x8000.
+pub(crate) const WM_APP_TRAY: u32 = 0x8000 + 1;
+/// ID do ícone da bandeja.
+const TRAY_ICON_UID: u32 = 1;
+
 impl WindowsWindowState {
+    /// Liga/desliga o ícone na bandeja do sistema (usado pelo ghost mode pra dar acesso
+    /// à janela quando ela some da taskbar/Alt+Tab).
+    pub(crate) fn set_tray_icon(&self, show: bool, hwnd: HWND) {
+        use windows::Win32::UI::Shell::{
+            NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GCLP_HICON, GetClassLongPtrW, HICON,
+        };
+
+        let mut nid = NOTIFYICONDATAW {
+            cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: hwnd,
+            uID: TRAY_ICON_UID,
+            ..Default::default()
+        };
+        if show {
+            nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+            nid.uCallbackMessage = WM_APP_TRAY;
+            let hicon = unsafe { GetClassLongPtrW(hwnd, GCLP_HICON) };
+            nid.hIcon = HICON(hicon as *mut _);
+            for (i, c) in "Zed".encode_utf16().enumerate() {
+                nid.szTip[i] = c;
+            }
+            let _ = unsafe { Shell_NotifyIconW(NIM_ADD, &nid) };
+        } else {
+            let _ = unsafe { Shell_NotifyIconW(NIM_DELETE, &nid) };
+        }
+    }
+
     fn new(
         hwnd: HWND,
         directx_devices: &DirectXDevices,
@@ -164,6 +202,7 @@ impl WindowsWindowState {
             cursor_visible,
             nc_button_pressed: Cell::new(nc_button_pressed),
             display: Cell::new(display),
+            capture_protection: Cell::new(false),
             fullscreen: Cell::new(fullscreen),
             initial_placement: Cell::new(initial_placement),
             hwnd,
@@ -618,6 +657,58 @@ impl PlatformWindow for WindowsWindow {
             .detach();
     }
 
+    fn set_window_bounds(&mut self, new_bounds: gpui::Bounds<gpui::Pixels>) {
+        let hwnd = self.0.hwnd;
+        let bounds = new_bounds.to_device_pixels(self.scale_factor());
+        let rect = calculate_window_rect(bounds, &self.state.border_offset);
+        self.0
+            .executor
+            .spawn(async move {
+                use windows::Win32::UI::WindowsAndMessaging::{SWP_NOACTIVATE, SWP_NOZORDER};
+                unsafe {
+                    SetWindowPos(
+                        hwnd,
+                        None,
+                        rect.left,
+                        rect.top,
+                        rect.right - rect.left,
+                        rect.bottom - rect.top,
+                        SWP_NOZORDER | SWP_NOACTIVATE,
+                    )
+                    .context("unable to set window bounds")
+                    .log_err();
+                }
+            })
+            .detach();
+    }
+
+    fn set_always_on_top(&mut self, always_on_top: bool) {
+        let hwnd = self.0.hwnd;
+        self.0
+            .executor
+            .spawn(async move {
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+                    SetWindowPos,
+                };
+                let after = if always_on_top { HWND_TOPMOST } else { HWND_NOTOPMOST };
+                unsafe {
+                    SetWindowPos(
+                        hwnd,
+                        Some(after),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    )
+                    .context("unable to set always-on-top")
+                    .log_err();
+                }
+            })
+            .detach();
+    }
+
     fn scale_factor(&self) -> f32 {
         self.state.scale_factor.get()
     }
@@ -848,6 +939,54 @@ impl PlatformWindow for WindowsWindow {
 
     fn minimize(&self) {
         unsafe { ShowWindowAsync(self.0.hwnd, SW_MINIMIZE).ok().log_err() };
+    }
+
+    fn set_capture_protection(&self, enabled: bool) {
+        // ponytail: ghost mode — WDA_EXCLUDEFROMCAPTURE some da captura sem escurecer
+        // a janela pro usuário (mesma API por trás do setContentProtection do Electron).
+        // Guarda o estado pra re-aplicar após mover/redimensionar (o move loop reseta).
+        self.0.state.capture_protection.set(enabled);
+        let affinity = if enabled {
+            WDA_EXCLUDEFROMCAPTURE
+        } else {
+            WDA_NONE
+        };
+        unsafe { SetWindowDisplayAffinity(self.0.hwnd, affinity) }
+            .inspect_err(|e| log::error!("Set capture protection failed: {e}"))
+            .ok();
+
+        // Ghost mode some da TASKBAR e do ALT+TAB (WS_EX_TOOLWINDOW some das duas; tira-se
+        // WS_EX_APPWINDOW que força aparecer). O acesso fica pelo ícone na bandeja (tray).
+        unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::{
+                GWL_EXSTYLE, GetWindowLongW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+                SWP_NOSIZE, SWP_NOZORDER, SetWindowLongW, SetWindowPos, WS_EX_APPWINDOW,
+                WS_EX_TOOLWINDOW,
+            };
+            let hwnd = self.0.hwnd;
+            let mut ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+            if enabled {
+                ex |= WS_EX_TOOLWINDOW.0;
+                ex &= !WS_EX_APPWINDOW.0;
+            } else {
+                ex &= !WS_EX_TOOLWINDOW.0;
+                ex |= WS_EX_APPWINDOW.0;
+            }
+            SetWindowLongW(hwnd, GWL_EXSTYLE, ex as i32);
+            SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+            .ok();
+        }
+
+        // Ícone na bandeja: presente enquanto o ghost está ligado, pra voltar pro app.
+        self.0.state.set_tray_icon(enabled, self.0.hwnd);
     }
 
     fn zoom(&self) {

@@ -607,6 +607,12 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn window_bounds(&self) -> WindowBounds;
     fn content_size(&self) -> Size<Pixels>;
     fn resize(&mut self, size: Size<Pixels>);
+    /// Move e redimensiona a janela (posição + tamanho). No-op nas plataformas que não
+    /// implementam. ponytail: usado pra centralizar a janela ao recolher/expandir.
+    fn set_window_bounds(&mut self, _bounds: Bounds<Pixels>) {}
+    /// Mantém a janela sempre por cima das outras (topmost). No-op onde não implementado.
+    /// ponytail: modo recolhido (pill) não pode ser coberto/perdido.
+    fn set_always_on_top(&mut self, _always_on_top: bool) {}
     fn scale_factor(&self) -> f32;
     fn appearance(&self) -> WindowAppearance;
     fn display(&self) -> Option<Rc<dyn PlatformDisplay>>;
@@ -630,6 +636,9 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance);
     fn minimize(&self);
     fn zoom(&self);
+    /// Excludes the window from screen capture / sharing / screenshots (ghost mode).
+    /// No-op on platforms that don't support it. Windows: SetWindowDisplayAffinity.
+    fn set_capture_protection(&self, _enabled: bool) {}
     fn toggle_fullscreen(&self);
     fn is_fullscreen(&self) -> bool;
     fn on_request_frame(&self, callback: Box<dyn FnMut(RequestFrameOptions)>);

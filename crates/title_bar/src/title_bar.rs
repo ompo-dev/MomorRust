@@ -45,8 +45,9 @@ use std::time::Duration;
 use theme::ActiveTheme;
 use title_bar_settings::TitleBarSettings;
 use ui::{
-    Avatar, ButtonLike, ContextMenu, ContextMenuEntry, IconWithIndicator, Indicator, PopoverMenu,
-    PopoverMenuHandle, TintColor, Tooltip, prelude::*, utils::platform_title_bar_height,
+    Avatar, ButtonLike, ContextMenu, ContextMenuEntry, IconPosition, IconWithIndicator, Indicator,
+    PopoverMenu, PopoverMenuHandle, TintColor, Tooltip, prelude::*,
+    utils::platform_title_bar_height,
 };
 use update_version::UpdateVersion;
 use util::ResultExt;
@@ -72,9 +73,23 @@ actions!(
         /// Switches to a different git branch.
         SwitchBranch,
         /// A debug action to simulate an update being available to test the update banner UI.
-        SimulateUpdateAvailable
+        SimulateUpdateAvailable,
+        /// Toggles ghost mode: hides the window from screen capture, sharing and screenshots.
+        ToggleGhostMode
     ]
 );
+
+// ponytail: ghost mode persiste entre reaberturas via KVP
+const GHOST_MODE_KVP_KEY: &str = "ghost-mode-enabled";
+
+fn ghost_mode_persisted() -> bool {
+    db::kvp::GlobalKeyValueStore::global()
+        .read_kvp(GHOST_MODE_KVP_KEY)
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("true")
+}
 
 pub fn init(cx: &mut App) {
     platform_title_bar::PlatformTitleBar::init(cx);
@@ -94,6 +109,17 @@ pub fn init(cx: &mut App) {
             {
                 titlebar.update(cx, |titlebar, cx| {
                     titlebar.toggle_update_simulation(cx);
+                });
+            }
+        });
+
+        workspace.register_action(|workspace, _: &ToggleGhostMode, window, cx| {
+            if let Some(titlebar) = workspace
+                .titlebar_item()
+                .and_then(|item| item.downcast::<TitleBar>().ok())
+            {
+                titlebar.update(cx, |titlebar, cx| {
+                    titlebar.toggle_ghost_mode(window, cx);
                 });
             }
         });
@@ -160,10 +186,129 @@ pub struct TitleBar {
     update_version: Entity<UpdateVersion>,
     screen_share_popover_handle: PopoverMenuHandle<ContextMenu>,
     _diagnostics_subscription: Option<gpui::Subscription>,
+    // ponytail: ghost mode — janela some de captura/print/compartilhamento
+    capture_protected: bool,
+}
+
+/// Largura do pill: mais largo gravando (waveform + timer), estreito parado.
+fn compact_pill_width(running: bool) -> f32 {
+    if running { 176.0 } else { 128.0 }
+}
+
+/// Meia-camada de waveform: barras crescendo pra cima (up) ou pra baixo (down) a
+/// partir da linha central. ponytail: mic pra cima (accent), PC pra baixo (branco) —
+/// assim as duas ficam claramente separadas em vez de se misturarem.
+fn waveform_half(bars: Vec<f32>, color: gpui::Hsla, up: bool) -> gpui::AnyElement {
+    h_flex()
+        .h_full()
+        .gap(px(1.))
+        .map(|el| if up { el.items_end() } else { el.items_start() })
+        .children(bars.into_iter().map(move |v| {
+            let h = 1.5 + v.sqrt() * 11.0;
+            div()
+                .w(px(2.))
+                .h(px(h))
+                .bg(color.opacity(0.5 + v * 0.5))
+                .into_any_element()
+        }))
+        .into_any_element()
+}
+
+impl TitleBar {
+    // ponytail: modo recolhido — titlebar vira um pill discreto (arrastável) com
+    // status do STT, botão de mic e expandir.
+    fn render_compact_pill(&self, cx: &mut Context<Self>) -> AnyElement {
+        let stt = stt::Stt::global(cx);
+        let (stt_running, elapsed, wf_mic, wf_sys) = {
+            let s = stt.read(cx);
+            (
+                s.is_running(),
+                s.elapsed_label(),
+                s.waveform_mic(),
+                s.waveform_sys(),
+            )
+        };
+        let colors = cx.theme().colors();
+        let accent = Color::Accent.color(cx);
+        let white = colors.text;
+        h_flex()
+            .size_full()
+            .px_2()
+            .gap_1p5()
+            .items_center()
+            .bg(colors.title_bar_background)
+            .window_control_area(gpui::WindowControlArea::Drag)
+            .child(
+                div()
+                    .size_2()
+                    .rounded_full()
+                    .flex_shrink_0()
+                    .bg(if stt_running { accent } else { colors.text_muted }),
+            )
+            // ponytail: mic (accent) cresce pra cima, PC (branco) pra baixo — separados.
+            .when(stt_running, |this| {
+                this.child(
+                    v_flex()
+                        .h(px(26.))
+                        .w(px(48.))
+                        .flex_shrink_0()
+                        .justify_center()
+                        .child(waveform_half(wf_mic, accent, true))
+                        .child(waveform_half(wf_sys, white, false)),
+                )
+            })
+            .child(
+                Label::new(if stt_running {
+                    elapsed
+                } else {
+                    "Momor".to_string()
+                })
+                .size(LabelSize::Small)
+                .color(if stt_running { Color::Default } else { Color::Muted }),
+            )
+            // ponytail: janela justa ao conteúdo — botões logo após o timer, sem vão.
+            .child(div().w_1p5())
+            .child(
+                h_flex()
+                    .gap_0p5()
+                    .flex_shrink_0()
+                    .window_control_area(gpui::WindowControlArea::Client)
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        IconButton::new("pill-mic", IconName::Mic)
+                            .icon_size(IconSize::Small)
+                            .toggle_state(stt_running)
+                            .selected_icon_color(Color::Accent)
+                            .tooltip(Tooltip::text("Ouvir / parar"))
+                            .on_click(|_, window, cx| {
+                                let running = stt::Stt::global(cx).update(cx, |stt, cx| {
+                                    stt.toggle(cx);
+                                    stt.is_running()
+                                });
+                                // ponytail: reajusta a largura do pill ao estado do mic.
+                                workspace::resize_compact(compact_pill_width(running), window, cx);
+                            }),
+                    )
+                    .child(
+                        IconButton::new("pill-expand", IconName::ChevronUp)
+                            .icon_size(IconSize::Small)
+                            .tooltip(Tooltip::text("Expandir"))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                workspace::toggle_compact(0., window, cx);
+                                this.workspace.update(cx, |_, cx| cx.notify()).ok();
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .into_any_element()
+    }
 }
 
 impl Render for TitleBar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if workspace::compact_active(cx) {
+            return self.render_compact_pill(cx);
+        }
         if self.multi_workspace.is_none() {
             if let Some(mw) = self
                 .workspace
@@ -179,167 +324,153 @@ impl Render for TitleBar {
 
         let title_bar_settings = *TitleBarSettings::get_global(cx);
         let button_layout = title_bar_settings.button_layout;
-        let is_git_enabled = ProjectSettings::get_global(cx).git.enabled.status;
 
         let show_menus = show_menus(cx);
 
-        let mut children = <ArrayVec<_, 4>>::new();
+        // ponytail: chat-only — titlebar sem menu de projeto, git, collab, status,
+        // sign-in e user menu; ficam só os controles de janela + o toggle ghost mode
+        let mut children = <ArrayVec<gpui::AnyElement, 4>>::new();
 
-        let mut project_name = None;
-        let mut repository = None;
-        let mut linked_worktree_name = None;
-        if let Some(worktree) = self.effective_active_worktree(cx) {
-            repository = self.get_repository_for_worktree(&worktree, cx);
-            let worktree_abs_path = worktree.read(cx).abs_path();
-            project_name = worktree
-                .read(cx)
-                .root_name()
-                .file_name()
-                .map(|name| SharedString::from(name.to_string()));
-            if let Some(repo) = &repository {
-                let repo = repo.read(cx);
-                linked_worktree_name = repo
-                    .main_worktree_abs_path()
-                    .and_then(|main_worktree_path| {
-                        linked_worktree_short_name(
-                            main_worktree_path,
-                            repo.work_directory_abs_path.as_ref(),
-                        )
-                    })
-                    .or_else(|| {
-                        repo.is_linked_worktree()
-                            .then_some(project_name.clone())
-                            .flatten()
-                    });
+        let ghost_on = self.capture_protected;
+        let stt = stt::Stt::global(cx);
+        let stt_running = stt.read(cx).is_running();
+        let stt_has_key = stt::Stt::has_api_key();
+        let transcript_line = self.render_transcript_line(cx);
+        let mic_menu = self.render_mic_menu(stt_running, stt_has_key, cx);
 
-                let identity = repo_identity_path(&repo.common_dir_abs_path);
-
-                let display_name = if identity.extension() == Some(std::ffi::OsStr::new("git")) {
-                    identity.file_stem()
-                } else {
-                    identity.file_name()
-                };
-
-                if let Some(repo_name) = display_name.and_then(|n| n.to_str()) {
-                    let name = if let Ok(relative) =
-                        worktree_abs_path.strip_prefix(&*repo.work_directory_abs_path)
-                    {
-                        if relative.as_os_str().is_empty() {
-                            repo_name.to_string()
-                        } else {
-                            format!("{}/{}", repo_name, relative.display())
-                        }
-                    } else {
-                        repo_name.to_string()
-                    };
-                    project_name = Some(SharedString::from(name));
-                }
-            }
-        }
-
+        // ponytail: ícone de sidebar (topo-esquerdo) — abre/fecha o painel Notion (notas
+        // + reuniões) AO LADO do chat. Client area + stop_propagation pra não virar arraste.
+        let notebook_open = workspace::notebook_open(cx);
         children.push(
-            h_flex()
-                .h_full()
-                .gap_0p5()
-                .map(|title_bar| {
-                    let mut render_project_items = title_bar_settings.show_branch_name
-                        || title_bar_settings.show_project_items;
-                    title_bar
-                        .when_some(
-                            self.application_menu.clone().filter(|_| !show_menus),
-                            |title_bar, menu| {
-                                render_project_items &=
-                                    !menu.update(cx, |menu, cx| menu.all_menus_shown(cx));
-                                title_bar.child(menu)
-                            },
-                        )
-                        .children(self.render_restricted_mode(cx))
-                        .when(render_project_items, |title_bar| {
-                            title_bar
-                                .when(title_bar_settings.show_project_items, |title_bar| {
-                                    title_bar
-                                        .children(self.render_project_host(cx))
-                                        .child(self.render_project_name(project_name, window, cx))
-                                })
-                                .when_some(
-                                    repository.filter(|_| is_git_enabled),
-                                    |title_bar, repository| {
-                                        title_bar.children(self.render_worktree_and_branch(
-                                            repository,
-                                            linked_worktree_name,
-                                            cx,
-                                        ))
-                                    },
-                                )
-                        })
-                })
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            div()
+                .window_control_area(gpui::WindowControlArea::Client)
+                .pl_1()
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    IconButton::new(
+                        "toggle-notebook",
+                        if notebook_open {
+                            IconName::ThreadsSidebarLeftOpen
+                        } else {
+                            IconName::ThreadsSidebarLeftClosed
+                        },
+                    )
+                        .icon_size(IconSize::Small)
+                        .toggle_state(notebook_open)
+                        .selected_icon_color(Color::Accent)
+                        .tooltip(Tooltip::text("Notas e reuniões"))
+                        // ponytail: alterna o slot do Notion e re-renderiza o workspace.
+                        .on_click(cx.listener(|this, _, _window, cx| {
+                            workspace::toggle_notebook(cx);
+                            this.workspace.update(cx, |_, cx| cx.notify()).ok();
+                            cx.notify();
+                        })),
+                )
                 .into_any_element(),
         );
 
-        children.push(self.render_collaborator_list(window, cx).into_any_element());
-
-        if title_bar_settings.show_onboarding_banner {
-            if let Some(banner) = &self.banner {
-                children.push(banner.clone().into_any_element())
-            }
-        }
-
-        let status = self.client.status();
-        let status = &*status.borrow();
-        let user = self.user_store.read(cx).current_user();
-
-        let signed_in = user.is_some();
-        let is_signing_in = user.is_none()
-            && matches!(
-                status,
-                client::Status::Authenticating
-                    | client::Status::Authenticated
-                    | client::Status::Connecting
-            );
-        let is_signed_out_or_auth_error = user.is_none()
-            && matches!(
-                status,
-                client::Status::SignedOut | client::Status::AuthenticationError
-            );
-
+        // ponytail: container SEM handler de mouse — senão cobre a área de drag da
+        // titlebar inteira e trava o arraste da janela. Só os botões são interativos.
         children.push(
             h_flex()
-                .map(|this| {
-                    if signed_in {
-                        this.pr_1p5()
-                    } else {
-                        this.pr_1()
-                    }
-                })
+                .flex_1()
+                .min_w_0()
                 .gap_1()
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .children(self.render_call_controls(window, cx))
-                .children(self.render_connection_status(status, cx))
-                .child(self.update_version.clone())
-                .when(
-                    user.is_none()
-                        && is_signed_out_or_auth_error
-                        && TitleBarSettings::get_global(cx).show_sign_in,
-                    |this| this.child(self.render_sign_in_button(cx)),
+                .pr_2()
+                .items_center()
+                // Transcrição ao vivo (linha contínua com "·"), entre os controles de
+                // janela e o header do agente.
+                .child(transcript_line)
+                // ponytail: cluster marcado como Client — assim o hit-test do Windows
+                // entrega o clique aos botões em vez de tratar como arraste (caption).
+                .child(
+                    h_flex()
+                        .gap_1()
+                        .items_center()
+                        // ponytail: não deixa o mouse-down borbulhar pro handler de
+                        // arraste da titlebar (start_window_move roubava o clique).
+                        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                            cx.stop_propagation()
+                        })
+                        // ponytail: botão play/stop — o jeito claro de ligar/desligar.
+                        .child(
+                            div()
+                                .window_control_area(gpui::WindowControlArea::Client)
+                                .child(
+                                    IconButton::new(
+                                        "stt-play",
+                                        if stt_running {
+                                            IconName::Stop
+                                        } else {
+                                            IconName::PlayFilled
+                                        },
+                                    )
+                                    .icon_size(IconSize::Small)
+                                    .icon_color(if stt_running {
+                                        Color::Accent
+                                    } else {
+                                        Color::Default
+                                    })
+                                    .disabled(!stt_has_key)
+                                    .tooltip(Tooltip::text(if stt_running {
+                                        "Parar escuta"
+                                    } else {
+                                        "Ouvir mic + áudio do PC"
+                                    }))
+                                    .on_click(|_, _, cx| {
+                                        stt::Stt::global(cx).update(cx, |stt, cx| stt.toggle(cx));
+                                    }),
+                                ),
+                        )
+                        // Mic = configuração rápida (dispositivo, modo).
+                        .child(
+                            div()
+                                .window_control_area(gpui::WindowControlArea::Client)
+                                .child(mic_menu),
+                        )
+                        .child(
+                            div()
+                                .window_control_area(gpui::WindowControlArea::Client)
+                                .child(
+                                    IconButton::new("collapse-pill", IconName::ChevronDown)
+                                        .icon_size(IconSize::Small)
+                                        .tooltip(Tooltip::text("Recolher (modo discreto)"))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            let running = stt::Stt::global(cx).read(cx).is_running();
+                                            workspace::toggle_compact(
+                                                compact_pill_width(running),
+                                                window,
+                                                cx,
+                                            );
+                                            this.workspace.update(cx, |_, cx| cx.notify()).ok();
+                                            cx.notify();
+                                        })),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .window_control_area(gpui::WindowControlArea::Client)
+                                .child(
+                                    IconButton::new("ghost-mode", IconName::EyeOff)
+                                        .icon_size(IconSize::Small)
+                                        .toggle_state(ghost_on)
+                                        .selected_icon_color(Color::Accent)
+                                        .tooltip(move |_, cx| {
+                                            Tooltip::simple(
+                                                if ghost_on {
+                                                    "Ghost Mode: ON — invisível para captura/print (Ctrl+Shift+G)"
+                                                } else {
+                                                    "Ghost Mode: OFF (Ctrl+Shift+G)"
+                                                },
+                                                cx,
+                                            )
+                                        })
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.toggle_ghost_mode(window, cx);
+                                        })),
+                                ),
+                        ),
                 )
-                .when(is_signing_in, |this| {
-                    this.child(
-                        Label::new("Signing in…")
-                            .size(LabelSize::Small)
-                            .color(Color::Muted)
-                            .with_animation(
-                                "signing-in",
-                                Animation::new(Duration::from_secs(2))
-                                    .repeat()
-                                    .with_easing(pulsating_between(0.4, 0.8)),
-                                |label, delta| label.alpha(delta),
-                            ),
-                    )
-                })
-                .when(TitleBarSettings::get_global(cx).show_user_menu, |this| {
-                    this.child(self.render_user_menu_button(cx))
-                })
                 .into_any_element(),
         );
 
@@ -428,6 +559,8 @@ impl TitleBar {
             }),
         );
         subscriptions.push(cx.observe(&user_store, |_a, _, cx| cx.notify()));
+        // ponytail: re-renderiza a titlebar quando a transcrição ao vivo muda
+        subscriptions.push(cx.observe(&stt::Stt::global(cx), |_, _, cx| cx.notify()));
         if let Some(workspace_entity) = workspace.weak_handle().upgrade() {
             subscriptions.push(cx.subscribe(
                 &workspace_entity,
@@ -454,6 +587,12 @@ impl TitleBar {
             titlebar
         });
 
+        // ponytail: ghost mode restaura o estado salvo e já aplica na janela ao abrir
+        let capture_protected = ghost_mode_persisted();
+        if capture_protected {
+            window.set_capture_protection(true);
+        }
+
         let mut this = Self {
             platform_titlebar,
             application_menu,
@@ -467,11 +606,194 @@ impl TitleBar {
             update_version,
             screen_share_popover_handle: PopoverMenuHandle::default(),
             _diagnostics_subscription: None,
+            capture_protected,
         };
 
         this.observe_diagnostics(cx);
 
         this
+    }
+
+    // ponytail: STT — linha de transcrição contínua com "·" entre trechos/troca de
+    // falante; o mic (você) sai em azul (accent), o interlocutor em cor normal.
+    fn render_transcript_line(&self, cx: &Context<Self>) -> AnyElement {
+        let stt = stt::Stt::global(cx);
+        let stt = stt.read(cx);
+        if !stt.is_running() {
+            return div().flex_1().min_w_0().into_any_element();
+        }
+
+        let color_for = |speaker: stt::Speaker| match speaker {
+            stt::Speaker::Me => Color::Accent,
+            stt::Speaker::Other => Color::Default,
+        };
+        let dot = |cx: &Context<Self>| {
+            div()
+                .px_1()
+                .text_ui_sm(cx)
+                .text_color(cx.theme().colors().text_muted)
+                .child("·")
+                .into_any_element()
+        };
+
+        let mut spans: Vec<AnyElement> = Vec::new();
+        for seg in stt.segments() {
+            if !spans.is_empty() {
+                spans.push(dot(cx));
+            }
+            spans.push(
+                Label::new(seg.text.clone())
+                    .size(LabelSize::Small)
+                    .color(color_for(seg.speaker))
+                    .into_any_element(),
+            );
+        }
+        for speaker in [stt::Speaker::Me, stt::Speaker::Other] {
+            let partial = stt.partial(speaker);
+            if !partial.is_empty() {
+                if !spans.is_empty() {
+                    spans.push(dot(cx));
+                }
+                spans.push(
+                    Label::new(partial.to_string())
+                        .size(LabelSize::Small)
+                        .color(color_for(speaker))
+                        .into_any_element(),
+                );
+            }
+        }
+
+        h_flex()
+            .flex_1()
+            .min_w_0()
+            .px_2()
+            .gap_0p5()
+            .justify_end()
+            .overflow_hidden()
+            .children(spans)
+            .into_any_element()
+    }
+
+    // ponytail: STT — o botão de mic é um dropdown (igual aos selects): escolhe o
+    // microfone, o modo de entrega (contexto x prompt) e liga/desliga.
+    fn render_mic_menu(
+        &self,
+        stt_running: bool,
+        stt_has_key: bool,
+        _cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let _ = stt_running;
+        // ponytail: o mic agora é só configuração rápida (o play liga/desliga).
+        let trigger = IconButton::new("stt-mic", IconName::Mic)
+            .icon_size(IconSize::Small)
+            .disabled(!stt_has_key)
+            .tooltip(Tooltip::text("Configurar áudio (microfone, modo)"));
+
+        PopoverMenu::new("stt-mic-menu")
+            .trigger(trigger)
+            .anchor(Anchor::TopRight)
+            .menu(move |window, cx| {
+                Some(ContextMenu::build(window, cx, |mut menu, _window, cx| {
+                    let stt = stt::Stt::global(cx);
+                    let (delivery, selected_mic) = {
+                        let s = stt.read(cx);
+                        (s.delivery(), s.selected_mic().map(str::to_string))
+                    };
+
+                    // Provedor de STT (só os que têm chave configurada aparecem).
+                    let selected_provider = stt::selected_provider();
+                    menu = menu.header("Provedor de STT");
+                    for kind in stt::SttProviderKind::ALL {
+                        if stt::provider_key(kind).is_none() {
+                            continue;
+                        }
+                        let label = if kind.is_streaming() {
+                            kind.name().to_string()
+                        } else {
+                            format!("{} (em breve)", kind.name())
+                        };
+                        menu = menu.toggleable_entry(
+                            label,
+                            kind == selected_provider,
+                            IconPosition::End,
+                            None,
+                            move |_window, cx| stt::set_selected_provider(kind, cx),
+                        );
+                    }
+
+                    menu = menu.separator().header("Enviar transcrição como");
+                    menu = menu.toggleable_entry(
+                        "Contexto (padrão)",
+                        delivery == stt::DeliveryMode::Context,
+                        IconPosition::End,
+                        None,
+                        {
+                            let stt = stt.clone();
+                            move |_window, cx| {
+                                stt.update(cx, |stt, cx| {
+                                    stt.set_delivery(stt::DeliveryMode::Context, cx)
+                                });
+                            }
+                        },
+                    );
+                    menu = menu.toggleable_entry(
+                        "Prompt (na caixa de texto)",
+                        delivery == stt::DeliveryMode::Prompt,
+                        IconPosition::End,
+                        None,
+                        {
+                            let stt = stt.clone();
+                            move |_window, cx| {
+                                stt.update(cx, |stt, cx| {
+                                    stt.set_delivery(stt::DeliveryMode::Prompt, cx)
+                                });
+                            }
+                        },
+                    );
+
+                    menu = menu.separator().header("Microfone");
+                    menu = menu.toggleable_entry(
+                        "Padrão do sistema",
+                        selected_mic.is_none(),
+                        IconPosition::End,
+                        None,
+                        {
+                            let stt = stt.clone();
+                            move |_window, cx| {
+                                stt.update(cx, |stt, cx| stt.set_mic(None, cx));
+                            }
+                        },
+                    );
+                    for name in stt::Stt::available_mics() {
+                        let is_selected = selected_mic.as_deref() == Some(name.as_str());
+                        menu = menu.toggleable_entry(name.clone(), is_selected, IconPosition::End, None, {
+                            let stt = stt.clone();
+                            let name = name.clone();
+                            move |_window, cx| {
+                                let name = name.clone();
+                                stt.update(cx, |stt, cx| stt.set_mic(Some(name), cx));
+                            }
+                        });
+                    }
+
+                    menu
+                }))
+            })
+            .into_any_element()
+    }
+
+    fn toggle_ghost_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.capture_protected = !self.capture_protected;
+        window.set_capture_protection(self.capture_protected);
+        let value = self.capture_protected;
+        cx.background_spawn(async move {
+            db::kvp::GlobalKeyValueStore::global()
+                .write_kvp(GHOST_MODE_KVP_KEY.to_string(), value.to_string())
+                .await
+                .log_err();
+        })
+        .detach();
+        cx.notify();
     }
 
     fn worktree_count(&self, cx: &App) -> usize {

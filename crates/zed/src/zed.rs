@@ -1,5 +1,4 @@
 mod app_menus;
-pub mod edit_prediction_registry;
 #[cfg(target_os = "macos")]
 pub(crate) mod mac_only_instance;
 mod migrate;
@@ -7,7 +6,6 @@ mod migrate;
 pub(crate) mod move_to_applications;
 mod open_listener;
 mod open_url_modal;
-mod quick_action_bar;
 pub mod remote_debug;
 pub mod telemetry_log;
 #[cfg(all(target_os = "macos", feature = "visual-tests"))]
@@ -20,19 +18,14 @@ use anyhow::Context as _;
 pub use app_menus::*;
 use assets::Assets;
 
-use breadcrumbs::Breadcrumbs;
 use client::zed_urls;
 use collections::VecDeque;
-use debugger_ui::debugger_panel::DebugPanel;
 use editor::{Editor, MultiBuffer};
 use extension_host::ExtensionStore;
 use feature_flags::{FeatureFlagAppExt as _, PanicFeatureFlag};
 use fs::Fs;
 use futures::FutureExt as _;
 use futures::{StreamExt, channel::mpsc, select_biased};
-use git_ui::commit_view::CommitViewToolbar;
-use git_ui::git_panel::GitPanel;
-use git_ui::project_diff::{BranchDiffToolbar, ProjectDiffToolbar};
 use gpui::{
     Action, App, AppContext as _, AsyncWindowContext, ClipboardItem, Context, DismissEvent,
     Element, Entity, FocusHandle, Focusable, Image, ImageFormat, KeyBinding, ParentElement,
@@ -40,29 +33,18 @@ use gpui::{
     UpdateGlobal, WeakEntity, Window, WindowBounds, WindowHandle, WindowKind, WindowOptions,
     actions, image_cache, img, point, px, retain_all,
 };
-use image_viewer::ImageInfo;
 use language::Capability;
-use language_onboarding::BasedPyrightBanner;
-use language_tools::lsp_button::{self, LspButton};
-use language_tools::lsp_log_view::LspLogToolbarItemView;
 use markdown::{Markdown, MarkdownElement, MarkdownFont, MarkdownStyle};
 use migrate::{MigrationBanner, MigrationEvent, MigrationNotification, MigrationType};
 use migrator::migrate_keymap;
-use onboarding::DOCS_URL;
-use onboarding::multibuffer_hint::MultibufferHint;
 pub use open_listener::*;
-use outline_panel::OutlinePanel;
 use paths::{
     local_debug_file_relative_path, local_settings_file_relative_path,
     local_tasks_file_relative_path,
 };
 use project::{DirectoryLister, DisableAiSettings, ProjectItem};
-use project_panel::ProjectPanel;
-use quick_action_bar::QuickActionBar;
-use recent_projects::open_remote_project;
 use release_channel::{AppCommitSha, AppVersion, ReleaseChannel};
 use rope::Rope;
-use search::project_search::ProjectSearchBar;
 use settings::{
     BaseKeymap, DEFAULT_KEYMAP_PATH, InvalidSettingsError, KeybindSource, KeymapFile,
     KeymapFileLoadResult, MigrationStatus, Settings, SettingsFile, SettingsStore, VIM_KEYMAP_PATH,
@@ -362,9 +344,10 @@ pub fn build_window_options(display_uuid: Option<Uuid>, cx: &mut App) -> WindowO
         #[cfg(any(target_os = "linux", target_os = "freebsd"))]
         icon: APP_ICON.as_ref().cloned(),
         window_decorations: Some(window_decorations),
+        // ponytail: mínimo bem baixo pra caber o pill estreito do modo recolhido.
         window_min_size: Some(gpui::Size {
-            width: px(360.0),
-            height: px(240.0),
+            width: px(150.0),
+            height: px(44.0),
         }),
         tabbing_identifier: if use_system_window_tabs {
             Some(String::from("zed"))
@@ -528,72 +511,7 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
             }
         }
 
-        let edit_prediction_menu_handle = PopoverMenuHandle::default();
-        let edit_prediction_ui = cx.new(|cx| {
-            edit_prediction_ui::EditPredictionButton::new(
-                app_state.fs.clone(),
-                app_state.user_store.clone(),
-                edit_prediction_menu_handle.clone(),
-                workspace.project().clone(),
-                cx,
-            )
-        });
-        workspace.register_action({
-            move |_, _: &edit_prediction_ui::ToggleMenu, window, cx| {
-                edit_prediction_menu_handle.toggle(window, cx);
-            }
-        });
-
-        let search_button = cx.new(|_| search::search_status_button::SearchButton::new());
-        let diagnostic_summary =
-            cx.new(|cx| diagnostics::items::DiagnosticIndicator::new(workspace, cx));
-        let active_file_name = cx.new(|_| workspace::active_file_name::ActiveFileName::new());
-        let activity_indicator = activity_indicator::ActivityIndicator::new(
-            workspace,
-            workspace.project().read(cx).languages().clone(),
-            window,
-            cx,
-        );
-        let active_buffer_encoding =
-            cx.new(|_| encoding_selector::ActiveBufferEncoding::new(workspace));
-        let active_buffer_language =
-            cx.new(|_| language_selector::ActiveBufferLanguage::new(workspace));
-        let active_toolchain_language =
-            cx.new(|cx| toolchain_selector::ActiveToolchain::new(workspace, window, cx));
-        let vim_mode_indicator = cx.new(|cx| vim::ModeIndicator::new(window, cx));
-        let image_info = cx.new(|_cx| ImageInfo::new(workspace));
-
-        let lsp_button_menu_handle = PopoverMenuHandle::default();
-        let lsp_button =
-            cx.new(|cx| LspButton::new(workspace, lsp_button_menu_handle.clone(), window, cx));
-        workspace.register_action({
-            move |_, _: &lsp_button::ToggleMenu, window, cx| {
-                lsp_button_menu_handle.toggle(window, cx);
-            }
-        });
-
-        let cursor_position =
-            cx.new(|_| go_to_line::cursor_position::CursorPosition::new(workspace));
-        let line_ending_indicator =
-            cx.new(|_| line_ending_selector::LineEndingIndicator::default());
-        let merge_conflict_indicator =
-            cx.new(|cx| git_ui::MergeConflictIndicator::new(workspace, cx));
-        workspace.status_bar().update(cx, |status_bar, cx| {
-            status_bar.add_left_item(search_button, window, cx);
-            status_bar.add_left_item(lsp_button, window, cx);
-            status_bar.add_left_item(diagnostic_summary, window, cx);
-            status_bar.add_left_item(active_file_name, window, cx);
-            status_bar.add_left_item(merge_conflict_indicator, window, cx);
-            status_bar.add_left_item(activity_indicator, window, cx);
-            status_bar.add_right_item(edit_prediction_ui, window, cx);
-            status_bar.add_right_item(active_buffer_encoding, window, cx);
-            status_bar.add_right_item(active_buffer_language, window, cx);
-            status_bar.add_right_item(active_toolchain_language, window, cx);
-            status_bar.add_right_item(line_ending_indicator, window, cx);
-            status_bar.add_right_item(vim_mode_indicator, window, cx);
-            status_bar.add_right_item(cursor_position, window, cx);
-            status_bar.add_right_item(image_info, window, cx);
-        });
+        // ponytail: chat-only — status bar sem itens (fica oculta no render)
 
         let panels_task = initialize_panels(window, cx);
         workspace.set_panels_task(panels_task);
@@ -720,38 +638,25 @@ fn show_software_emulation_warning_if_needed(
 
 fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<anyhow::Result<()>> {
     cx.spawn_in(window, async move |workspace_handle, cx| {
-        let project_panel = ProjectPanel::load(workspace_handle.clone(), cx.clone());
-        let outline_panel = OutlinePanel::load(workspace_handle.clone(), cx.clone());
-        let terminal_panel = TerminalPanel::load(workspace_handle.clone(), cx.clone());
-        let git_panel = GitPanel::load(workspace_handle.clone(), cx.clone());
-        let channels_panel =
-            collab_ui::collab_panel::CollabPanel::load(workspace_handle.clone(), cx.clone());
-        let debug_panel = DebugPanel::load(workspace_handle.clone(), cx);
+        // ponytail: build chat-only — apenas o agent panel é carregado; os demais
+        // painéis (projeto, git, collab, debugger, outline) não existem. O TerminalPanel
+        // é carregado mas nunca renderiza: o login de agentes externos (claude /login)
+        // e as ferramentas de terminal do agente rodam nele.
+        let terminal_panel = TerminalPanel::load(workspace_handle.clone(), cx.clone()).await?;
+        initialize_agent_panel(workspace_handle.clone(), cx.clone()).await?;
 
-        async fn add_panel_when_ready(
-            panel_task: impl Future<Output = anyhow::Result<Entity<impl workspace::Panel>>> + 'static,
-            workspace_handle: WeakEntity<Workspace>,
-            mut cx: gpui::AsyncWindowContext,
-        ) {
-            if let Some(panel) = panel_task.await.context("failed to load panel").log_err()
-            {
-                workspace_handle
-                    .update_in(&mut cx, |workspace, window, cx| {
-                        workspace.add_panel(panel, window, cx);
-                    })
-                    .log_err();
-            }
-        }
-
-        futures::join!(
-            add_panel_when_ready(project_panel, workspace_handle.clone(), cx.clone()),
-            add_panel_when_ready(outline_panel, workspace_handle.clone(), cx.clone()),
-            add_panel_when_ready(terminal_panel, workspace_handle.clone(), cx.clone()),
-            add_panel_when_ready(git_panel, workspace_handle.clone(), cx.clone()),
-            add_panel_when_ready(channels_panel, workspace_handle.clone(), cx.clone()),
-            add_panel_when_ready(debug_panel, workspace_handle.clone(), cx.clone()),
-            initialize_agent_panel(workspace_handle, cx.clone()).map(|r| r.log_err()),
-        );
+        workspace_handle.update_in(cx, |workspace, window, cx| {
+            workspace.add_panel(terminal_panel, window, cx);
+            // ponytail: painel "Notion" (notas + reuniões) fica num slot global (fora
+            // dos docks pra não brigar com o dock do agent). O render mostra como coluna
+            // esquerda quando aberto; alterna pelo ícone de sidebar na titlebar.
+            let weak = cx.entity().downgrade();
+            let languages = workspace.app_state().languages.clone();
+            let notebook_panel =
+                cx.new(|cx| notebook::NotebookPanel::new(weak, languages, cx));
+            workspace::set_notebook_view(notebook_panel.into(), cx);
+            workspace.focus_panel::<agent_ui::AgentPanel>(window, cx);
+        })?;
 
         anyhow::Ok(())
     })
@@ -858,7 +763,7 @@ fn register_actions(
     cx: &mut Context<Workspace>,
 ) {
     workspace
-        .register_action(|_, _: &OpenDocs, _, cx| cx.open_url(DOCS_URL))
+        .register_action(|_, _: &OpenDocs, _, cx| cx.open_url("https://zed.dev/docs"))
         .register_action(
             |workspace: &mut Workspace,
              _: &input_latency_ui::DumpInputLatencyHistogram,
@@ -1120,30 +1025,6 @@ fn register_actions(
         .register_action(open_project_debug_tasks_file)
         .register_action(
             |workspace: &mut Workspace,
-             _: &zed_actions::project_panel::ToggleFocus,
-             window: &mut Window,
-             cx: &mut Context<Workspace>| {
-                workspace.toggle_panel_focus::<ProjectPanel>(window, cx);
-            },
-        )
-        .register_action(
-            |workspace: &mut Workspace,
-             _: &outline_panel::ToggleFocus,
-             window: &mut Window,
-             cx: &mut Context<Workspace>| {
-                workspace.toggle_panel_focus::<OutlinePanel>(window, cx);
-            },
-        )
-        .register_action(
-            |workspace: &mut Workspace,
-             _: &collab_ui::collab_panel::ToggleFocus,
-             window: &mut Window,
-             cx: &mut Context<Workspace>| {
-                workspace.toggle_panel_focus::<collab_ui::collab_panel::CollabPanel>(window, cx);
-            },
-        )
-        .register_action(
-            |workspace: &mut Workspace,
              _: &terminal_panel::ToggleFocus,
              window: &mut Window,
              cx: &mut Context<Workspace>| {
@@ -1299,10 +1180,7 @@ fn initialize_pane(
     let workspace_handle = cx.weak_entity();
     pane.update(cx, |pane, cx| {
         pane.toolbar().update(cx, |toolbar, cx| {
-            let multibuffer_hint = cx.new(|_| MultibufferHint::new());
-            toolbar.add_item(multibuffer_hint, window, cx);
-            let breadcrumbs = cx.new(|_| Breadcrumbs::new());
-            toolbar.add_item(breadcrumbs, window, cx);
+            // ponytail: chat-only — toolbar mínima (busca, acp tools, diff do agente)
             let buffer_search_bar = cx.new(|cx| {
                 search::BufferSearchBar::new(
                     Some(workspace.project().read(cx).languages().clone()),
@@ -1311,42 +1189,16 @@ fn initialize_pane(
                 )
             });
             toolbar.add_item(buffer_search_bar.clone(), window, cx);
-            let quick_action_bar =
-                cx.new(|cx| QuickActionBar::new(buffer_search_bar, workspace, cx));
-            toolbar.add_item(quick_action_bar, window, cx);
-            let diagnostic_editor_controls = cx.new(|_| diagnostics::ToolbarControls::new());
-            toolbar.add_item(diagnostic_editor_controls, window, cx);
-            let project_search_bar = cx.new(|_| ProjectSearchBar::new());
-            toolbar.add_item(project_search_bar, window, cx);
-            let lsp_log_item = cx.new(|_| LspLogToolbarItemView::new());
-            toolbar.add_item(lsp_log_item, window, cx);
-            let dap_log_item = cx.new(|_| debugger_tools::DapLogToolbarItemView::new());
-            toolbar.add_item(dap_log_item, window, cx);
             let acp_tools_item = cx.new(|_| acp_tools::AcpToolsToolbarItemView::new());
             toolbar.add_item(acp_tools_item, window, cx);
             let telemetry_log_item =
                 cx.new(|cx| telemetry_log::TelemetryLogToolbarItemView::new(window, cx));
             toolbar.add_item(telemetry_log_item, window, cx);
-            let syntax_tree_item = cx.new(|_| language_tools::SyntaxTreeToolbarItemView::new());
-            toolbar.add_item(syntax_tree_item, window, cx);
             let migration_banner =
                 cx.new(|inner_cx| MigrationBanner::new(workspace_handle.clone(), inner_cx));
             toolbar.add_item(migration_banner, window, cx);
-            let highlights_tree_item =
-                cx.new(|_| language_tools::HighlightsTreeToolbarItemView::new());
-            toolbar.add_item(highlights_tree_item, window, cx);
-            let project_diff_toolbar = cx.new(|cx| ProjectDiffToolbar::new(workspace, cx));
-            toolbar.add_item(project_diff_toolbar, window, cx);
-            let branch_diff_toolbar = cx.new(BranchDiffToolbar::new);
-            toolbar.add_item(branch_diff_toolbar, window, cx);
-            let commit_view_toolbar = cx.new(|_| CommitViewToolbar::new());
-            toolbar.add_item(commit_view_toolbar, window, cx);
             let agent_diff_toolbar = cx.new(AgentDiffToolbar::new);
             toolbar.add_item(agent_diff_toolbar, window, cx);
-            let basedpyright_banner = cx.new(|cx| BasedPyrightBanner::new(workspace, cx));
-            toolbar.add_item(basedpyright_banner, window, cx);
-            let image_view_toolbar = cx.new(|_| image_viewer::ImageViewToolbarControls::new());
-            toolbar.add_item(image_view_toolbar, window, cx);
         })
     });
 }
@@ -2108,45 +1960,35 @@ pub fn load_default_keymap(cx: &mut App) {
     }
 
     cx.bind_keys(
-        KeymapFile::load_asset(DEFAULT_KEYMAP_PATH, Some(KeybindSource::Default), cx).unwrap(),
+        // ponytail: chat-only — keymaps embutidos referenciam ações de crates removidos;
+        // carga tolerante ignora esses bindings em vez de panicar
+        KeymapFile::load_asset_allow_partial_failure(DEFAULT_KEYMAP_PATH, cx)
+            .expect("Failed to load default keymap"),
     );
 
-    if let Some(asset_path) = base_keymap.asset_path() {
-        cx.bind_keys(KeymapFile::load_asset(asset_path, Some(KeybindSource::Base), cx).unwrap());
+    if let Some(asset_path) = base_keymap.asset_path()
+        && let Ok(bindings) = KeymapFile::load_asset_allow_partial_failure(asset_path, cx)
+    {
+        cx.bind_keys(bindings);
     }
 
     if VimModeSetting::get_global(cx).0 || vim_mode_setting::HelixModeSetting::get_global(cx).0 {
-        cx.bind_keys(
-            KeymapFile::load_asset(VIM_KEYMAP_PATH, Some(KeybindSource::Vim), cx).unwrap(),
-        );
+        if let Ok(bindings) = KeymapFile::load_asset_allow_partial_failure(VIM_KEYMAP_PATH, cx) {
+            cx.bind_keys(bindings);
+        }
     }
 }
 
 pub fn open_new_ssh_project_from_project(
-    workspace: &mut Workspace,
-    paths: Vec<PathBuf>,
-    window: &mut Window,
-    cx: &mut Context<Workspace>,
+    _workspace: &mut Workspace,
+    _paths: Vec<PathBuf>,
+    _window: &mut Window,
+    _cx: &mut Context<Workspace>,
 ) -> Task<anyhow::Result<()>> {
-    let app_state = workspace.app_state().clone();
-    let Some(ssh_client) = workspace.project().read(cx).remote_client() else {
-        return Task::ready(Err(anyhow::anyhow!("Not an ssh project")));
-    };
-    let connection_options = ssh_client.read(cx).connection_options();
-    cx.spawn_in(window, async move |_, cx| {
-        open_remote_project(
-            connection_options,
-            paths,
-            app_state,
-            workspace::OpenOptions {
-                workspace_matching: workspace::WorkspaceMatching::None,
-                ..Default::default()
-            },
-            cx,
-        )
-        .await
-        .map(|_| ())
-    })
+    // ponytail: chat-only — projetos remotos removidos
+    Task::ready(Err(anyhow::anyhow!(
+        "opening remote projects is not supported"
+    )))
 }
 
 fn open_project_settings_file(

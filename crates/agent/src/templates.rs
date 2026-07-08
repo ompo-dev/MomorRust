@@ -39,6 +39,8 @@ pub struct SystemPromptTemplate<'a> {
     pub project: &'a prompt_store::ProjectContext,
     pub available_tools: Vec<SharedString>,
     pub model_name: Option<String>,
+    /// Skills instaladas (nome + descrição) — a IA carrega o corpo via a tool `skill`.
+    pub skills: &'a [crate::skills::Skill],
 }
 
 impl Template for SystemPromptTemplate<'_> {
@@ -81,6 +83,7 @@ mod tests {
             project: &project,
             available_tools: vec!["echo".into()],
             model_name: Some("test-model".to_string()),
+            skills: &[],
         };
         let templates = Templates::new();
         let rendered = template.render(&templates).unwrap();

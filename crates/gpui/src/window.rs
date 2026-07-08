@@ -564,6 +564,10 @@ pub(crate) struct HitTest {
 pub enum WindowControlArea {
     /// An area that allows dragging of the platform window.
     Drag,
+    /// An interactive area inside the title bar that should receive normal mouse
+    /// events instead of being treated as the draggable caption. ponytail: sem
+    /// isso, botões dentro da área de drag têm o clique engolido pelo OS no Windows.
+    Client,
     /// An area that allows closing of the platform window.
     Close,
     /// An area that allows maximizing of the platform window.
@@ -2127,6 +2131,16 @@ impl Window {
         self.platform_window.resize(size);
     }
 
+    /// Move e redimensiona a janela (posição + tamanho).
+    pub fn set_window_bounds(&mut self, bounds: Bounds<Pixels>) {
+        self.platform_window.set_window_bounds(bounds);
+    }
+
+    /// Mantém (ou não) a janela sempre por cima das outras.
+    pub fn set_always_on_top(&mut self, always_on_top: bool) {
+        self.platform_window.set_always_on_top(always_on_top);
+    }
+
     /// Returns whether or not the window is currently fullscreen
     pub fn is_fullscreen(&self) -> bool {
         self.platform_window.is_fullscreen()
@@ -2179,6 +2193,12 @@ impl Window {
     /// Toggle zoom on the window.
     pub fn zoom_window(&self) {
         self.platform_window.zoom();
+    }
+
+    /// Excludes (or re-includes) the window from screen capture, sharing and
+    /// screenshots. Ghost mode. No-op on platforms without support.
+    pub fn set_capture_protection(&self, enabled: bool) {
+        self.platform_window.set_capture_protection(enabled);
     }
 
     /// Opens the native title bar context menu, useful when implementing client side decorations (Wayland and X11)

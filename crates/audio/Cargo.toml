@@ -27,5 +27,6 @@ settings.workspace = true
 thiserror.workspace = true
 util.workspace = true
 
-[target.'cfg(not(any(all(target_os = "windows", target_env = "gnu"), target_os = "freebsd")))'.dependencies]
+# ponytail: MSVC 2019 não compila webrtc-sys; Windows usa o EchoCanceller fake
+[target.'cfg(not(any(target_os = "windows", target_os = "freebsd")))'.dependencies]
 libwebrtc.workspace = true

@@ -13,11 +13,7 @@ use futures::channel::{mpsc, oneshot};
 use futures::future;
 
 use futures::{FutureExt, StreamExt};
-use git_ui::{file_diff_view::FileDiffView, multi_diff_view::MultiDiffView};
 use gpui::{App, AsyncApp, Global, TaskExt, WindowHandle};
-use onboarding::FIRST_OPEN;
-use onboarding::show_onboarding_view;
-use recent_projects::{RemoteSettings, navigate_to_positions, open_remote_project};
 use remote::{RemoteConnectionOptions, WslConnectionOptions};
 use settings::Settings;
 use std::path::{Path, PathBuf};
@@ -263,34 +259,9 @@ impl OpenRequest {
         Ok(())
     }
 
-    fn parse_ssh_file_path(&mut self, file: &str, cx: &App) -> Result<()> {
-        let url = url::Url::parse(file)?;
-        let host = url
-            .host()
-            .with_context(|| format!("missing host in ssh url: {file}"))?
-            .to_string();
-        let username = Some(url.username().to_string()).filter(|s| !s.is_empty());
-        let port = url.port();
-        anyhow::ensure!(
-            self.open_paths.is_empty(),
-            "cannot open both local and ssh paths"
-        );
-        let mut connection_options =
-            RemoteSettings::get_global(cx).connection_options_for(host, port, username);
-        if let Some(password) = url.password() {
-            connection_options.password = Some(password.to_string());
-        }
-
-        let connection_options = RemoteConnectionOptions::Ssh(connection_options);
-        if let Some(ssh_connection) = &self.remote_connection {
-            anyhow::ensure!(
-                *ssh_connection == connection_options,
-                "cannot open multiple different remote connections"
-            );
-        }
-        self.remote_connection = Some(connection_options);
-        self.parse_file_path(url.path());
-        Ok(())
+    fn parse_ssh_file_path(&mut self, file: &str, _cx: &App) -> Result<()> {
+        // ponytail: chat-only — abrir projetos remotos foi removido
+        anyhow::bail!("opening remote projects is not supported: {file}")
     }
 }
 
@@ -402,44 +373,14 @@ pub async fn open_paths_with_positions(
         .update(|cx| workspace::open_paths(&paths, app_state, open_options, cx))
         .await?;
 
-    if diff_all && !diff_paths.is_empty() {
-        if let Ok(diff_view) = multi_workspace.update(cx, |multi_workspace, window, cx| {
-            multi_workspace.workspace().update(cx, |workspace, cx| {
-                MultiDiffView::open(diff_paths.to_vec(), workspace, window, cx)
-            })
-        }) {
-            if let Some(diff_view) = diff_view.await.log_err() {
-                items.push(Some(Ok(Box::new(diff_view))));
-            }
-        }
-    } else {
-        let workspace_weak = multi_workspace.read_with(cx, |multi_workspace, _cx| {
-            multi_workspace.workspace().downgrade()
-        })?;
-        for diff_pair in diff_paths {
-            let old_path = Path::new(&diff_pair[0]).canonicalize()?;
-            let new_path = Path::new(&diff_pair[1]).canonicalize()?;
-            if let Ok(diff_view) = multi_workspace.update(cx, |_multi_workspace, window, cx| {
-                FileDiffView::open(old_path, new_path, workspace_weak.clone(), window, cx)
-            }) {
-                if let Some(diff_view) = diff_view.await.log_err() {
-                    items.push(Some(Ok(Box::new(diff_view))))
-                }
-            }
-        }
-    }
+    // ponytail: chat-only — visualização de diffs via CLI removida
+    let _ = (diff_all, diff_paths, path_positions);
 
     for (item, path) in items.iter_mut().zip(&paths) {
         if let Some(Err(error)) = item {
             *error = anyhow!("error opening {path:?}: {error}");
         }
     }
-
-    let items_for_navigation = items
-        .iter()
-        .map(|item| item.as_ref().and_then(|r| r.as_ref().ok()).cloned())
-        .collect::<Vec<_>>();
-    navigate_to_positions(&multi_workspace, items_for_navigation, path_positions, cx);
 
     Ok((multi_workspace, items))
 }
@@ -665,24 +606,15 @@ async fn open_workspaces(
         };
 
     if grouped_locations.is_empty() {
-        // If we have no paths to open, show the welcome screen if this is the first launch
-        let kvp = cx.update(|cx| KeyValueStore::global(cx));
-        if matches!(kvp.read_kvp(FIRST_OPEN), Ok(None)) {
-            cx.update(|cx| show_onboarding_view(app_state, cx).detach());
-        }
-        // If not the first launch, show an empty window with empty editor
-        else {
-            cx.update(|cx| {
-                let open_options = OpenOptions {
-                    env,
-                    ..Default::default()
-                };
-                workspace::open_new(open_options, app_state, cx, |workspace, window, cx| {
-                    Editor::new_file(workspace, &Default::default(), window, cx)
-                })
+        // ponytail: chat-only — sem tela de boas-vindas; abre direto a janela do chat
+        cx.update(|cx| {
+            let open_options = OpenOptions {
+                env,
+                ..Default::default()
+            };
+            workspace::open_new(open_options, app_state, cx, |_workspace, _window, _cx| {})
                 .detach_and_log_err(cx);
-            });
-        }
+        });
         return Ok(());
     }
     // If there are paths to open, open a workspace for each grouping of paths
@@ -747,26 +679,10 @@ async fn open_workspaces(
                     errored = true
                 }
             }
-            SerializedWorkspaceLocation::Remote(mut connection) => {
-                let app_state = app_state.clone();
-                if let RemoteConnectionOptions::Ssh(options) = &mut connection {
-                    cx.update(|cx| {
-                        RemoteSettings::get_global(cx)
-                            .fill_connection_options_from_settings(options)
-                    });
-                }
-                cx.spawn(async move |cx| {
-                    open_remote_project(
-                        connection,
-                        workspace_paths.paths().to_vec(),
-                        app_state,
-                        open_options,
-                        cx,
-                    )
-                    .await
-                    .log_err();
-                })
-                .detach();
+            SerializedWorkspaceLocation::Remote(_) => {
+                // ponytail: chat-only — projetos remotos removidos
+                log::warn!("opening remote projects is not supported");
+                errored = true;
             }
         }
     }

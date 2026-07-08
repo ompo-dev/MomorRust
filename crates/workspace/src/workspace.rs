@@ -8367,6 +8367,118 @@ impl Render for DraggedDock {
     }
 }
 
+// ponytail: slot global do painel Notion (notas/reuniões). Fica FORA dos docks pra
+// não brigar com o dock do agent panel (que a config do usuário pode pôr em qualquer
+// lado). O render chat-only mostra este painel como coluna esquerda quando aberto.
+pub struct NotebookSlot {
+    pub view: Option<gpui::AnyView>,
+    pub open: bool,
+    pub width: f32,
+}
+impl Default for NotebookSlot {
+    fn default() -> Self {
+        Self {
+            view: None,
+            open: false,
+            width: 420.0,
+        }
+    }
+}
+impl gpui::Global for NotebookSlot {}
+
+#[derive(Clone)]
+pub(crate) struct DraggedNotebookDivider;
+impl Render for DraggedNotebookDivider {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        gpui::Empty
+    }
+}
+
+/// Registra a view do painel Notion (chamado uma vez na inicialização).
+pub fn set_notebook_view(view: gpui::AnyView, cx: &mut App) {
+    let slot = cx.default_global::<NotebookSlot>();
+    slot.view = Some(view);
+}
+
+pub fn set_notebook_width(width: f32, cx: &mut App) {
+    // Só um limite de sanidade — o handler de drag é quem limita ao tamanho da janela.
+    cx.default_global::<NotebookSlot>().width = width.clamp(280.0, 3200.0);
+}
+
+pub fn notebook_width(cx: &App) -> f32 {
+    cx.try_global::<NotebookSlot>()
+        .map(|s| s.width)
+        .unwrap_or(420.0)
+}
+
+/// Abre/fecha a coluna do Notion. Retorna o novo estado.
+pub fn toggle_notebook(cx: &mut App) -> bool {
+    let slot = cx.default_global::<NotebookSlot>();
+    slot.open = !slot.open;
+    slot.open
+}
+
+pub fn notebook_open(cx: &App) -> bool {
+    cx.try_global::<NotebookSlot>()
+        .map(|s| s.open)
+        .unwrap_or(false)
+}
+
+// ponytail: modo recolhido — a janela vira um pill discreto (tipo momor). Guarda o
+// tamanho anterior pra restaurar ao expandir.
+#[derive(Default)]
+pub struct CompactMode {
+    pub active: bool,
+    pub restore: Option<gpui::Size<gpui::Pixels>>,
+}
+impl gpui::Global for CompactMode {}
+
+pub fn compact_active(cx: &App) -> bool {
+    cx.try_global::<CompactMode>()
+        .map(|c| c.active)
+        .unwrap_or(false)
+}
+
+/// Alterna entre a janela cheia e o pill. `pill_width` é a largura do pill ao entrar
+/// (ignorada ao sair). Precisa da window pra redimensionar.
+/// Novos bounds centralizados na largura ATUAL da janela, mantendo o topo. Assim, ao
+/// recolher/expandir, a janela cresce/encolhe pelo centro (não pelo canto superior-esquerdo).
+fn centered_bounds(window: &Window, new_size: gpui::Size<Pixels>) -> gpui::Bounds<Pixels> {
+    let cur = window.bounds();
+    let center_x = cur.origin.x + cur.size.width / 2.;
+    let x = center_x - new_size.width / 2.;
+    gpui::bounds(gpui::point(x, cur.origin.y), new_size)
+}
+
+pub fn toggle_compact(pill_width: f32, window: &mut Window, cx: &mut App) {
+    if compact_active(cx) {
+        let restore = cx
+            .try_global::<CompactMode>()
+            .and_then(|c| c.restore)
+            .unwrap_or_else(|| gpui::size(px(900.), px(700.)));
+        let slot = cx.default_global::<CompactMode>();
+        slot.active = false;
+        window.set_always_on_top(false);
+        window.set_window_bounds(centered_bounds(window, restore));
+    } else {
+        let current = window.viewport_size();
+        let slot = cx.default_global::<CompactMode>();
+        slot.active = true;
+        slot.restore = Some(current);
+        // Recolhido = sempre por cima (não pode ser coberto/perdido ao clicar em outro app).
+        window.set_always_on_top(true);
+        window.set_window_bounds(centered_bounds(window, gpui::size(px(pill_width), px(44.))));
+    }
+}
+
+/// Reajusta a largura do pill (ex.: ao ligar/desligar o mic) — só se estiver compacto.
+/// Mantém centralizado (senão o pill "escorregaria" pra um lado ao mudar de largura).
+pub fn resize_compact(pill_width: f32, window: &mut Window, cx: &mut App) {
+    if compact_active(cx) {
+        window.set_window_bounds(centered_bounds(window, gpui::size(px(pill_width), px(44.))));
+    }
+}
+
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         static FIRST_PAINT: AtomicBool = AtomicBool::new(true);
@@ -8410,6 +8522,122 @@ impl Render for Workspace {
             .collect::<Vec<_>>();
         let bottom_dock_layout = WorkspaceSettings::get_global(cx).bottom_dock_layout;
 
+        // ponytail: fora do modo recolhido, garante um tamanho mínimo da janela (pega
+        // tanto o caso da janela órfã do pill quanto o usuário encolhendo demais — o
+        // window_min_size do OS foi baixado pra caber o pill).
+        if !compact_active(cx) {
+            let vs = window.viewport_size();
+            let w = f32::from(vs.width).max(400.0);
+            let h = f32::from(vs.height).max(360.0);
+            if (w - f32::from(vs.width)).abs() > 0.5 || (h - f32::from(vs.height)).abs() > 0.5 {
+                window.resize(gpui::size(px(w), px(h)));
+            }
+        }
+
+        // ponytail: modo recolhido — a janela é um pill; só o titlebar_item (que se
+        // desenha como pill) preenche a janelinha.
+        if compact_active(cx) {
+            return div()
+                .size_full()
+                .overflow_hidden()
+                .font(ui_font)
+                .text_color(colors.text)
+                .bg(colors.background)
+                .children(self.titlebar_item.clone())
+                .child(self.modal_layer.clone())
+                .into_any_element();
+        }
+
+        // ponytail: build chat-only — SEMPRE renderiza este layout (nunca cai no Zed
+        // completo com welcome/status bar). Duas colunas: o painel Notion (slot global)
+        // quando aberto + o agent panel (chat) preenchendo o resto. O agent vem de qual
+        // dock a config do usuário puser (esquerda/direita/baixo).
+        let agent_panel = self
+            .left_dock
+            .read(cx)
+            .active_panel()
+            .or_else(|| self.right_dock.read(cx).active_panel())
+            .or_else(|| self.bottom_dock.read(cx).active_panel())
+            .map(|panel| panel.to_any());
+        let notebook = cx
+            .try_global::<NotebookSlot>()
+            .filter(|slot| slot.open)
+            .and_then(|slot| slot.view.clone());
+        let notebook_width = notebook_width(cx);
+        {
+            return div()
+                .relative()
+                .size_full()
+                .flex()
+                .flex_col()
+                .font(ui_font)
+                .text_color(colors.text)
+                .bg(colors.background)
+                .overflow_hidden()
+                .children(self.titlebar_item.clone())
+                .child(
+                    h_flex()
+                        .flex_1()
+                        .min_h(px(0.))
+                        .w_full()
+                        .overflow_hidden()
+                        // ponytail: alça externa = resize do chat vs notebook.
+                        .when(notebook.is_some(), |this| {
+                            this.on_drag_move(cx.listener(
+                                move |_this, e: &DragMoveEvent<DraggedNotebookDivider>, window, cx| {
+                                    // Deixa esticar mais (chat guarda ~300px) e a coluna tem
+                                    // mínimo (440) pra caber árvore + nota sem colapsar.
+                                    let vw = f32::from(window.viewport_size().width);
+                                    let max = (vw - 300.0).max(440.0);
+                                    let w = f32::from(e.event.position.x).clamp(440.0, max);
+                                    set_notebook_width(w, cx);
+                                    cx.notify();
+                                },
+                            ))
+                        })
+                        .when_some(notebook, |this, panel| {
+                            this.child(
+                                div()
+                                    .relative()
+                                    .w(px(notebook_width))
+                                    .h_full()
+                                    .flex_none()
+                                    .overflow_hidden()
+                                    .border_r_1()
+                                    .border_color(colors.border)
+                                    .child(panel)
+                                    .child(gpui::deferred(
+                                        div()
+                                            .id("notebook-chat-resize")
+                                            .absolute()
+                                            .top_0()
+                                            .right(px(-3.))
+                                            .w(px(6.))
+                                            .h_full()
+                                            .cursor_col_resize()
+                                            .on_drag(DraggedNotebookDivider, |d, _, _, cx| {
+                                                cx.stop_propagation();
+                                                cx.new(|_| d.clone())
+                                            })
+                                            .on_mouse_down(
+                                                gpui::MouseButton::Left,
+                                                |_, _, cx| cx.stop_propagation(),
+                                            )
+                                            .occlude(),
+                                    )),
+                            )
+                        })
+                        .when_some(agent_panel, |this, panel| {
+                            this.child(div().flex_1().h_full().overflow_hidden().child(panel))
+                        }),
+                )
+                .children(self.render_notifications(window, cx))
+                .child(self.modal_layer.clone())
+                .child(self.toast_layer.clone())
+                .into_any_element();
+        }
+
+        #[allow(unreachable_code)]
         let pane_render_context = PaneRenderContext {
             follower_states: &self.follower_states,
             active_call: self.active_call(),
@@ -8807,6 +9035,7 @@ impl Render for Workspace {
                     })
                     .child(self.toast_layer.clone()),
             )
+            .into_any_element()
     }
 }
 

@@ -21,7 +21,6 @@ use anyhow::{Context as _, Result};
 use clap::Parser;
 use cli::FORCE_CLI_MODE_ENV_VAR_NAME;
 use client::{Client, ProxySettings, RefreshLlmTokenListener, UserStore, parse_zed_link};
-use collab_ui::channel_view::ChannelView;
 use collections::HashMap;
 use crashes::InitCrashHandler;
 use db::kvp::{GlobalKeyValueStore, KeyValueStore};
@@ -30,7 +29,6 @@ use extension::ExtensionHostProxy;
 use fs::{Fs, RealFs};
 use futures::{StreamExt, channel::oneshot, future};
 use git::GitHostingProviderRegistry;
-use git_ui::clone::clone_and_open;
 use gpui::{
     App, AppContext, Application, AsyncApp, Focusable as _, QuitMode, Task, TaskExt,
     UpdateGlobal as _, block_on,
@@ -39,8 +37,6 @@ use gpui_platform;
 
 use gpui_tokio::Tokio;
 use language::LanguageRegistry;
-use onboarding::{FIRST_OPEN, show_onboarding_view};
-use project_panel::ProjectPanel;
 use prompt_store::PromptBuilder;
 use remote::RemoteConnectionOptions;
 use reqwest_client::ReqwestClient;
@@ -50,7 +46,6 @@ use node_runtime::{NodeBinaryOptions, NodeRuntime};
 use parking_lot::Mutex;
 use project::{project_settings::ProjectSettings, trusted_worktrees};
 use proto;
-use recent_projects::{RemoteSettings, open_remote_project};
 use release_channel::{AppCommitSha, AppVersion, ReleaseChannel};
 use session::{AppSession, Session};
 use settings::{BaseKeymap, Settings, SettingsStore, watch_config_file};
@@ -75,7 +70,7 @@ use workspace::{
 };
 use zed::{
     OpenListener, OpenRequest, RawOpenRequest, app_menus, build_window_options,
-    derive_paths_with_position, edit_prediction_registry, handle_cli_connection,
+    derive_paths_with_position, handle_cli_connection,
     handle_keymap_file_changes, initialize_workspace, open_paths_with_positions,
 };
 
@@ -589,8 +584,7 @@ fn main() {
         #[cfg(target_os = "macos")]
         zed::move_to_applications::init(cx);
         project::Project::init(&client, cx);
-        debugger_ui::init(cx);
-        debugger_tools::init(cx);
+        // ponytail: chat-only — debugger removido
         client::init(&client, cx);
         feature_flags::FeatureFlagStore::init(cx);
 
@@ -656,8 +650,6 @@ fn main() {
         AppState::set_global(app_state.clone(), cx);
 
         auto_update::init(client.clone(), cx);
-        dap_adapters::init(cx);
-        auto_update_ui::init(cx);
         reliability::init(client.clone(), cx);
         extension_host::init(
             extension_host_proxy.clone(),
@@ -689,7 +681,6 @@ fn main() {
             cx,
         );
 
-        copilot_ui::init(&app_state, cx);
         language_model::init(cx);
         RefreshLlmTokenListener::register(
             app_state.client.clone(),
@@ -700,11 +691,9 @@ fn main() {
         acp_tools::init(cx);
         zed::telemetry_log::init(cx);
         zed::remote_debug::init(cx);
-        edit_prediction_ui::init(cx);
         web_search::init(cx);
         web_search_providers::init(app_state.client.clone(), app_state.user_store.clone(), cx);
         snippet_provider::init(cx);
-        edit_prediction_registry::init(app_state.client.clone(), app_state.user_store.clone(), cx);
         let prompt_builder = PromptBuilder::load(app_state.fs.clone(), stdout_is_a_pty(), cx);
         project::AgentRegistryStore::init_global(
             cx,
@@ -720,31 +709,15 @@ fn main() {
             cx,
         );
 
-        repl::init(app_state.fs.clone(), cx);
-        recent_projects::init(cx);
-        dev_container::init(cx);
-
         load_embedded_fonts(cx);
 
         editor::init(cx);
-        image_viewer::init(cx);
-        repl::notebook::init(cx);
-        diagnostics::init(cx);
 
         audio::init(cx);
         workspace::init(app_state.clone(), cx);
         ui_prompt::init(cx);
 
-        go_to_line::init(cx);
-        file_finder::init(cx);
-        tab_switcher::init(cx);
-        outline::init(cx);
-        project_symbols::init(cx);
-        project_panel::init(cx);
-        outline_panel::init(cx);
-        tasks_ui::init(cx);
-        snippets_ui::init(cx);
-        channel::init(&app_state.client.clone(), app_state.user_store.clone(), cx);
+        // ponytail: chat-only — pickers, painéis de editor e collab removidos
         search::init(cx);
         cx.set_global(workspace::PaneSearchBarCallbacks {
             setup_search_bar: |languages, toolbar, window, cx| {
@@ -755,34 +728,18 @@ fn main() {
             },
             wrap_div_with_search_actions: search::buffer_search::register_pane_search_actions,
         });
-        vim::init(cx);
         terminal_view::init(cx);
-        journal::init(app_state.clone(), cx);
-        encoding_selector::init(cx);
-        language_selector::init(cx);
-        line_ending_selector::init(cx);
-        toolchain_selector::init(cx);
         theme_selector::init(cx);
-        settings_profile_selector::init(cx);
-        language_tools::init(cx);
+        // ponytail: chat-only — collab_ui (deletado) era quem chamava isso; sem ele
+        // a janela fica sem titlebar, sem drag e sem botões de minimizar/fechar
+        title_bar::init(cx);
+        stt::init(cx);
+        notebook::init(cx);
         call::init(app_state.client.clone(), app_state.user_store.clone(), cx);
-        notifications::init(app_state.client.clone(), app_state.user_store.clone(), cx);
-        collab_ui::init(&app_state, cx);
-        git_ui::init(cx);
-        git_graph::init(cx);
-        feedback::init(cx);
-        markdown_preview::init(cx);
-        csv_preview::init(cx);
-        svg_preview::init(cx);
-        onboarding::init(cx);
         settings_ui::init(cx);
         keymap_editor::init(cx);
         extensions_ui::init(cx);
-        edit_prediction::init(cx);
-        inspector_ui::init(app_state.clone(), cx);
         json_schema_store::init(cx);
-        miniprofiler_ui::init(*STARTUP_TIME.get().unwrap(), cx);
-        which_key::init(cx);
         #[cfg(target_os = "windows")]
         etw_tracing::init(cx);
 
@@ -954,8 +911,6 @@ fn main() {
         .detach_and_log_err(cx);
 
         let app_state = app_state.clone();
-
-        component_preview::init(app_state.clone(), cx);
 
         cx.spawn(async move |cx| {
             while let Some(urls) = open_rx.next().await {
@@ -1177,104 +1132,18 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                 })
                 .detach_and_log_err(cx);
             }
-            OpenRequestKind::GitClone { repo_url } => {
-                workspace::with_active_or_new_workspace(cx, |_workspace, window, cx| {
-                    if window.is_window_active() {
-                        clone_and_open(
-                            repo_url,
-                            cx.weak_entity(),
-                            window,
-                            cx,
-                            Arc::new(|workspace: &mut workspace::Workspace, window, cx| {
-                                workspace.focus_panel::<ProjectPanel>(window, cx);
-                            }),
-                        );
-                        return;
-                    }
-
-                    let subscription = Rc::new(RefCell::new(None));
-                    subscription.replace(Some(cx.observe_in(&cx.entity(), window, {
-                        let subscription = subscription.clone();
-                        let repo_url = repo_url;
-                        move |_, workspace_entity, window, cx| {
-                            if window.is_window_active() && subscription.take().is_some() {
-                                clone_and_open(
-                                    repo_url.clone(),
-                                    workspace_entity.downgrade(),
-                                    window,
-                                    cx,
-                                    Arc::new(|workspace: &mut workspace::Workspace, window, cx| {
-                                        workspace.focus_panel::<ProjectPanel>(window, cx);
-                                    }),
-                                );
-                            }
-                        }
-                    })));
-                });
-            }
-            OpenRequestKind::GitCommit { sha } => {
-                cx.spawn(async move |cx| {
-                    let paths_with_position =
-                        derive_paths_with_position(app_state.fs.as_ref(), request.open_paths).await;
-                    let (workspace, _results) = open_paths_with_positions(
-                        &paths_with_position,
-                        &[],
-                        false,
-                        app_state,
-                        workspace::OpenOptions::default(),
-                        cx,
-                    )
-                    .await?;
-
-                    workspace
-                        .update(cx, |multi_workspace, window, cx| {
-                            multi_workspace
-                                .workspace()
-                                .clone()
-                                .update(cx, |workspace, cx| {
-                                    let Some(repo) =
-                                        workspace.project().read(cx).active_repository(cx)
-                                    else {
-                                        log::error!("no active repository found for commit view");
-                                        return Err(anyhow::anyhow!("no active repository found"));
-                                    };
-
-                                    git_ui::commit_view::CommitView::open(
-                                        sha,
-                                        repo.downgrade(),
-                                        workspace.weak_handle(),
-                                        None,
-                                        None,
-                                        window,
-                                        cx,
-                                    );
-                                    Ok(())
-                                })
-                        })
-                        .log_err();
-
-                    anyhow::Ok(())
-                })
-                .detach_and_log_err(cx);
+            OpenRequestKind::GitClone { repo_url: _ } | OpenRequestKind::GitCommit { sha: _ } => {
+                // ponytail: chat-only — git clone/commit view via URL removidos
+                log::warn!("git clone/commit view via zed:// URL is not supported");
             }
         }
 
         return;
     }
 
-    if let Some(connection_options) = request.remote_connection {
-        cx.spawn(async move |cx| {
-            let paths: Vec<PathBuf> = request.open_paths.into_iter().map(PathBuf::from).collect();
-            open_remote_project(
-                connection_options,
-                paths,
-                app_state,
-                workspace::OpenOptions::default(),
-                cx,
-            )
-            .await
-        })
-        .detach_and_log_err(cx);
+    if request.remote_connection.is_some() {
+        // ponytail: chat-only — projetos remotos removidos
+        log::warn!("opening remote projects is not supported");
         return;
     }
 
@@ -1307,56 +1176,8 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
     }
 
     if !request.open_channel_notes.is_empty() || request.join_channel.is_some() {
-        cx.spawn(async move |cx| {
-            let result = maybe!(async {
-                if let Some(task) = task {
-                    task.await?;
-                }
-                let client = app_state.client.clone();
-                // we continue even if authentication fails as join_channel/ open channel notes will
-                // show a visible error message.
-                authenticate(client, cx).await.log_err();
-
-                if let Some(channel_id) = request.join_channel {
-                    cx.update(|cx| {
-                        workspace::join_channel(
-                            client::ChannelId(channel_id),
-                            app_state.clone(),
-                            None,
-                            None,
-                            cx,
-                        )
-                    })
-                    .await?;
-                }
-
-                let workspace_window =
-                    workspace::get_any_active_multi_workspace(app_state, cx.clone()).await?;
-
-                let workspace = workspace_window.read_with(cx, |mw, _| mw.workspace().clone())?;
-
-                let mut promises = Vec::new();
-                for (channel_id, heading) in request.open_channel_notes {
-                    promises.push(cx.update_window(workspace_window.into(), |_, window, cx| {
-                        ChannelView::open(
-                            client::ChannelId(channel_id),
-                            heading,
-                            workspace.clone(),
-                            window,
-                            cx,
-                        )
-                        .log_err()
-                    })?)
-                }
-                future::join_all(promises).await;
-                anyhow::Ok(())
-            })
-            .await;
-            if let Err(err) = result {
-                fail_to_open_window_async(err, cx);
-            }
-        })
-        .detach()
+        // ponytail: chat-only — collab/canais removidos
+        log::warn!("collab channels are not supported");
     } else if let Some(task) = task {
         cx.spawn(async move |cx| {
             if let Err(err) = task.await {
@@ -1422,6 +1243,13 @@ pub(crate) async fn restore_or_create_workspace(
     app_state: Arc<AppState>,
     cx: &mut AsyncApp,
 ) -> Result<()> {
+    // ponytail: chat-only — nunca restaura projeto/sessão anterior; a janela sempre
+    // abre limpa, sem diretório; contexto entra arrastando arquivos/pastas pro chat
+    cx.update(|cx| workspace::open_new(Default::default(), app_state.clone(), cx, |_, _, _| {}))
+        .await?;
+    return Ok(());
+
+    #[allow(unreachable_code)]
     let kvp = cx.update(|cx| KeyValueStore::global(cx));
     if let Some(multi_workspaces) = restorable_workspaces(cx, &app_state).await {
         let mut error_count = 0;
@@ -1432,42 +1260,9 @@ pub(crate) async fn restore_or_create_workspace(
                         .await
                         .map(|_| ())
                 }
-                SerializedWorkspaceLocation::Remote(connection_options) => {
-                    let mut connection_options = connection_options.clone();
-                    if let RemoteConnectionOptions::Ssh(options) = &mut connection_options {
-                        cx.update(|cx| {
-                            RemoteSettings::get_global(cx)
-                                .fill_connection_options_from_settings(options)
-                        });
-                    }
-
-                    let paths = multi_workspace
-                        .active_workspace
-                        .paths
-                        .paths()
-                        .iter()
-                        .map(PathBuf::from)
-                        .collect::<Vec<_>>();
-                    let state = multi_workspace.state.clone();
-                    async {
-                        let window = open_remote_project(
-                            connection_options,
-                            paths,
-                            app_state.clone(),
-                            workspace::OpenOptions::default(),
-                            cx,
-                        )
-                        .await?;
-                        workspace::apply_restored_multiworkspace_state(
-                            window,
-                            &state,
-                            app_state.fs.clone(),
-                            cx,
-                        )
-                        .await;
-                        Ok::<(), anyhow::Error>(())
-                    }
-                    .await
+                SerializedWorkspaceLocation::Remote(_) => {
+                    // ponytail: chat-only — projetos remotos removidos
+                    Err(anyhow::anyhow!("remote workspaces are not supported"))
                 }
             };
 
@@ -1552,8 +1347,6 @@ pub(crate) async fn restore_or_create_workspace(
             })
             .await?;
         }
-    } else if matches!(kvp.read_kvp(FIRST_OPEN), Ok(None)) {
-        cx.update(|cx| show_onboarding_view(app_state, cx)).await?;
     } else {
         cx.update(|cx| {
             workspace::open_new(

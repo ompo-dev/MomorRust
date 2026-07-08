@@ -35,7 +35,7 @@ use settings::{Settings, SettingsStore, update_settings_file};
 use ui::{
     AiSettingItem, AiSettingItemSource, AiSettingItemStatus, ButtonStyle, Chip, ContextMenu,
     ContextMenuEntry, Disclosure, Divider, DividerColor, ElevationIndex, LabelSize, PopoverMenu,
-    Switch, Tooltip, WithScrollbar, prelude::*,
+    Switch, TintColor, Tooltip, WithScrollbar, prelude::*,
 };
 use util::ResultExt as _;
 use workspace::{Workspace, create_and_open_local_file};
@@ -64,6 +64,9 @@ pub struct AgentConfiguration {
     context_server_registry: Entity<ContextServerRegistry>,
     _subscriptions: Vec<Subscription>,
     scroll_handle: ScrollHandle,
+    // ponytail: STT — um campo de chave por provedor (estilo LLM providers)
+    stt_inputs: Vec<(stt::SttProviderKind, Entity<ui_input::InputField>)>,
+    stt_expanded: HashMap<&'static str, bool>,
 }
 
 impl AgentConfiguration {
@@ -102,6 +105,20 @@ impl AgentConfiguration {
             cx.subscribe(&context_server_store, |_, _, _, cx| cx.notify()),
         ];
 
+        let stt_inputs = stt::SttProviderKind::ALL
+            .into_iter()
+            .map(|kind| {
+                let input = cx.new(|cx| {
+                    let input = ui_input::InputField::new(window, cx, "API key");
+                    if let Some(key) = stt::provider_key(kind) {
+                        input.set_text(&key, window, cx);
+                    }
+                    input
+                });
+                (kind, input)
+            })
+            .collect();
+
         let mut this = Self {
             fs,
             language_registry,
@@ -115,6 +132,8 @@ impl AgentConfiguration {
             context_server_registry,
             _subscriptions: subscriptions,
             scroll_handle: ScrollHandle::new(),
+            stt_inputs,
+            stt_expanded: HashMap::default(),
         };
 
         this.build_provider_configuration_views(window, cx);
@@ -167,6 +186,151 @@ enum AgentIcon {
 }
 
 impl AgentConfiguration {
+    // ponytail: STT — MESMO componente visual dos LLM Providers: linhas com disclosure
+    // expansível, ✓ verde no ativo, chave dentro ao expandir.
+    fn render_stt_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let selected = stt::selected_provider();
+        let rows: Vec<_> = self.stt_inputs.clone();
+        v_flex()
+            .border_t_1()
+            .border_color(cx.theme().colors().border)
+            .child(self.render_section_title(
+                "Speech-to-Text (STT)",
+                "Ouça o microfone e o áudio do PC; a transcrição vira contexto pra IA.",
+                div().into_any_element(),
+            ))
+            .children(
+                rows.into_iter()
+                    .map(|(kind, input)| self.render_stt_provider_block(kind, input, selected, cx)),
+            )
+    }
+
+    fn render_stt_provider_block(
+        &mut self,
+        kind: stt::SttProviderKind,
+        input: Entity<ui_input::InputField>,
+        selected: stt::SttProviderKind,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let id = kind.id();
+        let row_id = SharedString::from(format!("stt-provider-disclosure-{id}"));
+        let is_expanded = self.stt_expanded.get(id).copied().unwrap_or(false);
+        let has_key = stt::provider_key(kind).is_some();
+        let is_selected = kind == selected;
+
+        v_flex()
+            .min_w_0()
+            .w_full()
+            .when(is_expanded, |this| this.mb_2())
+            .child(
+                div()
+                    .px_2()
+                    .child(Divider::horizontal().color(DividerColor::BorderFaded)),
+            )
+            .child(
+                h_flex()
+                    .map(|this| {
+                        if is_expanded {
+                            this.mt_2().mb_1()
+                        } else {
+                            this.my_2()
+                        }
+                    })
+                    .w_full()
+                    .child(
+                        h_flex()
+                            .id(row_id.clone())
+                            .px_2()
+                            .py_0p5()
+                            .w_full()
+                            .justify_between()
+                            .rounded_sm()
+                            .hover(|hover| hover.bg(cx.theme().colors().element_hover))
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .gap_1p5()
+                                    .child(
+                                        Icon::new(IconName::Mic)
+                                            .size(IconSize::Small)
+                                            .color(Color::Muted),
+                                    )
+                                    .child(Label::new(kind.name()))
+                                    .when(!kind.is_streaming(), |el| {
+                                        el.child(
+                                            Label::new("em breve")
+                                                .size(LabelSize::XSmall)
+                                                .color(Color::Muted),
+                                        )
+                                    })
+                                    .when(has_key && is_selected && !is_expanded, |el| {
+                                        el.child(Icon::new(IconName::Check).color(Color::Success))
+                                    }),
+                            )
+                            .child(
+                                Disclosure::new(row_id, is_expanded)
+                                    .opened_icon(IconName::ChevronUp)
+                                    .closed_icon(IconName::ChevronDown),
+                            )
+                            .on_click(cx.listener(move |this, _, _, _| {
+                                let e = this.stt_expanded.entry(id).or_insert(false);
+                                *e = !*e;
+                            })),
+                    ),
+            )
+            .when(is_expanded, |parent| {
+                parent.child(
+                    v_flex()
+                        .min_w_0()
+                        .w_full()
+                        .px_2()
+                        .gap_2()
+                        .child(input.clone())
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .justify_end()
+                                .child(
+                                    Button::new(
+                                        SharedString::from(format!("stt-select-{id}")),
+                                        if is_selected { "Ativo" } else { "Usar este" },
+                                    )
+                                    .style(if is_selected {
+                                        ButtonStyle::Tinted(TintColor::Accent)
+                                    } else {
+                                        ButtonStyle::Subtle
+                                    })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        stt::set_selected_provider(kind, cx);
+                                        this.notify_stt_saved("Provedor STT selecionado.", cx);
+                                    })),
+                                )
+                                .child(
+                                    Button::new(
+                                        SharedString::from(format!("stt-save-{id}")),
+                                        "Salvar chave",
+                                    )
+                                    .style(ButtonStyle::Filled)
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        let key = input.read(cx).text(cx);
+                                        stt::set_provider_key(kind, key, cx);
+                                        this.notify_stt_saved("Chave salva.", cx);
+                                    })),
+                                ),
+                        ),
+                )
+            })
+    }
+
+    fn notify_stt_saved(&self, msg: &'static str, cx: &mut Context<Self>) {
+        if let Some(workspace) = self.workspace.upgrade() {
+            workspace.update(cx, |workspace, cx| {
+                let status = StatusToast::new(msg, cx, |this, _| this);
+                workspace.toggle_status_toast(status, cx);
+            });
+        }
+    }
+
     fn render_section_title(
         &mut self,
         title: impl Into<SharedString>,
@@ -1283,6 +1447,7 @@ impl Render for AgentConfiguration {
                             .overflow_y_scroll()
                             .child(self.render_agent_servers_section(cx))
                             .child(self.render_context_servers_section(cx))
+                            .child(self.render_stt_section(cx))
                             .child(self.render_provider_configuration_section(cx)),
                     )
                     .vertical_scrollbar_for(&self.scroll_handle, window, cx),

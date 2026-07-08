@@ -2007,7 +2007,8 @@ impl Render for MultiWorkspace {
         let sidebar_side = self.sidebar_side(cx);
         let sidebar_on_right = sidebar_side == SidebarSide::Right;
 
-        let sidebar: Option<AnyElement> = if multi_workspace_enabled && self.sidebar_open() {
+        // ponytail: chat-only — sidebar de threads/projetos nunca renderiza
+        let sidebar: Option<AnyElement> = if false && multi_workspace_enabled && self.sidebar_open() {
             self.sidebar.as_ref().map(|sidebar_handle| {
                 let weak = cx.weak_entity();
 

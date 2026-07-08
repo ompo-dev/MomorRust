@@ -1,5 +1,9 @@
 use crate::DEFAULT_THREAD_TITLE;
 use crate::SendImmediately;
+
+/// ponytail: prefixo do bloco de transcrição do STT em modo Contexto. É enviado à IA
+/// mas escondido da exibição da mensagem.
+pub const STT_CONTEXT_MARKER: &str = "[Transcrição de áudio ao vivo]";
 use crate::{
     ChatWithFollow,
     completion_provider::{
@@ -41,6 +45,20 @@ use util::paths::PathStyle;
 use util::{ResultExt, debug_panic};
 use workspace::{CollaboratorId, Workspace};
 use zed_actions::agent::{Chat, PasteRaw};
+
+/// Skills do usuário (~/.claude/skills) como comandos `/` — universais, independem do
+/// provedor. `requires_argument: true` faz o menu inserir `/nome ` SEM auto-enviar, pra
+/// você completar o prompt (a IA já vê a skill no system prompt + tem a tool `skill`).
+fn skill_slash_commands() -> Vec<crate::completion_provider::AvailableCommand> {
+    agent::skills::all()
+        .iter()
+        .map(|s| crate::completion_provider::AvailableCommand {
+            name: s.name.clone().into(),
+            description: s.description.clone().into(),
+            requires_argument: true,
+        })
+        .collect()
+}
 
 #[derive(Default)]
 pub struct SessionCapabilities {
@@ -88,14 +106,18 @@ impl SessionCapabilities {
     }
 
     pub fn completion_commands(&self) -> Vec<crate::completion_provider::AvailableCommand> {
-        self.available_commands
+        let mut commands: Vec<_> = self
+            .available_commands
             .iter()
             .map(|cmd| crate::completion_provider::AvailableCommand {
                 name: cmd.name.clone().into(),
                 description: cmd.description.clone().into(),
                 requires_argument: cmd.input.is_some(),
             })
-            .collect()
+            .collect();
+        // Skills do usuário no menu `/`, universais (independem do provedor/agente).
+        commands.extend(skill_slash_commands());
+        commands
     }
 
     pub fn set_prompt_capabilities(&mut self, prompt_capabilities: acp::PromptCapabilities) {
@@ -142,6 +164,9 @@ pub struct MessageEditor {
     session_capabilities: SharedSessionCapabilities,
     agent_id: AgentId,
     thread_store: Option<Entity<ThreadStore>>,
+    /// ponytail: conteúdo de notas/reuniões arrastadas — enviado à IA no próximo envio,
+    /// mas NÃO exibido (a caixa mostra só um rótulo compacto).
+    pending_context: Vec<String>,
     _subscriptions: Vec<Subscription>,
     _parse_slash_command_task: Task<()>,
 }
@@ -558,6 +583,7 @@ impl MessageEditor {
             session_capabilities,
             agent_id,
             thread_store,
+            pending_context: Vec::new(),
             _subscriptions: subscriptions,
             _parse_slash_command_task: Task::ready(()),
         }
@@ -733,11 +759,17 @@ impl MessageEditor {
         cx: &mut Context<Self>,
     ) -> Task<Result<(Vec<acp::ContentBlock>, Vec<Entity<Buffer>>)>> {
         let text = self.editor.read(cx).text(cx);
-        let available_commands = self
+        let mut available_commands = self
             .session_capabilities
             .read()
             .available_commands()
             .to_vec();
+        // Skills contam como comandos válidos no envio (senão `/skill` seria rejeitado).
+        available_commands.extend(
+            agent::skills::all()
+                .iter()
+                .map(|s| acp::AvailableCommand::new(s.name.clone(), s.description.clone())),
+        );
         let agent_id = self.agent_id.clone();
         let build_task = self.build_content_blocks(full_mention_content, cx);
 
@@ -1562,6 +1594,11 @@ impl MessageEditor {
         for chunk in message {
             match chunk {
                 acp::ContentBlock::Text(text_content) => {
+                    // ponytail: STT modo Contexto — o bloco de transcrição é enviado
+                    // à IA mas NÃO é exibido na mensagem (fica "por baixo dos panos").
+                    if text_content.text.starts_with(STT_CONTEXT_MARKER) {
+                        continue;
+                    }
                     text.push_str(&text_content.text);
                 }
                 acp::ContentBlock::Resource(acp::EmbeddedResource {
@@ -1703,6 +1740,11 @@ impl MessageEditor {
         });
     }
 
+    /// ponytail: retira o contexto escondido acumulado (drops de notebook) pra o envio.
+    pub fn take_pending_context(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_context)
+    }
+
     pub fn insert_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         if text.is_empty() {
             return;
@@ -1820,6 +1862,26 @@ impl Render for MessageEditor {
             .on_action(cx.listener(Self::paste_raw))
             .capture_action(cx.listener(Self::paste))
             .flex_1()
+            // ponytail: arrastar nota/reunião/pasta do notebook pra cá adiciona como
+            // contexto ESCONDIDO (a IA recebe no envio) e mostra só um rótulo compacto.
+            .drag_over::<notebook::DraggedNotebookItem>(|el, _, _, cx| {
+                el.bg(cx.theme().colors().drop_target_background)
+            })
+            .on_drop::<notebook::DraggedNotebookItem>(cx.listener(
+                |this, item: &notebook::DraggedNotebookItem, window, cx| {
+                    let content = notebook::drop_text(item, cx);
+                    let label = item.label.clone();
+                    this.pending_context
+                        .push(format!("[{}]\n{}", label, content));
+                    // Ícone por tipo, alinhado com a sidebar (pasta/nota/reunião).
+                    let icon = match item.kind {
+                        "folder" => "📁",
+                        "meeting" => "🎙️",
+                        _ => "📝",
+                    };
+                    this.insert_text(&format!("{icon} {label} "), window, cx);
+                },
+            ))
             .child({
                 let settings = ThemeSettings::get_global(cx);
 

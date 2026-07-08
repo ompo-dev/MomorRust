@@ -36,18 +36,16 @@ use crate::thread_metadata_store::{ThreadId, ThreadMetadataStore, ThreadMetadata
 use crate::{
     AddContextServer, AgentDiffPane, ConversationView, CopyThreadToClipboard, Follow,
     InlineAssistant, LoadThreadFromClipboard, NewThread, OpenActiveThreadAsMarkdown, OpenAgentDiff,
-    ResetTrialEndUpsell, ResetTrialUpsell, ShowAllSidebarThreadMetadata, ShowThreadMetadata,
+    ShowAllSidebarThreadMetadata, ShowThreadMetadata,
     ToggleNewThreadMenu, ToggleOptionsMenu,
     agent_configuration::{AgentConfiguration, AssistantConfigurationEvent},
     conversation_view::{AcpThreadViewEvent, ThreadView},
-    ui::EndTrialUpsell,
 };
 use crate::{
     Agent, AgentInitialContent, ExternalSourcePrompt, NewExternalAgentThread,
     NewNativeAgentThreadFromSummary,
 };
 use agent_settings::AgentSettings;
-use ai_onboarding::AgentPanelOnboarding;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use client::UserStore;
@@ -255,19 +253,6 @@ pub fn init(cx: &mut App) {
                 .register_action(|_workspace, _: &ResetOnboarding, window, cx| {
                     window.dispatch_action(workspace::RestoreBanner.boxed_clone(), cx);
                     window.refresh();
-                })
-                .register_action(|workspace, _: &ResetTrialUpsell, _window, cx| {
-                    if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
-                        panel.update(cx, |panel, _| {
-                            panel
-                                .new_user_onboarding_upsell_dismissed
-                                .store(false, Ordering::Release);
-                        });
-                    }
-                    OnboardingUpsell::set_dismissed(false, cx);
-                })
-                .register_action(|_workspace, _: &ResetTrialEndUpsell, _window, cx| {
-                    TrialEndUpsell::set_dismissed(false, cx);
                 })
                 .register_action(|workspace, _: &ResetAgentZoom, window, cx| {
                     if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
@@ -699,8 +684,6 @@ pub struct AgentPanel {
     _project_subscription: Subscription,
     zoomed: bool,
     pending_serialization: Option<Task<Result<()>>>,
-    new_user_onboarding: Entity<AgentPanelOnboarding>,
-    new_user_onboarding_upsell_dismissed: AtomicBool,
     selected_agent: Agent,
     _thread_view_subscription: Option<Subscription>,
     _active_thread_focus_subscription: Option<Subscription>,
@@ -968,22 +951,6 @@ impl AgentPanel {
 
         let base_view = BaseView::Uninitialized;
 
-        let weak_panel = cx.entity().downgrade();
-        let onboarding = cx.new(|cx| {
-            AgentPanelOnboarding::new(
-                user_store.clone(),
-                client,
-                move |_window, cx| {
-                    weak_panel
-                        .update(cx, |panel, cx| {
-                            panel.dismiss_ai_onboarding(cx);
-                        })
-                        .ok();
-                },
-                cx,
-            )
-        });
-
         // Subscribe to extension events to sync agent servers when extensions change
         let extension_subscription = if let Some(extension_events) = ExtensionEvents::try_global(cx)
         {
@@ -1056,12 +1023,10 @@ impl AgentPanel {
             _project_subscription,
             zoomed: false,
             pending_serialization: None,
-            new_user_onboarding: onboarding,
             thread_store,
             selected_agent: Agent::default(),
             _thread_view_subscription: None,
             _active_thread_focus_subscription: None,
-            new_user_onboarding_upsell_dismissed: AtomicBool::new(OnboardingUpsell::dismissed(cx)),
             _base_view_observation: None,
             _draft_editor_observation: None,
             _thread_metadata_store_subscription,
@@ -1189,6 +1154,7 @@ impl AgentPanel {
     }
 
     pub fn new_thread(&mut self, _action: &NewThread, window: &mut Window, cx: &mut Context<Self>) {
+        self.clear_dragged_context(cx);
         self.activate_draft(true, "agent_panel", window, cx);
     }
 
@@ -1198,10 +1164,28 @@ impl AgentPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // ponytail: trocar de agente/modelo NUNCA limpa contexto nem histórico;
+        // só o "+ novo thread" explícito (agent = None) zera tudo
         if let Some(agent) = action.agent.clone() {
             self.selected_agent = agent;
+        } else {
+            self.clear_dragged_context(cx);
         }
         self.activate_draft(true, "agent_panel", window, cx);
+    }
+
+    // ponytail: nova conversa começa do zero — remove as pastas/arquivos arrastados
+    // na conversa anterior (worktrees do projeto)
+    fn clear_dragged_context(&mut self, cx: &mut Context<Self>) {
+        self.project.update(cx, |project, cx| {
+            let ids: Vec<_> = project
+                .worktrees(cx)
+                .map(|worktree| worktree.read(cx).id())
+                .collect();
+            for id in ids {
+                project.remove_worktree(id, cx);
+            }
+        });
     }
 
     pub fn activate_draft(
@@ -3093,9 +3077,11 @@ impl AgentPanel {
                                 .icon(IconName::Plus)
                                 .icon_color(Color::Muted)
                                 .handler({
+                                    // ponytail: chat-only — o registry de ACP abria uma aba
+                                    // no editor (inexistente); abre a config do painel, que
+                                    // tem o botão "Add Agent"
                                     move |window, cx| {
-                                        window
-                                            .dispatch_action(Box::new(zed_actions::AcpRegistry), cx)
+                                        window.dispatch_action(Box::new(OpenSettings), cx)
                                     }
                                 }),
                         )
@@ -3154,23 +3140,7 @@ impl AgentPanel {
 
         let is_in_history_or_config = self.is_overlay_open();
 
-        let is_full_screen = self.is_zoomed(window, cx);
-        let full_screen_button = if is_full_screen {
-            IconButton::new("disable-full-screen", IconName::Minimize)
-                .icon_size(IconSize::Small)
-                .tooltip(move |_, cx| Tooltip::for_action("Disable Full Screen", &ToggleZoom, cx))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.toggle_zoom(&ToggleZoom, window, cx);
-                }))
-        } else {
-            IconButton::new("enable-full-screen", IconName::Maximize)
-                .icon_size(IconSize::Small)
-                .tooltip(move |_, cx| Tooltip::for_action("Enable Full Screen", &ToggleZoom, cx))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.toggle_zoom(&ToggleZoom, window, cx);
-                }))
-        };
-
+        // ponytail: chat-only — botão de full screen removido; o chat É a janela
         let use_v2_empty_toolbar = is_empty_state && !is_in_history_or_config;
 
         let max_content_width = AgentSettings::get_global(cx).max_content_width;
@@ -3247,7 +3217,6 @@ impl AgentPanel {
                         .gap_1()
                         .pl_1()
                         .pr_1()
-                        .child(full_screen_button)
                         .child(self.render_panel_options_menu(window, cx)),
                 )
                 .into_any_element()
@@ -3292,7 +3261,6 @@ impl AgentPanel {
                         .pl_1()
                         .pr_1()
                         .child(new_thread_menu)
-                        .child(full_screen_button)
                         .child(self.render_panel_options_menu(window, cx)),
                 )
                 .into_any_element()
@@ -3309,131 +3277,7 @@ impl AgentPanel {
             .child(toolbar_content)
     }
 
-    fn should_render_trial_end_upsell(&self, cx: &mut Context<Self>) -> bool {
-        if TrialEndUpsell::dismissed(cx) {
-            return false;
-        }
-
-        match &self.base_view {
-            BaseView::AgentThread { .. } => {
-                if LanguageModelRegistry::global(cx)
-                    .read(cx)
-                    .default_model()
-                    .is_some_and(|model| {
-                        model.provider.id() != language_model::ZED_CLOUD_PROVIDER_ID
-                    })
-                {
-                    return false;
-                }
-            }
-            BaseView::Uninitialized => {
-                return false;
-            }
-        }
-
-        let plan = self.user_store.read(cx).plan();
-        let has_previous_trial = self.user_store.read(cx).trial_started_at().is_some();
-
-        plan.is_some_and(|plan| plan == Plan::ZedFree) && has_previous_trial
-    }
-
-    fn dismiss_ai_onboarding(&mut self, cx: &mut Context<Self>) {
-        self.new_user_onboarding_upsell_dismissed
-            .store(true, Ordering::Release);
-        OnboardingUpsell::set_dismissed(true, cx);
-        cx.notify();
-    }
-
-    fn should_render_new_user_onboarding(&mut self, cx: &mut Context<Self>) -> bool {
-        if self
-            .new_user_onboarding_upsell_dismissed
-            .load(Ordering::Acquire)
-        {
-            return false;
-        }
-
-        let user_store = self.user_store.read(cx);
-
-        if user_store.plan().is_some_and(|plan| plan == Plan::ZedPro)
-            && user_store
-                .subscription_period()
-                .and_then(|period| period.0.checked_add_days(chrono::Days::new(1)))
-                .is_some_and(|date| date < chrono::Utc::now())
-        {
-            if !self
-                .new_user_onboarding_upsell_dismissed
-                .load(Ordering::Acquire)
-            {
-                self.dismiss_ai_onboarding(cx);
-            }
-            return false;
-        }
-
-        let has_configured_non_zed_providers = LanguageModelRegistry::read_global(cx)
-            .visible_providers()
-            .iter()
-            .any(|provider| {
-                provider.is_authenticated(cx)
-                    && provider.id() != language_model::ZED_CLOUD_PROVIDER_ID
-            });
-
-        match &self.base_view {
-            BaseView::Uninitialized => false,
-            BaseView::AgentThread { conversation_view } => {
-                if conversation_view.read(cx).as_native_thread(cx).is_some() {
-                    let history_is_empty = ThreadStore::global(cx).read(cx).is_empty();
-                    history_is_empty || !has_configured_non_zed_providers
-                } else {
-                    false
-                }
-            }
-        }
-    }
-
-    fn render_new_user_onboarding(
-        &mut self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<impl IntoElement> {
-        if !self.should_render_new_user_onboarding(cx) {
-            return None;
-        }
-
-        Some(
-            div()
-                .bg(cx.theme().colors().editor_background)
-                .child(self.new_user_onboarding.clone()),
-        )
-    }
-
-    fn render_trial_end_upsell(
-        &self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<impl IntoElement> {
-        if !self.should_render_trial_end_upsell(cx) {
-            return None;
-        }
-
-        Some(
-            v_flex()
-                .absolute()
-                .inset_0()
-                .size_full()
-                .bg(cx.theme().colors().panel_background)
-                .opacity(0.85)
-                .block_mouse_except_scroll()
-                .child(EndTrialUpsell::new(Arc::new({
-                    let this = cx.entity();
-                    move |_, cx| {
-                        this.update(cx, |_this, cx| {
-                            TrialEndUpsell::set_dismissed(true, cx);
-                            cx.notify();
-                        });
-                    }
-                }))),
-        )
-    }
+    // ponytail: chat-only — onboarding/upsell de Zed AI removidos por completo
 
     fn render_drag_target(&self, cx: &Context<Self>) -> Div {
         let is_local = self.project.read(cx).is_local();
@@ -3560,7 +3404,6 @@ impl Render for AgentPanel {
                 }
             }))
             .child(self.render_toolbar(window, cx))
-            .children(self.render_new_user_onboarding(window, cx))
             .map(|parent| match self.visible_surface() {
                 VisibleSurface::Uninitialized => parent,
                 VisibleSurface::AgentThread(conversation_view) => parent
@@ -3569,8 +3412,7 @@ impl Render for AgentPanel {
                 VisibleSurface::Configuration(configuration) => {
                     parent.children(configuration.cloned())
                 }
-            })
-            .children(self.render_trial_end_upsell(window, cx));
+            });
 
         match self.visible_font_size() {
             WhichFontSize::AgentFont => {
@@ -3633,18 +3475,6 @@ impl rules_library::InlineAssistDelegate for PromptLibraryInlineAssist {
     ) -> bool {
         workspace.focus_panel::<AgentPanel>(window, cx).is_some()
     }
-}
-
-struct OnboardingUpsell;
-
-impl Dismissable for OnboardingUpsell {
-    const KEY: &'static str = "dismissed-trial-upsell";
-}
-
-struct TrialEndUpsell;
-
-impl Dismissable for TrialEndUpsell {
-    const KEY: &'static str = "dismissed-trial-end-upsell";
 }
 
 /// Test-only helper methods
