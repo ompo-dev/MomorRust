@@ -17,10 +17,12 @@ use agent::ThreadStore;
 use agent_client_protocol::schema as acp;
 use anyhow::{Result, anyhow};
 use editor::{
-    Addon, AnchorRangeExt, ContextMenuOptions, Editor, EditorElement, EditorEvent, EditorMode,
-    EditorStyle, Inlay, MultiBuffer, MultiBufferOffset, MultiBufferSnapshot, ToOffset,
+    Addon, Anchor, AnchorRangeExt, ContextMenuOptions, Editor, EditorElement, EditorEvent,
+    EditorMode, EditorStyle, FoldPlaceholder, Inlay, MultiBuffer, MultiBufferOffset,
+    MultiBufferSnapshot, ToOffset,
     actions::{Copy, Paste},
     code_context_menus::CodeContextMenu,
+    display_map::{Crease, CreaseMetadata, FoldId},
     scroll::Autoscroll,
 };
 use futures::{FutureExt as _, future::join_all};
@@ -278,6 +280,115 @@ fn insert_mention_for_project_path(
             cx,
         )
     }))
+}
+
+/// Render do badge de citação (crease): ícone custom/por-tipo + nome. Clicar abre o item;
+/// no hover o ícone vira um X que remove o badge (desfaz o crease + apaga o texto).
+fn notebook_badge_render(
+    kind: String,
+    id: String,
+    label: String,
+    custom_icon: String,
+    range: std::ops::Range<Anchor>,
+    editor: WeakEntity<Editor>,
+) -> std::sync::Arc<dyn Send + Sync + Fn(FoldId, std::ops::Range<Anchor>, &mut App) -> gpui::AnyElement>
+{
+    std::sync::Arc::new(move |_fold_id, _fold_range, cx| {
+        let kind = kind.clone();
+        let id = id.clone();
+        let range = range.clone();
+        let editor = editor.clone();
+        let group = SharedString::from("nb-badge");
+        let icon_el = if custom_icon.contains('/') || custom_icon.contains('\\') {
+            gpui::img(std::path::PathBuf::from(custom_icon.clone()))
+                .size(px(13.))
+                .rounded_sm()
+                .into_any_element()
+        } else if !custom_icon.is_empty() {
+            div()
+                .text_size(px(12.))
+                .child(custom_icon.clone())
+                .into_any_element()
+        } else {
+            let name = match kind.as_str() {
+                "folder" => IconName::Folder,
+                "meeting" => IconName::Mic,
+                "skill" => IconName::Book,
+                "mcp" => IconName::DatabaseZap,
+                _ => IconName::FileDoc,
+            };
+            Icon::new(name)
+                .size(IconSize::XSmall)
+                .color(Color::Muted)
+                .into_any_element()
+        };
+        h_flex()
+            .id(SharedString::from(format!("nb-badge-{kind}-{id}")))
+            .group(group.clone())
+            .flex_none()
+            .items_center()
+            .gap_1()
+            .px_1()
+            .mr_1()
+            .rounded_sm()
+            .border_1()
+            .border_color(cx.theme().colors().border)
+            .bg(cx.theme().colors().element_background)
+            .cursor_pointer()
+            .on_click({
+                let kind = kind.clone();
+                let id = id.clone();
+                move |_e, window, cx| notebook::open_item(&kind, id.clone(), window, cx)
+            })
+            .child(
+                div()
+                    .relative()
+                    .flex_none()
+                    .size(px(14.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .group_hover(group.clone(), |s| s.invisible())
+                            .child(icon_el),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("nb-x-{kind}-{id}")))
+                            .absolute()
+                            .inset_0()
+                            .invisible()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .group_hover(group.clone(), |s| s.visible())
+                            .cursor_pointer()
+                            .child(
+                                Icon::new(IconName::Close)
+                                    .size(IconSize::XSmall)
+                                    .color(Color::Muted),
+                            )
+                            .on_click(move |_e, _window, cx| {
+                                cx.stop_propagation();
+                                let range = range.clone();
+                                editor
+                                    .update(cx, |editor, cx| {
+                                        editor.unfold_ranges(
+                                            std::slice::from_ref(&range),
+                                            true,
+                                            false,
+                                            cx,
+                                        );
+                                        editor.edit([(range.clone(), "")], cx);
+                                    })
+                                    .ok();
+                            }),
+                    ),
+            )
+            .child(Label::new(label.clone()).size(LabelSize::XSmall))
+            .into_any_element()
+    })
 }
 
 enum ResolvedPastedContextItem {
@@ -1755,6 +1866,74 @@ impl MessageEditor {
         });
     }
 
+    /// Insere uma CITAÇÃO como badge inline (crease) estilo Cursor: ícone custom (emoji/imagem
+    /// da nota) ou por tipo + nome; CLICAR abre o item; HOVER troca o ícone por um X que remove.
+    pub fn insert_notebook_badge(
+        &mut self,
+        kind: String,
+        id: String,
+        label: String,
+        custom_icon: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if label.is_empty() {
+            return;
+        }
+        let content_len = label.len();
+        let editor = self.editor.clone();
+        // Ancora a posição do cursor ANTES de inserir (mesma dança das @menções).
+        let text_anchor = editor.update(cx, |editor, cx| {
+            let buffer = editor.buffer().read(cx);
+            let snapshot = buffer.snapshot(cx);
+            let buffer_snapshot = snapshot.as_singleton()?;
+            let text_anchor = snapshot
+                .anchor_to_buffer_anchor(editor.selections.newest_anchor().start)?
+                .0
+                .bias_left(&buffer_snapshot);
+            editor.insert(&label, window, cx);
+            editor.insert(" ", window, cx);
+            Some(text_anchor)
+        });
+        let Some(text_anchor) = text_anchor else {
+            return;
+        };
+        editor.update(cx, |editor, cx| {
+            let snapshot = editor.buffer().read(cx).snapshot(cx);
+            let Some(start) = snapshot.anchor_in_excerpt(text_anchor) else {
+                return;
+            };
+            let start = start.bias_right(&snapshot);
+            let end = snapshot.anchor_before(start.to_offset(&snapshot) + content_len);
+            let range = start..end;
+            let render = notebook_badge_render(
+                kind,
+                id,
+                label.clone(),
+                custom_icon,
+                range.clone(),
+                cx.weak_entity(),
+            );
+            let placeholder = FoldPlaceholder {
+                render,
+                merge_adjacent: false,
+                ..Default::default()
+            };
+            let crease = Crease::Inline {
+                range: range.clone(),
+                placeholder,
+                render_toggle: None,
+                render_trailer: None,
+                metadata: Some(CreaseMetadata {
+                    label: label.into(),
+                    icon_path: IconName::FileDoc.path().into(),
+                }),
+            };
+            let _ = editor.insert_creases(vec![crease.clone()], cx);
+            editor.fold_creases(vec![crease], false, window, cx);
+        });
+    }
+
     pub fn set_placeholder_text(
         &mut self,
         placeholder: &str,
@@ -1873,13 +2052,17 @@ impl Render for MessageEditor {
                     let label = item.label.clone();
                     this.pending_context
                         .push(format!("[{}]\n{}", label, content));
-                    // Ícone por tipo, alinhado com a sidebar (pasta/nota/reunião).
-                    let icon = match item.kind {
-                        "folder" => "📁",
-                        "meeting" => "🎙️",
-                        _ => "📝",
-                    };
-                    this.insert_text(&format!("{icon} {label} "), window, cx);
+                    // Citação = badge inline (crease) estilo Cursor: ícone custom + nome,
+                    // click abre, hover→X remove.
+                    let icon = notebook::drop_badge_icon(item, cx);
+                    this.insert_notebook_badge(
+                        item.kind.to_string(),
+                        item.id.clone(),
+                        label,
+                        icon,
+                        window,
+                        cx,
+                    );
                 },
             ))
             .child({

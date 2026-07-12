@@ -87,7 +87,7 @@ If you'd like to bind this to a keyboard shortcut, you can do so by editing your
 ### Authentication
 
 As of version `0.202.7`, authentication to Zed's Claude Agent installation is decoupled entirely from Zed's agent.
-That is to say, an Anthropic API key added via the [Zed Agent's settings](./llm-providers.md#anthropic) will _not_ be utilized by Claude Agent for authentication and billing.
+That is to say, an Anthropic API key added via the [Momor Agent's settings](./llm-providers.md#anthropic) will _not_ be utilized by Claude Agent for authentication and billing.
 
 To ensure you're using your billing method of choice, [open a new Claude Agent thread](./agent-panel.md#new-thread).
 Then, run `/login`, and authenticate either via API key, or via `Log in with Claude Code` to use a Claude Pro/Max subscription.
@@ -162,7 +162,7 @@ If you'd like to bind this to a keyboard shortcut, you can do so by editing your
 ### Authentication
 
 Authentication to Zed's Codex installation is decoupled entirely from Zed's agent.
-That is to say, an OpenAI API key added via the [Zed Agent's settings](./llm-providers.md#openai) will _not_ be utilized by Codex for authentication and billing.
+That is to say, an OpenAI API key added via the [Momor Agent's settings](./llm-providers.md#openai) will _not_ be utilized by Codex for authentication and billing.
 
 To ensure you're using your billing method of choice, [open a new Codex thread](./agent-panel.md#new-thread).
 The first time you will be prompted to authenticate with one of three methods:

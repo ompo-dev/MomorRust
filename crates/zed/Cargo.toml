@@ -1,5 +1,5 @@
 [package]
-description = "The fast, collaborative code editor."
+description = "Momor — your AI chat assistant."
 edition.workspace = true
 name = "zed"
 version = "1.3.0"
@@ -223,7 +223,7 @@ search = { workspace = true, features = ["test-support"] }
 [package.metadata.bundle-dev]
 icon = ["resources/app-icon-dev@2x.png", "resources/app-icon-dev.png"]
 identifier = "dev.zed.Zed-Dev"
-name = "Zed Dev"
+name = "Momor"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
 osx_url_schemes = ["zed"]

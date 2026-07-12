@@ -122,19 +122,19 @@ async fn write_global_last_used_agent(kvp: KeyValueStore, agent: Agent) {
 fn read_serialized_panel(
     workspace_id: workspace::WorkspaceId,
     kvp: &KeyValueStore,
-) -> Option<SerializedAgentPanel> {
+) -> Option<SerialimomorAgentPanel> {
     let scope = kvp.scoped(AGENT_PANEL_KEY);
     let key = i64::from(workspace_id).to_string();
     scope
         .read(&key)
         .log_err()
         .flatten()
-        .and_then(|json| serde_json::from_str::<SerializedAgentPanel>(&json).log_err())
+        .and_then(|json| serde_json::from_str::<SerialimomorAgentPanel>(&json).log_err())
 }
 
 async fn save_serialized_panel(
     workspace_id: workspace::WorkspaceId,
-    panel: SerializedAgentPanel,
+    panel: SerialimomorAgentPanel,
     kvp: KeyValueStore,
 ) -> Result<()> {
     let scope = kvp.scoped(AGENT_PANEL_KEY);
@@ -145,15 +145,15 @@ async fn save_serialized_panel(
 
 /// Migration: reads the original single-panel format stored under the
 /// `"agent_panel"` KVP key before per-workspace keying was introduced.
-fn read_legacy_serialized_panel(kvp: &KeyValueStore) -> Option<SerializedAgentPanel> {
+fn read_legacy_serialized_panel(kvp: &KeyValueStore) -> Option<SerialimomorAgentPanel> {
     kvp.read_kvp(AGENT_PANEL_KEY)
         .log_err()
         .flatten()
-        .and_then(|json| serde_json::from_str::<SerializedAgentPanel>(&json).log_err())
+        .and_then(|json| serde_json::from_str::<SerialimomorAgentPanel>(&json).log_err())
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct SerializedAgentPanel {
+struct SerialimomorAgentPanel {
     selected_agent: Option<Agent>,
     #[serde(default)]
     last_active_thread: Option<SerializedActiveThread>,
@@ -694,9 +694,9 @@ pub struct AgentPanel {
 
 impl AgentPanel {
     fn serialize(&mut self, cx: &mut App) {
-        let Some(workspace_id) = self.workspace_id else {
-            return;
-        };
+        // momor (chat-only) às vezes abre sem workspace_id — antes isso abortava o save e a
+        // conversa se perdia. Agora salva sempre (global + por-workspace quando existir).
+        let workspace_id = self.workspace_id;
 
         let selected_agent = self.selected_agent.clone();
 
@@ -753,16 +753,19 @@ impl AgentPanel {
             )
         });
         self.pending_serialization = Some(cx.background_spawn(async move {
-            save_serialized_panel(
-                workspace_id,
-                SerializedAgentPanel {
-                    selected_agent: Some(selected_agent),
-                    last_active_thread,
-                    draft_thread_prompt,
-                },
-                kvp,
-            )
-            .await?;
+            let panel = SerialimomorAgentPanel {
+                selected_agent: Some(selected_agent),
+                last_active_thread,
+                draft_thread_prompt,
+            };
+            // Chave GLOBAL (independente de workspace): o restore a lê no fallback legado,
+            // então a conversa volta mesmo sem workspace_id.
+            if let Ok(json) = serde_json::to_string(&panel) {
+                kvp.write_kvp(AGENT_PANEL_KEY.to_string(), json).await.log_err();
+            }
+            if let Some(workspace_id) = workspace_id {
+                save_serialized_panel(workspace_id, panel, kvp).await?;
+            }
             anyhow::Ok(())
         }));
     }
@@ -2838,15 +2841,6 @@ impl AgentPanel {
 
                         menu = menu
                             .header("MCP Servers")
-                            .action(
-                                "View Server Extensions",
-                                Box::new(zed_actions::Extensions {
-                                    category_filter: Some(
-                                        zed_actions::ExtensionCategoryFilter::ContextServers,
-                                    ),
-                                    id: None,
-                                }),
-                            )
                             .action("Add Custom Server…", Box::new(AddContextServer))
                             .separator()
                             .action("Rules", Box::new(OpenRulesLibrary::default()))
@@ -2948,11 +2942,11 @@ impl AgentPanel {
                             }
                         })
                         .item(
-                            ContextMenuEntry::new("Zed Agent")
+                            ContextMenuEntry::new("Momor Agent")
                                 .when(is_agent_selected(Agent::NativeAgent), |this| {
                                     this.action(Box::new(NewExternalAgentThread { agent: None }))
                                 })
-                                .icon(IconName::ZedAgent)
+                                .icon(IconName::MomorAgent)
                                 .icon_color(Color::Muted)
                                 .handler({
                                     let workspace = workspace.clone();
@@ -3167,7 +3161,7 @@ impl AgentPanel {
                     .size(IconSize::Small)
                     .color(icon_color)
             } else {
-                let icon_name = selected_agent_builtin_icon.unwrap_or(IconName::ZedAgent);
+                let icon_name = selected_agent_builtin_icon.unwrap_or(IconName::MomorAgent);
                 Icon::new(icon_name).size(IconSize::Small).color(icon_color)
             };
 
@@ -4028,7 +4022,7 @@ mod tests {
         cx.run_until_parked();
 
         let kvp = cx.update(|_window, cx| KeyValueStore::global(cx));
-        let serialized: Option<SerializedAgentPanel> = cx
+        let serialized: Option<SerialimomorAgentPanel> = cx
             .background_spawn(async move { read_serialized_panel(workspace_id, &kvp) })
             .await;
         let serialized_session_id = serialized

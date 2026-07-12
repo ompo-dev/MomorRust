@@ -5965,7 +5965,7 @@ impl Workspace {
         }
 
         if title.is_empty() {
-            title = "empty project".to_string();
+            title = "Momor".to_string();
         }
 
         let active_project_path = self.active_item(cx).and_then(|item| item.project_path(cx));
@@ -8413,9 +8413,24 @@ pub fn notebook_width(cx: &App) -> f32 {
 
 /// Abre/fecha a coluna do Notion. Retorna o novo estado.
 pub fn toggle_notebook(cx: &mut App) -> bool {
-    let slot = cx.default_global::<NotebookSlot>();
-    slot.open = !slot.open;
-    slot.open
+    let open = {
+        let slot = cx.default_global::<NotebookSlot>();
+        slot.open = !slot.open;
+        slot.open
+    };
+    // Persiste pra reabrir a sidebar no mesmo estado na próxima sessão.
+    let store = db::kvp::KeyValueStore::global(cx);
+    db::write_and_log(cx, move || async move {
+        store
+            .write_kvp("momor_sidebar_open".into(), open.to_string())
+            .await
+    });
+    open
+}
+
+/// Restaura o estado aberto/fechado da sidebar (chamado no boot a partir do KV).
+pub fn set_notebook_open(open: bool, cx: &mut App) {
+    cx.default_global::<NotebookSlot>().open = open;
 }
 
 pub fn notebook_open(cx: &App) -> bool {

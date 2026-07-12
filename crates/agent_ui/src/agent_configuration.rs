@@ -64,8 +64,8 @@ pub struct AgentConfiguration {
     context_server_registry: Entity<ContextServerRegistry>,
     _subscriptions: Vec<Subscription>,
     scroll_handle: ScrollHandle,
-    // ponytail: STT — um campo de chave por provedor (estilo LLM providers)
-    stt_inputs: Vec<(stt::SttProviderKind, Entity<ui_input::InputField>)>,
+    // ponytail: STT — LISTA de campos de chave por provedor (chaves reserva p/ failover)
+    stt_inputs: Vec<(stt::SttProviderKind, Vec<Entity<ui_input::InputField>>)>,
     stt_expanded: HashMap<&'static str, bool>,
 }
 
@@ -108,14 +108,21 @@ impl AgentConfiguration {
         let stt_inputs = stt::SttProviderKind::ALL
             .into_iter()
             .map(|kind| {
-                let input = cx.new(|cx| {
-                    let input = ui_input::InputField::new(window, cx, "API key");
-                    if let Some(key) = stt::provider_key(kind) {
-                        input.set_text(&key, window, cx);
+                let keys = stt::provider_keys(kind);
+                let mut fields = Vec::new();
+                if keys.is_empty() {
+                    fields.push(cx.new(|cx| ui_input::InputField::new(window, cx, "API key")));
+                } else {
+                    for k in &keys {
+                        let k = k.clone();
+                        fields.push(cx.new(|cx| {
+                            let input = ui_input::InputField::new(window, cx, "API key");
+                            input.set_text(&k, window, cx);
+                            input
+                        }));
                     }
-                    input
-                });
-                (kind, input)
+                }
+                (kind, fields)
             })
             .collect();
 
@@ -159,7 +166,7 @@ impl AgentConfiguration {
         cx: &mut Context<Self>,
     ) {
         let configuration_view = provider.configuration_view(
-            language_model::ConfigurationViewTargetAgent::ZedAgent,
+            language_model::ConfigurationViewTargetAgent::MomorAgent,
             window,
             cx,
         );
@@ -201,14 +208,14 @@ impl AgentConfiguration {
             ))
             .children(
                 rows.into_iter()
-                    .map(|(kind, input)| self.render_stt_provider_block(kind, input, selected, cx)),
+                    .map(|(kind, inputs)| self.render_stt_provider_block(kind, inputs, selected, cx)),
             )
     }
 
     fn render_stt_provider_block(
         &mut self,
         kind: stt::SttProviderKind,
-        input: Entity<ui_input::InputField>,
+        inputs: Vec<Entity<ui_input::InputField>>,
         selected: stt::SttProviderKind,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
@@ -279,13 +286,44 @@ impl AgentConfiguration {
                     ),
             )
             .when(is_expanded, |parent| {
+                let n = inputs.len();
                 parent.child(
                     v_flex()
                         .min_w_0()
                         .w_full()
                         .px_2()
                         .gap_2()
-                        .child(input.clone())
+                        // Um campo por chave. A 1ª é a principal; as demais são reserva
+                        // (o failover em runtime tenta na ordem). × remove a chave.
+                        .children(inputs.iter().enumerate().map(|(i, field)| {
+                            h_flex()
+                                .w_full()
+                                .gap_1()
+                                .items_center()
+                                .child(div().flex_1().min_w_0().child(field.clone()))
+                                .when(n > 1, |el| {
+                                    el.child(
+                                        IconButton::new(
+                                            SharedString::from(format!("stt-rmkey-{id}-{i}")),
+                                            IconName::Trash,
+                                        )
+                                        .icon_size(IconSize::Small)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.remove_stt_key(kind, i, cx);
+                                        })),
+                                    )
+                                })
+                        }))
+                        .child(
+                            Button::new(
+                                SharedString::from(format!("stt-addkey-{id}")),
+                                "+ Adicionar chave reserva",
+                            )
+                            .style(ButtonStyle::Subtle)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.add_stt_key(kind, window, cx);
+                            })),
+                        )
                         .child(
                             h_flex()
                                 .gap_1()
@@ -308,18 +346,66 @@ impl AgentConfiguration {
                                 .child(
                                     Button::new(
                                         SharedString::from(format!("stt-save-{id}")),
-                                        "Salvar chave",
+                                        "Salvar chaves",
                                     )
                                     .style(ButtonStyle::Filled)
                                     .on_click(cx.listener(move |this, _, _, cx| {
-                                        let key = input.read(cx).text(cx);
-                                        stt::set_provider_key(kind, key, cx);
-                                        this.notify_stt_saved("Chave salva.", cx);
+                                        this.save_stt_keys(kind, cx);
                                     })),
                                 ),
                         ),
                 )
             })
+    }
+
+    /// Adiciona um campo de chave reserva vazio ao provedor.
+    fn add_stt_key(
+        &mut self,
+        kind: stt::SttProviderKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let field = cx.new(|cx| ui_input::InputField::new(window, cx, "API key"));
+        if let Some((_, fields)) = self.stt_inputs.iter_mut().find(|(k, _)| *k == kind) {
+            fields.push(field);
+        }
+        cx.notify();
+    }
+
+    /// Remove o campo de chave `index` (mantém pelo menos 1) e persiste.
+    fn remove_stt_key(
+        &mut self,
+        kind: stt::SttProviderKind,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some((_, fields)) = self.stt_inputs.iter_mut().find(|(k, _)| *k == kind)
+            && fields.len() > 1
+            && index < fields.len()
+        {
+            fields.remove(index);
+        }
+        self.save_stt_keys(kind, cx);
+        cx.notify();
+    }
+
+    /// Junta todas as chaves não-vazias do provedor (vírgula) e salva no KVP.
+    fn save_stt_keys(&mut self, kind: stt::SttProviderKind, cx: &mut Context<Self>) {
+        let joined = self
+            .stt_inputs
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .map(|(_, fields)| {
+                fields
+                    .iter()
+                    .map(|f| f.read(cx).text(cx).trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .unwrap_or_default();
+        stt::set_provider_key(kind, joined, cx);
+        self.notify_stt_saved("Chaves salvas.", cx);
     }
 
     fn notify_stt_saved(&self, msg: &'static str, cx: &mut Context<Self>) {

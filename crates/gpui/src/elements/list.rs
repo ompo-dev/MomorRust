@@ -474,6 +474,22 @@ impl ListState {
         old_range: Range<usize>,
         focus_handles: impl IntoIterator<Item = Option<FocusHandle>>,
     ) {
+        self.splice_focusable_with_size_hints(
+            old_range,
+            focus_handles
+                .into_iter()
+                .map(|focus_handle| (focus_handle, None)),
+        );
+    }
+
+    /// Replace items while supplying focus handles and estimated sizes.
+    ///
+    /// Size hints let scrollbars and direct jumps account for items before they are measured.
+    pub fn splice_focusable_with_size_hints(
+        &self,
+        old_range: Range<usize>,
+        items: impl IntoIterator<Item = (Option<FocusHandle>, Option<Size<Pixels>>)>,
+    ) {
         let state = &mut *self.0.borrow_mut();
 
         let mut old_items = state.items.cursor::<Count>(());
@@ -482,10 +498,10 @@ impl ListState {
 
         let mut spliced_count = 0;
         new_items.extend(
-            focus_handles.into_iter().map(|focus_handle| {
+            items.into_iter().map(|(focus_handle, size_hint)| {
                 spliced_count += 1;
                 ListItem::Unmeasured {
-                    size_hint: None,
+                    size_hint,
                     focus_handle,
                 }
             }),
@@ -1357,7 +1373,7 @@ impl Element for List {
         {
             let new_items = SumTree::from_iter(
                 state.items.iter().map(|item| ListItem::Unmeasured {
-                    size_hint: None,
+                    size_hint: item.size_hint(),
                     focus_handle: item.focus_handle(),
                 }),
                 (),
@@ -1573,6 +1589,46 @@ mod test {
         // Scroll position should stay at the top of the list
         assert_eq!(state.logical_scroll_top().item_ix, 0);
         assert_eq!(state.logical_scroll_top().offset_in_item, px(0.));
+    }
+
+    #[gpui::test]
+    fn test_size_hints_allow_jumping_to_unmeasured_items(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let state = ListState::new(0, crate::ListAlignment::Top, px(20.));
+        state.splice_focusable_with_size_hints(
+            0..0,
+            (0..1_000).map(|_| (None, Some(size(px(100.), px(20.))))),
+        );
+        let rendered = Rc::new(Cell::new(0));
+
+        struct TestView(ListState, Rc<Cell<usize>>);
+        impl Render for TestView {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let rendered = self.1.clone();
+                list(self.0.clone(), move |_, _, _| {
+                    rendered.set(rendered.get() + 1);
+                    div().h(px(20.)).w_full().into_any()
+                })
+                .size_full()
+            }
+        }
+
+        let view = cx.update(|_, cx| cx.new(|_| TestView(state.clone(), rendered.clone())));
+        cx.draw(point(px(0.), px(0.)), size(px(100.), px(100.)), |_, _| {
+            view.clone().into_any_element()
+        });
+        cx.draw(point(px(0.), px(0.)), size(px(120.), px(100.)), |_, _| {
+            view.clone().into_any_element()
+        });
+
+        rendered.set(0);
+        state.scroll_to_reveal_item(900);
+        cx.draw(point(px(0.), px(0.)), size(px(100.), px(100.)), |_, _| {
+            view.clone().into_any_element()
+        });
+
+        assert!(state.logical_scroll_top().item_ix > 850);
+        assert!(rendered.get() < 20);
     }
 
     #[gpui::test]

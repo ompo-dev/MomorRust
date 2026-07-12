@@ -202,7 +202,7 @@ impl Stt {
     }
 
     pub fn has_api_key() -> bool {
-        active_key().is_some()
+        !active_keys().is_empty()
     }
 
     /// Nomes dos microfones de entrada disponíveis.
@@ -298,7 +298,8 @@ impl Stt {
 
     fn start(&mut self, cx: &mut Context<Self>) {
         let provider = selected_provider();
-        let Some(api_key) = active_key() else {
+        let keys = active_keys();
+        if keys.is_empty() {
             if provider.is_streaming() {
                 log::error!("STT: chave do {} não definida", provider.name());
             } else {
@@ -308,8 +309,8 @@ impl Stt {
                 );
             }
             return;
-        };
-        log::info!("STT: iniciando com {} ({} chars)", provider.name(), api_key.len());
+        }
+        log::info!("STT: iniciando com {} ({} chave(s))", provider.name(), keys.len());
 
         self.session_log.clear();
         self.started_at = Some(std::time::Instant::now());
@@ -357,24 +358,26 @@ impl Stt {
 
         // Duas sessões Deepgram: uma pro mic (Você), uma pro sistema (Interlocutor).
         let mic_task = gpui_tokio::Tokio::spawn(cx, {
-            let api_key = api_key.clone();
+            let keys = keys.clone();
             let shared = shared.clone();
             let stop_flag = stop_flag.clone();
             let tx = msg_tx.clone();
             async move {
-                if let Err(e) = run_deepgram(Speaker::Me, api_key, shared, stop_flag, tx).await {
+                if let Err(e) = run_deepgram_fallback(Speaker::Me, keys, shared, stop_flag, tx).await
+                {
                     log::error!("STT: sessão Deepgram (mic) terminou: {e:#}");
                 }
             }
         });
         let sys_task = capture_system.then(|| {
             gpui_tokio::Tokio::spawn(cx, {
+                let keys = keys.clone();
                 let shared = shared.clone();
                 let stop_flag = stop_flag.clone();
                 let tx = msg_tx.clone();
                 async move {
                     if let Err(e) =
-                        run_deepgram(Speaker::Other, api_key, shared, stop_flag, tx).await
+                        run_deepgram_fallback(Speaker::Other, keys, shared, stop_flag, tx).await
                     {
                         log::error!("STT: sessão Deepgram (sistema) terminou: {e:#}");
                     }
@@ -539,6 +542,21 @@ pub fn provider_key(kind: SttProviderKind) -> Option<String> {
     None
 }
 
+/// Todas as chaves de um provedor, na ordem de tentativa. O campo aceita várias chaves
+/// separadas por vírgula ou quebra de linha → failover em runtime tenta cada uma.
+pub fn provider_keys(kind: SttProviderKind) -> Vec<String> {
+    provider_key(kind)
+        .map(|raw| split_keys(&raw))
+        .unwrap_or_default()
+}
+
+fn split_keys(raw: &str) -> Vec<String> {
+    raw.split(['\n', ','])
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 pub fn set_provider_key(kind: SttProviderKind, key: String, cx: &App) {
     let kvp_key = kind.key_kvp();
     cx.background_spawn(async move {
@@ -571,10 +589,14 @@ pub fn set_selected_provider(kind: SttProviderKind, cx: &App) {
     .detach();
 }
 
-/// Chave do provedor ativo, se ele suporta streaming (só Deepgram por ora).
-fn active_key() -> Option<String> {
+/// Chaves do provedor ativo (se suporta streaming), na ordem de tentativa do failover.
+fn active_keys() -> Vec<String> {
     let sel = selected_provider();
-    sel.is_streaming().then(|| provider_key(sel)).flatten()
+    if sel.is_streaming() {
+        provider_keys(sel)
+    } else {
+        Vec::new()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -742,6 +764,43 @@ impl ToI16 for i16 {
 }
 
 /// Conecta no Deepgram para UMA fonte e devolve transcrições marcadas com o falante.
+/// Tenta as chaves em ordem até uma conectar/funcionar. Se uma falha (limit atingido, chave
+/// inválida, erro de conexão) passa pra próxima — sem travar a sessão. Respeita o stop_flag.
+async fn run_deepgram_fallback(
+    speaker: Speaker,
+    keys: Vec<String>,
+    shared: Arc<SharedAudio>,
+    stop_flag: Arc<AtomicBool>,
+    msg_tx: mpsc::UnboundedSender<RawTranscript>,
+) -> Result<()> {
+    let mut last_err = None;
+    for (i, key) in keys.iter().enumerate() {
+        if stop_flag.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        match run_deepgram(
+            speaker,
+            key.clone(),
+            shared.clone(),
+            stop_flag.clone(),
+            msg_tx.clone(),
+        )
+        .await
+        {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                log::warn!(
+                    "STT: chave #{} do Deepgram ({}) falhou: {e:#} — tentando a próxima",
+                    i + 1,
+                    speaker.label()
+                );
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("STT: nenhuma chave disponível")))
+}
+
 async fn run_deepgram(
     speaker: Speaker,
     api_key: String,

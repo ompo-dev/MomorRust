@@ -655,6 +655,13 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
             let notebook_panel =
                 cx.new(|cx| notebook::NotebookPanel::new(weak, languages, cx));
             workspace::set_notebook_view(notebook_panel.into(), cx);
+            // Restaura a sidebar aberta/fechada da sessão anterior.
+            let sidebar_open = db::kvp::KeyValueStore::global(cx)
+                .read_kvp("momor_sidebar_open")
+                .ok()
+                .flatten()
+                .is_some_and(|v| v == "true");
+            workspace::set_notebook_open(sidebar_open, cx);
             workspace.focus_panel::<agent_ui::AgentPanel>(window, cx);
         })?;
 
@@ -1395,7 +1402,7 @@ fn open_about_window(cx: &mut App) {
     cx.open_window(
         WindowOptions {
             titlebar: Some(TitlebarOptions {
-                title: Some("About Zed".into()),
+                title: Some("About Momor".into()),
                 appears_transparent: true,
                 traffic_light_position: Some(point(px(12.), px(12.))),
             }),

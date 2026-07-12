@@ -34,7 +34,13 @@ pub struct Meeting {
     pub date: String,
     pub transcript: String,
     pub summary: String,
-    pub sort_order: i64,
+    /// Corpo livre (block editor, mesmo formato markdown das notas).
+    pub content: String,
+    /// "Uso": conversa completa com a IA do chat (formato "Falante: fala" por linha).
+    pub uso: String,
+    /// Chrome estilo Notion (como as notas): emoji/caminho de imagem e cover.
+    pub icon: Option<String>,
+    pub cover: Option<String>,
 }
 
 pub struct NotebookDb(ThreadSafeConnection);
@@ -74,6 +80,16 @@ impl Domain for NotebookDb {
             ALTER TABLE notes ADD COLUMN icon TEXT;
             ALTER TABLE notes ADD COLUMN cover TEXT;
         ),
+        // Reunião = nota completa: corpo em blocos + "uso" (conversa com a IA do chat).
+        sql!(
+            ALTER TABLE meetings ADD COLUMN content TEXT;
+            ALTER TABLE meetings ADD COLUMN uso TEXT;
+        ),
+        // Reuniões também têm chrome (ícone/capa) como as notas.
+        sql!(
+            ALTER TABLE meetings ADD COLUMN icon TEXT;
+            ALTER TABLE meetings ADD COLUMN cover TEXT;
+        ),
     ];
 }
 
@@ -93,8 +109,8 @@ impl NotebookDb {
     }
 
     query! {
-        pub fn meetings() -> Result<Vec<(String, Option<String>, String, String, String, String, i64)>> {
-            SELECT id, folder_id, title, date, transcript, summary, sort_order
+        pub fn meetings() -> Result<Vec<(String, Option<String>, String, String, String, String, Option<String>, Option<String>, Option<String>, Option<String>)>> {
+            SELECT id, folder_id, title, date, transcript, summary, content, uso, icon, cover
             FROM meetings ORDER BY date DESC
         }
     }
@@ -124,6 +140,12 @@ impl NotebookDb {
     }
 
     query! {
+        pub async fn update_meeting_chrome(id: String, icon: Option<String>, cover: Option<String>) -> Result<()> {
+            UPDATE meetings SET icon = ?2, cover = ?3 WHERE id = ?1
+        }
+    }
+
+    query! {
         pub async fn insert_meeting(
             id: String,
             folder_id: Option<String>,
@@ -140,6 +162,12 @@ impl NotebookDb {
     query! {
         pub async fn update_meeting_summary(id: String, title: String, summary: String) -> Result<()> {
             UPDATE meetings SET title = ?2, summary = ?3 WHERE id = ?1
+        }
+    }
+
+    query! {
+        pub async fn update_meeting_content(id: String, title: String, content: String) -> Result<()> {
+            UPDATE meetings SET title = ?2, content = ?3 WHERE id = ?1
         }
     }
 
@@ -221,14 +249,19 @@ impl NotebookDb {
             .unwrap_or_default()
             .into_iter()
             .map(
-                |(id, folder_id, title, date, transcript, summary, sort_order)| Meeting {
-                    id,
-                    folder_id,
-                    title,
-                    date,
-                    transcript,
-                    summary,
-                    sort_order,
+                |(id, folder_id, title, date, transcript, summary, content, uso, icon, cover)| {
+                    Meeting {
+                        id,
+                        folder_id,
+                        title,
+                        date,
+                        transcript,
+                        summary,
+                        content: content.unwrap_or_default(),
+                        uso: uso.unwrap_or_default(),
+                        icon,
+                        cover,
+                    }
                 },
             )
             .collect()

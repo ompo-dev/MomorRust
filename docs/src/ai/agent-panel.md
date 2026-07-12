@@ -1,5 +1,5 @@
 ---
-title: AI Coding Agent - Zed Agent Panel
+title: AI Coding Agent - Momor Agent Panel
 description: Use Zed's AI coding agent to generate, refactor, and debug code with tool calling, checkpoints, and multi-model support.
 ---
 
@@ -38,8 +38,8 @@ Start a new thread with {#kb agent::NewThread}, or open the "New Thread…" menu
 
 From the "New Thread…" menu you can:
 
-- Pick **Zed Agent** or any installed [external agent](./external-agents.md) to start a new thread with that agent.
-- Choose **New From Summary** to start a fresh Zed Agent thread seeded with a summary of the current conversation — useful for compacting long threads as you approach the context window limit.
+- Pick **Momor Agent** or any installed [external agent](./external-agents.md) to start a new thread with that agent.
+- Choose **New From Summary** to start a fresh Momor Agent thread seeded with a summary of the current conversation — useful for compacting long threads as you approach the context window limit.
 
 {#action agent::NewExternalAgentThread} creates another thread with the currently selected agent.
 
