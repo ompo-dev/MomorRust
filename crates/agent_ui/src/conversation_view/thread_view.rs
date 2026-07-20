@@ -22,6 +22,14 @@ use workspace::SERIALIZATION_THROTTLE_TIME;
 
 use super::*;
 
+/// Escuta Ativa: instrução oculta (via STT_CONTEXT_MARKER) injetada em cada auto-resposta.
+/// Primeira pessoa por padrão, MAS obedece qualquer instrução de estilo que o usuário já
+/// tenha dado na conversa (ele sobrescreve pelo prompt).
+const ANSWER_PERSONA: &str = "Você é o candidato nesta conversa ao vivo. Por padrão, responda \
+em primeira pessoa, de forma concisa e direta, usando apenas as notas e o contexto já presentes \
+nesta conversa. Siga qualquer instrução de estilo ou formato que o usuário já tenha dado aqui. \
+Se a fala do interlocutor não for uma pergunta ou pedido dirigido ao candidato, não gere resposta.";
+
 #[derive(Default)]
 struct ThreadFeedbackState {
     feedback: Option<ThreadFeedback>,
@@ -1076,6 +1084,29 @@ impl ThreadView {
         });
 
         self.send_content(contents_task, window, cx);
+    }
+
+    /// Escuta Ativa: auto-responde uma pergunta do interlocutor sem passar pela caixa de
+    /// mensagem. Injeta a persona oculta (via STT_CONTEXT_MARKER) + a pergunta visível.
+    /// Se a thread já está gerando, ENFILEIRA (a fila é auto-drenada no fim do turno).
+    pub fn auto_answer(&mut self, question: String, window: &mut Window, cx: &mut Context<Self>) {
+        let question = question.trim();
+        if question.is_empty() {
+            return;
+        }
+        let marker = crate::message_editor::STT_CONTEXT_MARKER;
+        let blocks = vec![
+            acp::ContentBlock::Text(acp::TextContent::new(format!(
+                "{marker}\n{ANSWER_PERSONA}\n\n"
+            ))),
+            acp::ContentBlock::Text(acp::TextContent::new(format!("Interlocutor: {question}"))),
+        ];
+        cx.emit(AcpThreadViewEvent::Interacted);
+        if self.thread.read(cx).status() == ThreadStatus::Idle && !self.is_loading_contents {
+            self.send_content(Task::ready(Ok(Some((blocks, Vec::new())))), window, cx);
+        } else {
+            self.add_to_queue(blocks, Vec::new(), cx);
+        }
     }
 
     pub fn send_content(

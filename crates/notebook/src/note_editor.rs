@@ -10,10 +10,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use editor::{
-    Anchor, Editor, EditorEvent, FoldPlaceholder, MultiBufferOffset,
+    Anchor, Editor, EditorEvent, EditorMode, FoldPlaceholder, MultiBufferOffset, SizingBehavior,
     display_map::{Crease, CreaseMetadata, FoldId},
 };
 use gpui::{
@@ -48,6 +48,9 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
+const RICH_CACHE_MAX: usize = 64;
+const MATH_DRAG_INTERVAL: Duration = Duration::from_millis(16);
+
 /// Payload arrastado pra reordenar blocos.
 #[derive(Clone)]
 struct DraggedBlock(usize);
@@ -64,6 +67,72 @@ impl Render for DraggedImageHandle {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         gpui::Empty
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MathPreviewState {
+    zoom: f64,
+    pan_x: f64,
+    pan_y: f64,
+    orbit_x: f64,
+    orbit_y: f64,
+    time: f64,
+    playing: bool,
+}
+
+impl Default for MathPreviewState {
+    fn default() -> Self {
+        Self {
+            zoom: 1.0,
+            pan_x: 0.0,
+            pan_y: 0.0,
+            orbit_x: 0.0,
+            orbit_y: 0.0,
+            time: 0.0,
+            playing: false,
+        }
+    }
+}
+
+impl MathPreviewState {
+    fn view(self) -> crate::rich_block::MathStudioView {
+        crate::rich_block::MathStudioView {
+            zoom: self.zoom,
+            pan_x: self.pan_x,
+            pan_y: self.pan_y,
+            orbit_x: self.orbit_x,
+            orbit_y: self.orbit_y,
+            time: self.time,
+        }
+    }
+
+    fn hash_into(self, hasher: &mut std::collections::hash_map::DefaultHasher) {
+        self.zoom.to_bits().hash(hasher);
+        self.pan_x.to_bits().hash(hasher);
+        self.pan_y.to_bits().hash(hasher);
+        self.orbit_x.to_bits().hash(hasher);
+        self.orbit_y.to_bits().hash(hasher);
+        self.time.to_bits().hash(hasher);
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MathPreviewDrag {
+    block_id: usize,
+    last_x: f32,
+    last_y: f32,
+    pending_dx: f32,
+    pending_dy: f32,
+    last_render_at: Instant,
+}
+
+#[derive(Clone, Debug)]
+struct MathPreviewHover {
+    local_x: f32,
+    local_y: f32,
+    world_x: f64,
+    world_y: f64,
+    samples: Vec<crate::rich_block::MathStudioHoverSample>,
 }
 
 actions!(
@@ -88,7 +157,30 @@ actions!(
     ]
 );
 
+fn math_preview_button(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    cx: &App,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id.into())
+        .px_1p5()
+        .py(px(1.))
+        .rounded_sm()
+        .border_1()
+        .border_color(cx.theme().colors().border)
+        .hover(|s| s.bg(cx.theme().colors().element_hover))
+        .cursor_pointer()
+        .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(
+            Label::new(label)
+                .size(LabelSize::XSmall)
+                .color(Color::Muted),
+        )
+}
+
 const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
+const MATH_ANIMATION_INTERVAL: Duration = Duration::from_millis(66);
 const BLOCK_HEIGHT_HINT: f32 = 28.;
 const FOOTER_HEIGHT_HINT: f32 = 200.;
 
@@ -167,6 +259,7 @@ const LANGS: &[&str] = &[
     // Langs "ricas": renderizam pra imagem em vez de só mostrar o código (ver rich_block).
     "plot",
     "math",
+    "mathstudio",
 ];
 
 /// Itens do menu `/`: (seção, rótulo, descrição, ícone, tipo).
@@ -358,10 +451,16 @@ pub struct NoteDoc {
     /// Conversão markdown pendente (atalho `# `, `- `, ```lang…) detectada num edit —
     /// aplicada no próximo render, que tem `window` (o subscription de edit não tem).
     pending_convert: Option<(usize, BlockKind, String, Option<String>)>,
+    pending_reparse: Option<(usize, String)>,
     /// Bloco de código com o menu de linguagem aberto.
     lang_menu: Option<usize>,
     /// Resize de imagem em andamento: (block_id, última posição x do mouse).
     img_resize: Option<(usize, f32)>,
+    math_previews: HashMap<usize, MathPreviewState>,
+    math_animation_tasks: HashMap<usize, Task<()>>,
+    math_drag: Option<MathPreviewDrag>,
+    math_preview_bounds: HashMap<usize, gpui::Bounds<gpui::Pixels>>,
+    math_hovers: HashMap<usize, MathPreviewHover>,
     slash_scroll: ScrollHandle,
     /// Lista virtualizada do corpo; mantém editores fora da tela sem renderizá-los.
     body_list: ListState,
@@ -371,7 +470,6 @@ pub struct NoteDoc {
     focus_handle: FocusHandle,
     save_task: Option<Task<()>>,
     /// Notas que apontam pra esta (via `[[título]]`), computadas ao abrir. (id, título)
-    backlinks: Vec<(String, String)>,
     /// Título → ícone custom (emoji/imagem), pra o badge de wikilink mostrar o ícone certo.
     link_icons: HashMap<String, String>,
     _title_sub: Subscription,
@@ -460,11 +558,6 @@ impl NoteDoc {
         cx: &mut Context<Self>,
     ) -> Self {
         // Backlinks: notas cujo corpo contém `[[<este título>]]`. Só p/ notas comuns.
-        let backlinks = if matches!(kind, DocKind::Note) {
-            compute_backlinks(&id, &title_text, cx)
-        } else {
-            Vec::new()
-        };
         let link_icons = compute_link_icons(cx);
         let title = cx.new(|cx| {
             let mut e = Editor::single_line(window, cx);
@@ -499,14 +592,19 @@ impl NoteDoc {
             slash: None,
             link: None,
             pending_convert: None,
+            pending_reparse: None,
             lang_menu: None,
             img_resize: None,
+            math_previews: HashMap::new(),
+            math_animation_tasks: HashMap::new(),
+            math_drag: None,
+            math_preview_bounds: HashMap::new(),
+            math_hovers: HashMap::new(),
             slash_scroll: ScrollHandle::new(),
             body_list: ListState::new(0, ListAlignment::Top, px(512.)),
             body_scroll: ScrollHandle::new(),
             focus_handle: cx.focus_handle(),
             save_task: None,
-            backlinks,
             link_icons,
             _title_sub: title_sub,
         };
@@ -573,16 +671,12 @@ impl NoteDoc {
         let id = self.next_id;
         self.next_id += 1;
         let text = text.to_string();
-        let refinement = block_style(kind, cx);
         let editor = cx.new(|cx| {
             let mut e = Editor::auto_height(1, 40, window, cx);
-            e.set_soft_wrap_mode(SoftWrap::EditorWidth, cx);
-            e.set_show_gutter(false, cx);
-            e.set_show_wrap_guides(false, cx);
             if !text.is_empty() {
                 e.set_text(text.clone(), window, cx);
             }
-            e.set_text_style_refinement(refinement);
+            apply_editor_style(&mut e, kind, cx);
             e
         });
         // ponytail: NÃO aplicamos mais a linguagem Markdown (tree-sitter) por bloco. Cada
@@ -763,6 +857,61 @@ impl NoteDoc {
         self.refresh_number_labels();
     }
 
+    fn ensure_trailing_paragraph(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let needs_trailing = self.blocks.last().map_or(true, |block| {
+            block.kind != BlockKind::Paragraph || !block.editor.read(cx).text(cx).is_empty()
+        });
+        if !needs_trailing {
+            return;
+        }
+
+        let index = self.blocks.len();
+        let trailing = self.make_block(BlockKind::Paragraph, "", window, cx);
+        let handle = trailing.editor.focus_handle(cx);
+        self.blocks.push(trailing);
+        self.body_list.splice_focusable_with_size_hints(
+            index..index,
+            [(
+                Some(handle),
+                Some(gpui::size(px(0.), px(BLOCK_HEIGHT_HINT))),
+            )],
+        );
+        self.refresh_number_labels();
+    }
+
+    fn start_math_animation(&mut self, block_id: usize, cx: &mut Context<Self>) {
+        if self.math_animation_tasks.contains_key(&block_id) {
+            return;
+        }
+
+        let task = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(MATH_ANIMATION_INTERVAL)
+                    .await;
+
+                let Ok(keep_running) = this.update(cx, |this, cx| {
+                    let Some(state) = this.math_previews.get_mut(&block_id) else {
+                        return false;
+                    };
+                    if !state.playing {
+                        return false;
+                    }
+                    state.time += MATH_ANIMATION_INTERVAL.as_secs_f64();
+                    cx.notify();
+                    true
+                }) else {
+                    return;
+                };
+
+                if !keep_running {
+                    return;
+                }
+            }
+        });
+        self.math_animation_tasks.insert(block_id, task);
+    }
+
     fn blocks_reordered(&mut self, range: std::ops::Range<usize>, cx: &App) {
         let handles = self.blocks[range.clone()]
             .iter()
@@ -806,6 +955,12 @@ impl NoteDoc {
             return;
         }
         let text = editor.read(cx).text(cx);
+
+        if looks_like_pasted_markdown(&text) {
+            self.pending_reparse = Some((block_id, text));
+            cx.notify();
+            return;
+        }
 
         // Fence FECHADA (abre e fecha com ```), colada em 1 linha OU multi-linha → bloco de
         // código. `lang` = 1º token; `body` = o resto até o ``` de fechamento. (Fence só
@@ -852,7 +1007,7 @@ impl NoteDoc {
         let editor = self.blocks[idx].editor.clone();
         editor.update(cx, |e, cx| {
             e.set_text(text, window, cx);
-            e.set_text_style_refinement(block_style(kind, cx));
+            apply_editor_style(e, kind, cx);
             e.move_to_end(&editor::actions::MoveToEnd, window, cx);
         });
         self.blocks[idx].kind = kind;
@@ -867,6 +1022,63 @@ impl NoteDoc {
         self.refresh_number_labels();
         self.body_list.remeasure_items(idx..idx + 1);
         self.refresh_md(block_id, cx);
+        self.ensure_trailing_paragraph(window, cx);
+        cx.notify();
+        self.schedule_save(cx);
+    }
+
+    fn reparse_block_markdown(
+        &mut self,
+        block_id: usize,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(idx) = self.blocks.iter().position(|b| b.id == block_id) else {
+            return;
+        };
+        let parsed = parse_blocks(&text);
+        if parsed.len() <= 1 {
+            return;
+        }
+
+        let mut blocks = Vec::new();
+        let mut handles = Vec::new();
+        for (kind, text, data, indent) in parsed {
+            let mut block = self.make_block(kind, &text, window, cx);
+            block.indent = indent;
+            match kind {
+                BlockKind::Image => {
+                    if let Some(d) = &data
+                        && let Some((path, w)) = d.split_once('\u{0}')
+                    {
+                        block.data = Some(path.to_string());
+                        block.width = w.parse().ok();
+                    } else {
+                        block.data = data;
+                    }
+                }
+                BlockKind::Code => {
+                    if let Some(lang) = data {
+                        self.apply_code_language(block.editor.clone(), lang.clone(), cx);
+                        block.lang = Some(lang);
+                    }
+                }
+                _ => block.data = data,
+            }
+            handles.push((
+                Some(block.editor.focus_handle(cx)),
+                Some(gpui::size(px(0.), px(BLOCK_HEIGHT_HINT))),
+            ));
+            blocks.push(block);
+        }
+
+        self.blocks.splice(idx..idx + 1, blocks);
+        self.body_list
+            .splice_focusable_with_size_hints(idx..idx + 1, handles);
+        self.ensure_trailing_paragraph(window, cx);
+        self.body_list.scroll_to_reveal_item(idx);
+        self.refresh_number_labels();
         cx.notify();
         self.schedule_save(cx);
     }
@@ -1031,9 +1243,7 @@ impl NoteDoc {
         // igual ao Notion — em vez de criar mais um item vazio.
         if is_empty && cont != BlockKind::Paragraph {
             let editor = self.blocks[idx].editor.clone();
-            editor.update(cx, |e, _| {
-                e.set_text_style_refinement(style_for(BlockKind::Paragraph))
-            });
+            editor.update(cx, |e, cx| apply_editor_style(e, BlockKind::Paragraph, cx));
             self.blocks[idx].kind = BlockKind::Paragraph;
             self.refresh_number_labels();
             self.body_list.remeasure_items(idx..idx + 1);
@@ -1091,9 +1301,7 @@ impl NoteDoc {
         // No 1º caractere: bloco não-parágrafo vira parágrafo (fecha o modo lista/citação/código).
         if self.blocks[idx].kind != BlockKind::Paragraph {
             let editor = self.blocks[idx].editor.clone();
-            editor.update(cx, |e, _| {
-                e.set_text_style_refinement(style_for(BlockKind::Paragraph))
-            });
+            editor.update(cx, |e, cx| apply_editor_style(e, BlockKind::Paragraph, cx));
             self.blocks[idx].kind = BlockKind::Paragraph;
             self.refresh_number_labels();
             self.body_list.remeasure_items(idx..idx + 1);
@@ -1338,7 +1546,7 @@ impl NoteDoc {
                 if let Some(pos) = text.rfind('/') {
                     e.set_text(text[..pos].to_string(), window, cx);
                 }
-                e.set_text_style_refinement(block_style(kind, cx));
+                apply_editor_style(e, kind, cx);
             });
         }
         if let Some(block) = self.blocks.iter_mut().find(|b| b.id == block_id) {
@@ -1378,6 +1586,7 @@ impl NoteDoc {
             self.pick_image(block_id, cx);
         }
         self.refresh_md(block_id, cx);
+        self.ensure_trailing_paragraph(window, cx);
         cx.notify();
         self.schedule_save(cx);
     }
@@ -1791,21 +2000,6 @@ fn render_convo(text: &str, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// Notas cujo corpo referencia `[[title]]` (backlinks). Exclui a própria nota.
-fn compute_backlinks(me_id: &str, title: &str, cx: &App) -> Vec<(String, String)> {
-    let title = title.trim();
-    if title.is_empty() {
-        return Vec::new();
-    }
-    let needle = format!("[[{title}]]");
-    NotebookDb::global(cx)
-        .all_notes()
-        .into_iter()
-        .filter(|n| n.id != me_id && n.content.contains(&needle))
-        .map(|n| (n.id, n.title))
-        .collect()
-}
-
 /// Mapa título → ícone custom (emoji/imagem) de notas E reuniões — pro badge de wikilink.
 fn compute_link_icons(cx: &App) -> HashMap<String, String> {
     let db = NotebookDb::global(cx);
@@ -2165,6 +2359,26 @@ fn block_style(kind: BlockKind, cx: &App) -> TextStyleRefinement {
     r
 }
 
+fn apply_editor_style(editor: &mut Editor, kind: BlockKind, cx: &mut Context<Editor>) {
+    let is_code = kind == BlockKind::Code;
+    if is_code {
+        editor.set_mode(EditorMode::Full {
+            scale_ui_elements_with_buffer_font_size: true,
+            show_active_line_background: true,
+            sizing_behavior: SizingBehavior::ExcludeOverscrollMargin,
+        });
+    } else {
+        editor.set_mode(EditorMode::AutoHeight {
+            min_lines: 1,
+            max_lines: Some(40),
+        });
+    }
+    editor.set_text_style_refinement(block_style(kind, cx));
+    editor.set_show_gutter(is_code, cx);
+    editor.set_show_wrap_guides(is_code, cx);
+    editor.set_soft_wrap_mode(SoftWrap::EditorWidth, cx);
+}
+
 fn parse_blocks(content: &str) -> Vec<(BlockKind, String, Option<String>, usize)> {
     let mut out = Vec::new();
     let mut lines = content.lines().peekable();
@@ -2237,6 +2451,22 @@ fn parse_blocks(content: &str) -> Vec<(BlockKind, String, Option<String>, usize)
     out
 }
 
+fn looks_like_pasted_markdown(text: &str) -> bool {
+    if text.lines().count() < 2 {
+        return false;
+    }
+    let trimmed = text.trim_start();
+    if trimmed.starts_with("```") || trimmed.starts_with("# ") || text.contains("\n```") {
+        return true;
+    }
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .filter(|line| classify(line.trim_start()).0 != BlockKind::Paragraph)
+        .take(2)
+        .count()
+        >= 2
+}
+
 fn classify(line: &str) -> (BlockKind, String, Option<String>) {
     if line.trim() == "---" {
         return (BlockKind::Divider, String::new(), None);
@@ -2292,9 +2522,6 @@ impl NoteDoc {
     ) -> AnyElement {
         let Some(block) = self.blocks.get(index) else {
             return v_flex()
-                .when(!self.backlinks.is_empty(), |element| {
-                    element.child(self.render_backlinks(cx))
-                })
                 .child(
                     div()
                         .id("note-tail")
@@ -2368,6 +2595,9 @@ impl Render for NoteDoc {
         debug_assert_eq!(self.number_labels.len(), self.blocks.len());
 
         // Aplica conversão markdown pendente (detectada num edit) — aqui há `window`.
+        if let Some((bid, text)) = self.pending_reparse.take() {
+            self.reparse_block_markdown(bid, text, window, cx);
+        }
         if let Some((bid, kind, text, data)) = self.pending_convert.take() {
             self.convert_block(bid, kind, text, data, window, cx);
         }
@@ -2455,7 +2685,10 @@ impl Render for NoteDoc {
             ))
             .on_mouse_up(
                 gpui::MouseButton::Left,
-                cx.listener(|this, _, _, _| this.img_resize = None),
+                cx.listener(|this, _, _, _| {
+                    this.img_resize = None;
+                    this.math_drag = None;
+                }),
             )
             // Arrastar nota/reunião/pasta da sidebar pra cá → insere um [[wikilink]].
             .drag_over::<crate::panel::DraggedNotebookItem>(|el, _, _, cx| {
@@ -2846,34 +3079,404 @@ impl NoteDoc {
 
     /// Preview renderizado de um code block "rico" (```plot). None p/ blocos normais ou
     /// quando o render falha → cai de volta em mostrar só o código (degradação graciosa).
-    fn rich_preview(&self, block: &Block, cx: &App) -> Option<AnyElement> {
+    fn rich_preview(
+        &self,
+        block: &Block,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let lang = block.lang.as_deref()?;
         if !crate::rich_block::is_rich_lang(lang) {
             return None;
         }
+        let block_id = block.id;
         let source = block.editor.read(cx).text(cx);
+        let is_mathstudio = lang.eq_ignore_ascii_case("mathstudio");
+        let is_3d = source.contains("scene3d.");
+        let state = self
+            .math_previews
+            .get(&block_id)
+            .copied()
+            .unwrap_or_default();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         lang.hash(&mut hasher);
         source.hash(&mut hasher);
+        if is_mathstudio {
+            state.hash_into(&mut hasher);
+        }
         let key = hasher.finish();
         let renderer = cx.svg_renderer();
         let scale = crate::rich_block::rich_scale(lang);
-        let image = RICH_CACHE.with(|c| {
-            c.borrow_mut()
-                .entry(key)
-                .or_insert_with(|| {
-                    let svg = crate::rich_block::render_rich_svg(lang, &source)?;
-                    renderer.render_single_frame(svg.as_bytes(), scale).ok()
-                })
-                .clone()
-        })?;
+        let render_image = || {
+            let svg = if is_mathstudio {
+                crate::rich_block::render_rich_svg_with_view(lang, &source, state.view())?
+            } else {
+                crate::rich_block::render_rich_svg(lang, &source)?
+            };
+            renderer.render_single_frame(svg.as_bytes(), scale).ok()
+        };
+        let image = if is_mathstudio && state.playing {
+            render_image()
+        } else {
+            RICH_CACHE.with(|c| {
+                let mut cache = c.borrow_mut();
+                if !cache.contains_key(&key) && cache.len() >= RICH_CACHE_MAX {
+                    cache.clear();
+                }
+                cache.entry(key).or_insert_with(render_image).clone()
+            })
+        }?;
+
+        let image_el = img(image).max_w(px(860.));
+        if !is_mathstudio {
+            return Some(
+                div()
+                    .pt_2()
+                    .w_full()
+                    .flex()
+                    .justify_center()
+                    .child(image_el)
+                    .into_any_element(),
+            );
+        }
+
+        let help = if is_3d {
+            "arraste = orbitar · shift+arraste = pan · scroll = zoom"
+        } else {
+            "arraste = pan · scroll = zoom"
+        };
+        let hover = self
+            .math_hovers
+            .get(&block_id)
+            .filter(|_| {
+                self.math_preview_bounds
+                    .get(&block_id)
+                    .is_some_and(|bounds| bounds.contains(&window.mouse_position()))
+            })
+            .cloned();
+        let bounds_doc = cx.weak_entity();
+        let hover_source = source.clone();
         Some(
             div()
-                .pt_2()
                 .w_full()
                 .flex()
-                .justify_center()
-                .child(img(image).max_w(px(620.)))
+                .flex_col()
+                .items_center()
+                .gap_1()
+                .child(
+                    h_flex()
+                        .w_full()
+                        .max_w(px(860.))
+                        .justify_between()
+                        .items_center()
+                        .text_size(px(10.))
+                        .text_color(cx.theme().colors().text_muted)
+                        .child(Label::new(help).size(LabelSize::XSmall).color(Color::Muted))
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .child(
+                                    math_preview_button(
+                                        format!("math-zoom-out-{block_id}"),
+                                        "-",
+                                        cx,
+                                    )
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            cx.stop_propagation();
+                                            let state =
+                                                this.math_previews.entry(block_id).or_default();
+                                            state.zoom = (state.zoom * 0.85).clamp(0.2, 20.0);
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    math_preview_button(
+                                        format!("math-zoom-in-{block_id}"),
+                                        "+",
+                                        cx,
+                                    )
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            cx.stop_propagation();
+                                            let state =
+                                                this.math_previews.entry(block_id).or_default();
+                                            state.zoom = (state.zoom * 1.18).clamp(0.2, 20.0);
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    math_preview_button(
+                                        format!("math-reset-{block_id}"),
+                                        "Reset",
+                                        cx,
+                                    )
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            cx.stop_propagation();
+                                            this.math_previews
+                                                .insert(block_id, MathPreviewState::default());
+                                            this.math_animation_tasks.remove(&block_id);
+                                            this.math_hovers.remove(&block_id);
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    math_preview_button(
+                                        format!("math-play-{block_id}"),
+                                        if state.playing { "Pausar" } else { "Play" },
+                                        cx,
+                                    )
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            cx.stop_propagation();
+                                            let playing = {
+                                                let state =
+                                                    this.math_previews.entry(block_id).or_default();
+                                                state.playing = !state.playing;
+                                                state.playing
+                                            };
+                                            if playing {
+                                                this.start_math_animation(block_id, cx);
+                                            } else {
+                                                this.math_animation_tasks.remove(&block_id);
+                                            }
+                                            cx.notify();
+                                        },
+                                    )),
+                                )
+                                .child(
+                                    math_preview_button(
+                                        format!("math-edit-{block_id}"),
+                                        "Editar",
+                                        cx,
+                                    )
+                                    .on_click(cx.listener(
+                                        move |this, _, window, cx| {
+                                            cx.stop_propagation();
+                                            if let Some(block) =
+                                                this.blocks.iter().find(|b| b.id == block_id)
+                                            {
+                                                window.focus(&block.editor.focus_handle(cx), cx);
+                                            }
+                                        },
+                                    )),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .on_children_prepainted(move |bounds, _, cx| {
+                            if let Some(bounds) = bounds.first().copied() {
+                                bounds_doc
+                                    .update(cx, |this, _| {
+                                        this.math_preview_bounds.insert(block_id, bounds);
+                                    })
+                                    .ok();
+                            }
+                        })
+                        .id(SharedString::from(format!(
+                            "math-preview-canvas-{block_id}"
+                        )))
+                        .relative()
+                        .rounded_md()
+                        .overflow_hidden()
+                        .cursor_grab()
+                        .child(image_el)
+                        .when_some(hover, |el, hover| {
+                            let left = (hover.local_x + 12.0).min(620.0);
+                            let top = (hover.local_y + 12.0).min(300.0);
+                            el.child(
+                                div()
+                                    .absolute()
+                                    .left(px(hover.local_x))
+                                    .top_0()
+                                    .bottom_0()
+                                    .border_l_1()
+                                    .border_color(cx.theme().colors().border),
+                            )
+                            .child(
+                                div()
+                                    .absolute()
+                                    .top(px(hover.local_y))
+                                    .left_0()
+                                    .right_0()
+                                    .border_t_1()
+                                    .border_color(cx.theme().colors().border),
+                            )
+                            .child(
+                                v_flex()
+                                    .absolute()
+                                    .left(px(left))
+                                    .top(px(top))
+                                    .max_w(px(260.))
+                                    .gap_0p5()
+                                    .p_1p5()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(cx.theme().colors().border)
+                                    .bg(cx.theme().colors().editor_background)
+                                    .child(
+                                        Label::new(format!(
+                                            "x = {:.3}  y = {:.3}",
+                                            hover.world_x, hover.world_y
+                                        ))
+                                        .size(LabelSize::XSmall)
+                                        .color(Color::Muted),
+                                    )
+                                    .children(
+                                        hover.samples.iter().take(4).enumerate().map(
+                                            |(ix, sample)| {
+                                                h_flex()
+                                                    .gap_1()
+                                                    .child(
+                                                        Label::new(
+                                                            sample
+                                                                .label
+                                                                .clone()
+                                                                .unwrap_or_else(|| {
+                                                                    format!("f{ix}")
+                                                                }),
+                                                        )
+                                                        .size(LabelSize::XSmall),
+                                                    )
+                                                    .child(
+                                                        Label::new(format!("{:.3}", sample.y))
+                                                            .size(LabelSize::XSmall)
+                                                            .color(Color::Muted),
+                                                    )
+                                            },
+                                        ),
+                                    ),
+                            )
+                        })
+                        .on_scroll_wheel(cx.listener(
+                            move |this, ev: &gpui::ScrollWheelEvent, _, cx| {
+                                let delta = ev.delta.pixel_delta(px(16.0));
+                                let dy = f32::from(delta.y);
+                                let state = this.math_previews.entry(block_id).or_default();
+                                let factor = if dy > 0.0 { 1.1 } else { 0.9 };
+                                state.zoom = (state.zoom * factor).clamp(0.2, 20.0);
+                                cx.stop_propagation();
+                                cx.notify();
+                            },
+                        ))
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(move |this, ev: &gpui::MouseDownEvent, _, cx| {
+                                this.math_drag = Some(MathPreviewDrag {
+                                    block_id,
+                                    last_x: f32::from(ev.position.x),
+                                    last_y: f32::from(ev.position.y),
+                                    pending_dx: 0.0,
+                                    pending_dy: 0.0,
+                                    last_render_at: Instant::now() - MATH_DRAG_INTERVAL,
+                                });
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .on_mouse_move(cx.listener(
+                            move |this, ev: &gpui::MouseMoveEvent, _, cx| {
+                                if ev.pressed_button != Some(gpui::MouseButton::Left) {
+                                    if !is_3d {
+                                        if let Some(bounds) =
+                                            this.math_preview_bounds.get(&block_id).copied()
+                                        {
+                                            let width = f32::from(bounds.size.width).max(1.0);
+                                            let height = f32::from(bounds.size.height).max(1.0);
+                                            let local_x =
+                                                (f32::from(ev.position.x - bounds.origin.x))
+                                                    .clamp(0.0, width);
+                                            let local_y =
+                                                (f32::from(ev.position.y - bounds.origin.y))
+                                                    .clamp(0.0, height);
+                                            let state = this
+                                                .math_previews
+                                                .get(&block_id)
+                                                .copied()
+                                                .unwrap_or_default();
+                                            if let Some(hover) = crate::rich_block::mathstudio_hover(
+                                                &hover_source,
+                                                state.view(),
+                                                local_x as f64,
+                                                local_y as f64,
+                                                width as f64,
+                                                height as f64,
+                                            ) {
+                                                this.math_hovers.insert(
+                                                    block_id,
+                                                    MathPreviewHover {
+                                                        local_x,
+                                                        local_y,
+                                                        world_x: hover.world_x,
+                                                        world_y: hover.world_y,
+                                                        samples: hover.samples,
+                                                    },
+                                                );
+                                                cx.notify();
+                                            }
+                                        }
+                                    }
+                                    return;
+                                }
+                                let Some(mut drag) = this.math_drag else {
+                                    return;
+                                };
+                                if drag.block_id != block_id {
+                                    return;
+                                }
+                                let x = f32::from(ev.position.x);
+                                let y = f32::from(ev.position.y);
+                                drag.pending_dx += x - drag.last_x;
+                                drag.pending_dy += y - drag.last_y;
+                                drag.last_x = x;
+                                drag.last_y = y;
+                                let now = Instant::now();
+                                let dx = drag.pending_dx;
+                                let dy = drag.pending_dy;
+                                if dx.abs().max(dy.abs()) < 0.1 {
+                                    this.math_drag = Some(drag);
+                                    cx.stop_propagation();
+                                    return;
+                                }
+                                if now.duration_since(drag.last_render_at) < MATH_DRAG_INTERVAL
+                                    && dx.abs().max(dy.abs()) < 8.0
+                                {
+                                    this.math_drag = Some(drag);
+                                    cx.stop_propagation();
+                                    return;
+                                }
+                                drag.pending_dx = 0.0;
+                                drag.pending_dy = 0.0;
+                                drag.last_render_at = now;
+                                this.math_drag = Some(drag);
+                                this.math_hovers.remove(&block_id);
+                                let state = this.math_previews.entry(block_id).or_default();
+                                if is_3d && !ev.modifiers.shift {
+                                    state.orbit_x += dx as f64 * 0.01;
+                                    state.orbit_y =
+                                        (state.orbit_y + dy as f64 * 0.01).clamp(-1.25, 1.25);
+                                } else {
+                                    state.pan_x += dx as f64 / 620.0;
+                                    state.pan_y += dy as f64 / 360.0;
+                                }
+                                cx.stop_propagation();
+                                cx.notify();
+                            },
+                        ))
+                        .on_mouse_up(
+                            gpui::MouseButton::Left,
+                            cx.listener(move |this, _, _, cx| {
+                                if this.math_drag.is_some_and(|drag| drag.block_id == block_id) {
+                                    this.math_drag = None;
+                                }
+                                cx.stop_propagation();
+                            }),
+                        ),
+                )
                 .into_any_element(),
         )
     }
@@ -2987,38 +3590,6 @@ impl NoteDoc {
         }
         cx.notify();
         self.schedule_save(cx);
-    }
-
-    /// Rodapé de backlinks: notas que apontam pra esta (clicáveis → abrem).
-    fn render_backlinks(&self, cx: &mut Context<Self>) -> AnyElement {
-        let hover = cx.theme().colors().element_hover;
-        v_flex()
-            .mt_8()
-            .gap_1()
-            .child(
-                Label::new("REFERÊNCIAS")
-                    .size(LabelSize::XSmall)
-                    .color(Color::Muted),
-            )
-            .children(self.backlinks.iter().map(|(id, title)| {
-                let t = title.clone();
-                div()
-                    .id(SharedString::from(format!("backlink-{id}")))
-                    .px_2()
-                    .py_1()
-                    .rounded_sm()
-                    .cursor_pointer()
-                    .hover(move |s| s.bg(hover))
-                    .child(
-                        Label::new(title.clone())
-                            .size(LabelSize::Small)
-                            .color(Color::Accent),
-                    )
-                    .on_click(cx.listener(move |_this, _, _, cx| {
-                        cx.emit(NoteDocEvent::OpenNote(t.clone()))
-                    }))
-            }))
-            .into_any_element()
     }
 
     /// Marcador de lista (•, número, checkbox) desenhado por nós — compartilhado entre a
@@ -3418,12 +3989,30 @@ impl NoteDoc {
                         BlockKind::Code => {
                             let lang_label = block.lang.clone().unwrap_or_else(|| "texto".into());
                             let menu_open = self.lang_menu == Some(id);
+                            let rich_preview = self.rich_preview(block, window, cx);
+                            let focused = block.editor.focus_handle(cx).is_focused(window);
+                            let has_rich_preview = rich_preview.is_some();
+                            let show_source = rich_preview.is_none() || focused;
+                            let source_height =
+                                text.lines().count().clamp(8, 22) as f32 * 22.0 + 28.0;
+                            let source_editor = div()
+                                .w_full()
+                                .h(px(source_height))
+                                .min_h(px(180.))
+                                .rounded_md()
+                                .border_1()
+                                .border_color(cx.theme().colors().border)
+                                .bg(cx.theme().colors().editor_background)
+                                .overflow_hidden()
+                                .child(block.editor.clone());
                             row.child(
                                 div()
                                     .relative()
                                     .w_full()
                                     .rounded_md()
-                                    .bg(cx.theme().colors().editor_background)
+                                    .when(!has_rich_preview || show_source, |el| {
+                                        el.bg(cx.theme().colors().editor_background)
+                                    })
                                     .child(
                                         // Cabeçalho do bloco: pill com a linguagem (abre o menu).
                                         h_flex().justify_end().px_2().pt_1().child(
@@ -3445,10 +4034,19 @@ impl NoteDoc {
                                                 })),
                                         ),
                                     )
-                                    .child(div().px_2().pb_2().child(body))
+                                    .when(show_source, |el| {
+                                        el.child(div().px_2().pb_2().child(source_editor))
+                                    })
                                     // Bloco rico (```plot): mostra a imagem renderizada abaixo da fonte.
-                                    .when_some(self.rich_preview(block, cx), |el, preview| {
-                                        el.child(div().px_2().pb_2().child(preview))
+                                    .when_some(rich_preview, |el, preview| {
+                                        el.child(
+                                            div()
+                                                .id(SharedString::from(format!(
+                                                    "rich-preview-{id}"
+                                                )))
+                                                .when(show_source, |el| el.px_2().pb_2())
+                                                .child(preview),
+                                        )
                                     })
                                     .when(menu_open, |el| {
                                         el.child(gpui::deferred(
@@ -3506,6 +4104,29 @@ mod tests {
     use settings::SettingsStore;
     use std::sync::atomic::Ordering;
     use std::time::Instant;
+
+    #[test]
+    fn detects_pasted_mathstudio_document_as_blocks() {
+        let pasted = r#"# Seno e campo
+
+Uma visualizacao simples.
+
+```mathstudio
+scene.cartesianPlane({ x: [-6, 6], y: [-3, 3] });
+scene.function({ expression: x => Math.sin(x) });
+```
+"#;
+        assert!(looks_like_pasted_markdown(pasted));
+        let blocks = parse_blocks(pasted);
+        assert!(matches!(blocks[0].0, BlockKind::H1));
+        assert!(
+            blocks
+                .iter()
+                .any(|(kind, text, lang, _)| *kind == BlockKind::Code
+                    && lang.as_deref() == Some("mathstudio")
+                    && text.contains("scene.function"))
+        );
+    }
 
     #[gpui::test]
     fn large_note_only_materializes_viewport_blocks(cx: &mut TestAppContext) {

@@ -14,6 +14,7 @@ use crate::{AgentTool, ToolCallEventStream, ToolInput};
 /// This is the ONLY way to put content in the notebook — it is NOT the
 /// filesystem, so do not use file tools for notes. Typical flow: call `list`
 /// first to get folder/note ids, then `create_note` / `update_note`.
+/// Set `open_after: true` when the user asked to see the note immediately.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct NotebookToolInput {
     /// What to do. One of:
@@ -36,6 +37,9 @@ pub struct NotebookToolInput {
     /// Target note or meeting id (from `list`), for `read` / `update_note`.
     #[serde(default)]
     pub id: Option<String>,
+    /// Open/focus the created or updated note in the Workspace panel after writing it.
+    #[serde(default)]
+    pub open_after: Option<bool>,
 }
 
 pub struct NotebookTool;
@@ -76,6 +80,8 @@ impl AgentTool for NotebookTool {
         cx.spawn(async move |cx| {
             let input = input.recv().await.map_err(|e| e.to_string())?;
             let db = cx.update(|cx| notebook::NotebookDb::global(cx));
+            let open_after = input.open_after.unwrap_or(false);
+            let mut open_target: Option<(&'static str, String)> = None;
 
             let result = match input.action.trim() {
                 "list" => list(&db),
@@ -97,6 +103,7 @@ impl AgentTool for NotebookTool {
                     )
                     .await
                     .map_err(|e| e.to_string())?;
+                    open_target = Some(("note", id.clone()));
                     Ok(format!("Created note [note:{id}]."))
                 }
                 "update_note" => {
@@ -112,6 +119,7 @@ impl AgentTool for NotebookTool {
                     db.update_note(id.clone(), title, content)
                         .await
                         .map_err(|e| e.to_string())?;
+                    open_target = Some(("note", id.clone()));
                     Ok(format!("Updated note [note:{id}]."))
                 }
                 other => Err(format!(
@@ -120,7 +128,15 @@ impl AgentTool for NotebookTool {
             };
 
             // Reflete no painel na hora (a IA acabou de mudar o notebook).
-            cx.update(|cx| notebook::refresh_panel(cx));
+            cx.update(|cx| {
+                if open_after
+                    && let Some((kind, id)) = open_target
+                {
+                    notebook::open_on_next_render(kind, id, cx);
+                } else {
+                    notebook::refresh_panel(cx);
+                }
+            });
             result
         })
     }

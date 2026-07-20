@@ -219,13 +219,14 @@ impl TitleBar {
     // status do STT, botão de mic e expandir.
     fn render_compact_pill(&self, cx: &mut Context<Self>) -> AnyElement {
         let stt = stt::Stt::global(cx);
-        let (stt_running, elapsed, wf_mic, wf_sys) = {
+        let (stt_running, elapsed, wf_mic, wf_sys, active_listen) = {
             let s = stt.read(cx);
             (
                 s.is_running(),
                 s.elapsed_label(),
                 s.waveform_mic(),
                 s.waveform_sys(),
+                s.delivery() == stt::DeliveryMode::ActiveListen,
             )
         };
         let colors = cx.theme().colors();
@@ -238,13 +239,25 @@ impl TitleBar {
             .items_center()
             .bg(colors.title_bar_background)
             .window_control_area(gpui::WindowControlArea::Drag)
-            .child(
-                div()
-                    .size_2()
-                    .rounded_full()
-                    .flex_shrink_0()
-                    .bg(if stt_running { accent } else { colors.text_muted }),
-            )
+            // ponytail: Escuta Ativa armada → ponto VERMELHO pulsante (o usuário sempre sabe
+            // que a IA pode responder a call ao vivo). Senão, accent quando gravando.
+            .child({
+                let dot = div().size_2().rounded_full().flex_shrink_0();
+                if stt_running && active_listen {
+                    dot.bg(Color::Error.color(cx))
+                        .with_animation(
+                            "armed-pulse",
+                            Animation::new(Duration::from_secs(1))
+                                .repeat()
+                                .with_easing(pulsating_between(0.35, 1.0)),
+                            |el, delta| el.opacity(delta),
+                        )
+                        .into_any_element()
+                } else {
+                    dot.bg(if stt_running { accent } else { colors.text_muted })
+                        .into_any_element()
+                }
+            })
             // ponytail: mic (accent) cresce pra cima, PC (branco) pra baixo — separados.
             .when(stt_running, |this| {
                 this.child(
@@ -257,15 +270,21 @@ impl TitleBar {
                         .child(waveform_half(wf_sys, white, false)),
                 )
             })
-            .child(
+            .child(if stt_running && active_listen {
+                Label::new("IA responde")
+                    .size(LabelSize::Small)
+                    .color(Color::Error)
+                    .into_any_element()
+            } else {
                 Label::new(if stt_running {
                     elapsed
                 } else {
                     "Momor".to_string()
                 })
                 .size(LabelSize::Small)
-                .color(if stt_running { Color::Default } else { Color::Muted }),
-            )
+                .color(if stt_running { Color::Default } else { Color::Muted })
+                .into_any_element()
+            })
             // ponytail: janela justa ao conteúdo — botões logo após o timer, sem vão.
             .child(div().w_1p5())
             .child(
@@ -746,6 +765,20 @@ impl TitleBar {
                             move |_window, cx| {
                                 stt.update(cx, |stt, cx| {
                                     stt.set_delivery(stt::DeliveryMode::Prompt, cx)
+                                });
+                            }
+                        },
+                    );
+                    menu = menu.toggleable_entry(
+                        "⚠ Escuta ativa — a IA responde sozinha",
+                        delivery == stt::DeliveryMode::ActiveListen,
+                        IconPosition::End,
+                        None,
+                        {
+                            let stt = stt.clone();
+                            move |_window, cx| {
+                                stt.update(cx, |stt, cx| {
+                                    stt.set_delivery(stt::DeliveryMode::ActiveListen, cx)
                                 });
                             }
                         },

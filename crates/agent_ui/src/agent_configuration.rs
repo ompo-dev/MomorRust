@@ -64,7 +64,7 @@ pub struct AgentConfiguration {
     context_server_registry: Entity<ContextServerRegistry>,
     _subscriptions: Vec<Subscription>,
     scroll_handle: ScrollHandle,
-    // ponytail: STT — LISTA de campos de chave por provedor (chaves reserva p/ failover)
+    // ponytail: STT â€” LISTA de campos de chave por provedor (chaves reserva p/ failover)
     stt_inputs: Vec<(stt::SttProviderKind, Vec<Entity<ui_input::InputField>>)>,
     stt_expanded: HashMap<&'static str, bool>,
 }
@@ -193,8 +193,8 @@ enum AgentIcon {
 }
 
 impl AgentConfiguration {
-    // ponytail: STT — MESMO componente visual dos LLM Providers: linhas com disclosure
-    // expansível, ✓ verde no ativo, chave dentro ao expandir.
+    // ponytail: STT â€” MESMO componente visual dos LLM Providers: linhas com disclosure
+    // expansÃ­vel, âœ“ verde no ativo, chave dentro ao expandir.
     fn render_stt_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let selected = stt::selected_provider();
         let rows: Vec<_> = self.stt_inputs.clone();
@@ -203,7 +203,7 @@ impl AgentConfiguration {
             .border_color(cx.theme().colors().border)
             .child(self.render_section_title(
                 "Speech-to-Text (STT)",
-                "Ouça o microfone e o áudio do PC; a transcrição vira contexto pra IA.",
+                "OuÃ§a o microfone e o Ã¡udio do PC; a transcriÃ§Ã£o vira contexto pra IA.",
                 div().into_any_element(),
             ))
             .children(
@@ -293,8 +293,8 @@ impl AgentConfiguration {
                         .w_full()
                         .px_2()
                         .gap_2()
-                        // Um campo por chave. A 1ª é a principal; as demais são reserva
-                        // (o failover em runtime tenta na ordem). × remove a chave.
+                        // Um campo por chave. A 1Âª Ã© a principal; as demais sÃ£o reserva
+                        // (o failover em runtime tenta na ordem). Ã— remove a chave.
                         .children(inputs.iter().enumerate().map(|(i, field)| {
                             h_flex()
                                 .w_full()
@@ -372,7 +372,7 @@ impl AgentConfiguration {
         cx.notify();
     }
 
-    /// Remove o campo de chave `index` (mantém pelo menos 1) e persiste.
+    /// Remove o campo de chave `index` (mantÃ©m pelo menos 1) e persiste.
     fn remove_stt_key(
         &mut self,
         kind: stt::SttProviderKind,
@@ -389,7 +389,7 @@ impl AgentConfiguration {
         cx.notify();
     }
 
-    /// Junta todas as chaves não-vazias do provedor (vírgula) e salva no KVP.
+    /// Junta todas as chaves nÃ£o-vazias do provedor (vÃ­rgula) e salva no KVP.
     fn save_stt_keys(&mut self, kind: stt::SttProviderKind, cx: &mut Context<Self>) {
         let joined = self
             .stt_inputs
@@ -773,462 +773,6 @@ impl AgentConfiguration {
         }
     }
 
-    fn render_context_servers_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let context_server_ids = self.context_server_store.read(cx).server_ids();
-
-        let add_server_popover = PopoverMenu::new("add-server-popover")
-            .trigger(
-                Button::new("add-server", "Add Server")
-                    .style(ButtonStyle::Outlined)
-                    .start_icon(
-                        Icon::new(IconName::Plus)
-                            .size(IconSize::Small)
-                            .color(Color::Muted),
-                    )
-                    .label_size(LabelSize::Small),
-            )
-            .menu({
-                move |window, cx| {
-                    Some(ContextMenu::build(window, cx, |menu, _window, _cx| {
-                        menu.entry("Add Custom Server", None, {
-                            |window, cx| {
-                                window.dispatch_action(crate::AddContextServer.boxed_clone(), cx)
-                            }
-                        })
-                        .entry("Install from Extensions", None, {
-                            |window, cx| {
-                                window.dispatch_action(
-                                    zed_actions::Extensions {
-                                        category_filter: Some(
-                                            ExtensionCategoryFilter::ContextServers,
-                                        ),
-                                        id: None,
-                                    }
-                                    .boxed_clone(),
-                                    cx,
-                                )
-                            }
-                        })
-                    }))
-                }
-            })
-            .anchor(gpui::Anchor::TopRight)
-            .offset(gpui::Point {
-                x: px(0.0),
-                y: px(2.0),
-            });
-
-        v_flex()
-            .min_w_0()
-            .border_b_1()
-            .border_color(cx.theme().colors().border)
-            .child(self.render_section_title(
-                "Model Context Protocol (MCP) Servers",
-                "All MCP servers connected directly or via a Zed extension.",
-                add_server_popover.into_any_element(),
-            ))
-            .child(
-                v_flex()
-                    .pl_4()
-                    .pb_4()
-                    .pr_5()
-                    .w_full()
-                    .gap_1()
-                    .map(|parent| {
-                        if context_server_ids.is_empty() {
-                            parent.child(
-                                h_flex()
-                                    .p_4()
-                                    .justify_center()
-                                    .border_1()
-                                    .border_dashed()
-                                    .border_color(cx.theme().colors().border.opacity(0.6))
-                                    .rounded_sm()
-                                    .child(
-                                        Label::new("No MCP servers added yet.")
-                                            .color(Color::Muted)
-                                            .size(LabelSize::Small),
-                                    ),
-                            )
-                        } else {
-                            parent.children(itertools::intersperse_with(
-                                context_server_ids.iter().cloned().map(|context_server_id| {
-                                    self.render_context_server(context_server_id, cx)
-                                        .into_any_element()
-                                }),
-                                || {
-                                    Divider::horizontal()
-                                        .color(DividerColor::BorderFaded)
-                                        .into_any_element()
-                                },
-                            ))
-                        }
-                    }),
-            )
-    }
-
-    fn render_context_server(
-        &self,
-        context_server_id: ContextServerId,
-        cx: &Context<Self>,
-    ) -> impl use<> + IntoElement {
-        let server_status = self
-            .context_server_store
-            .read(cx)
-            .status_for_server(&context_server_id)
-            .unwrap_or(ContextServerStatus::Stopped);
-        let server_configuration = self
-            .context_server_store
-            .read(cx)
-            .configuration_for_server(&context_server_id);
-
-        let is_running = matches!(server_status, ContextServerStatus::Running);
-        let item_id = SharedString::from(context_server_id.0.clone());
-        // Servers without a configuration can only be provided by extensions.
-        let provided_by_extension = server_configuration.as_ref().is_none_or(|config| {
-            matches!(
-                config.as_ref(),
-                ContextServerConfiguration::Extension { .. }
-            )
-        });
-
-        let display_name = if provided_by_extension {
-            resolve_extension_for_context_server(&context_server_id, cx)
-                .map(|(_, manifest)| {
-                    let name = manifest.name.as_str();
-                    let stripped = name
-                        .strip_suffix(" MCP Server")
-                        .or_else(|| name.strip_suffix(" MCP"))
-                        .or_else(|| name.strip_suffix(" Context Server"))
-                        .unwrap_or(name);
-                    SharedString::from(stripped.to_string())
-                })
-                .unwrap_or_else(|| item_id.clone())
-        } else {
-            item_id.clone()
-        };
-
-        let error = if let ContextServerStatus::Error(error) = server_status.clone() {
-            Some(error)
-        } else {
-            None
-        };
-        let auth_required = matches!(server_status, ContextServerStatus::AuthRequired);
-        let authenticating = matches!(server_status, ContextServerStatus::Authenticating);
-        let context_server_store = self.context_server_store.clone();
-
-        let tool_count = self
-            .context_server_registry
-            .read(cx)
-            .tools_for_server(&context_server_id)
-            .count();
-
-        let source = if provided_by_extension {
-            AiSettingItemSource::Extension
-        } else {
-            AiSettingItemSource::Custom
-        };
-
-        let status = match server_status {
-            ContextServerStatus::Starting => AiSettingItemStatus::Starting,
-            ContextServerStatus::Running => AiSettingItemStatus::Running,
-            ContextServerStatus::Error(_) => AiSettingItemStatus::Error,
-            ContextServerStatus::Stopped => AiSettingItemStatus::Stopped,
-            ContextServerStatus::AuthRequired => AiSettingItemStatus::AuthRequired,
-            ContextServerStatus::Authenticating => AiSettingItemStatus::Authenticating,
-        };
-
-        let is_remote = server_configuration
-            .as_ref()
-            .map(|config| matches!(config.as_ref(), ContextServerConfiguration::Http { .. }))
-            .unwrap_or(false);
-
-        let should_show_logout_button = server_configuration.as_ref().is_some_and(|config| {
-            matches!(config.as_ref(), ContextServerConfiguration::Http { .. })
-                && !config.has_static_auth_header()
-        });
-
-        let context_server_configuration_menu = PopoverMenu::new("context-server-config-menu")
-            .trigger_with_tooltip(
-                IconButton::new("context-server-config-menu", IconName::Settings)
-                    .icon_color(Color::Muted)
-                    .icon_size(IconSize::Small),
-                Tooltip::text("Configure MCP Server"),
-            )
-            .anchor(Anchor::TopRight)
-            .menu({
-                let fs = self.fs.clone();
-                let context_server_id = context_server_id.clone();
-                let language_registry = self.language_registry.clone();
-                let workspace = self.workspace.clone();
-                let context_server_registry = self.context_server_registry.clone();
-                let context_server_store = context_server_store.clone();
-
-                move |window, cx| {
-                    Some(ContextMenu::build(window, cx, |menu, _window, _cx| {
-                        menu.entry("Configure Server", None, {
-                            let context_server_id = context_server_id.clone();
-                            let language_registry = language_registry.clone();
-                            let workspace = workspace.clone();
-                            move |window, cx| {
-                                if is_remote {
-                                    crate::agent_configuration::configure_context_server_modal::ConfigureContextServerModal::show_modal_for_existing_server(
-                                        context_server_id.clone(),
-                                        language_registry.clone(),
-                                        workspace.clone(),
-                                        window,
-                                        cx,
-                                    )
-                                    .detach();
-                                } else {
-                                    ConfigureContextServerModal::show_modal_for_existing_server(
-                                        context_server_id.clone(),
-                                        language_registry.clone(),
-                                        workspace.clone(),
-                                        window,
-                                        cx,
-                                    )
-                                    .detach();
-                                }
-                            }
-                        }).when(tool_count > 0, |this| this.entry("View Tools", None, {
-                            let context_server_id = context_server_id.clone();
-                            let context_server_registry = context_server_registry.clone();
-                            let workspace = workspace.clone();
-                            move |window, cx| {
-                                let context_server_id = context_server_id.clone();
-                                workspace.update(cx, |workspace, cx| {
-                                    ConfigureContextServerToolsModal::toggle(
-                                        context_server_id,
-                                        context_server_registry.clone(),
-                                        workspace,
-                                        window,
-                                        cx,
-                                    );
-                                })
-                                .ok();
-                            }
-                        }))
-                        .when(should_show_logout_button, |this| {
-                            this.entry("Log Out", None, {
-                                let context_server_store = context_server_store.clone();
-                                let context_server_id = context_server_id.clone();
-                                move |_window, cx| {
-                                    context_server_store.update(cx, |store, cx| {
-                                        store.logout_server(&context_server_id, cx).log_err();
-                                    });
-                                }
-                            })
-                        })
-                        .separator()
-                        .entry("Uninstall", None, {
-                            let fs = fs.clone();
-                            let context_server_id = context_server_id.clone();
-                            let workspace = workspace.clone();
-                            move |_, cx| {
-                                let uninstall_extension_task = match (
-                                    provided_by_extension,
-                                    resolve_extension_for_context_server(&context_server_id, cx),
-                                ) {
-                                    (true, Some((id, manifest))) => {
-                                        if extension_only_provides_context_server(manifest.as_ref())
-                                        {
-                                            ExtensionStore::global(cx).update(cx, |store, cx| {
-                                                store.uninstall_extension(id, cx)
-                                            })
-                                        } else {
-                                            workspace.update(cx, |workspace, cx| {
-                                                show_unable_to_uninstall_extension_with_context_server(workspace, context_server_id.clone(), cx);
-                                            }).log_err();
-                                            Task::ready(Ok(()))
-                                        }
-                                    }
-                                    _ => Task::ready(Ok(())),
-                                };
-
-                                cx.spawn({
-                                    let fs = fs.clone();
-                                    let context_server_id = context_server_id.clone();
-                                    async move |cx| {
-                                        uninstall_extension_task.await?;
-                                        cx.update(|cx| {
-                                            update_settings_file(
-                                                fs.clone(),
-                                                cx,
-                                                {
-                                                    let context_server_id =
-                                                        context_server_id.clone();
-                                                    move |settings, _| {
-                                                        settings.project
-                                                            .context_servers
-                                                            .remove(&context_server_id.0);
-                                                    }
-                                                },
-                                            )
-                                        });
-                                        anyhow::Ok(())
-                                    }
-                                })
-                                .detach_and_log_err(cx);
-                            }
-                        })
-                    }))
-                }
-            });
-
-        let feedback_base_container =
-            || h_flex().py_1().min_w_0().w_full().gap_1().justify_between();
-
-        let details: Option<AnyElement> = if let Some(error) = error {
-            Some(
-                feedback_base_container()
-                    .child(
-                        h_flex()
-                            .pr_4()
-                            .min_w_0()
-                            .w_full()
-                            .gap_2()
-                            .child(
-                                Icon::new(IconName::XCircle)
-                                    .size(IconSize::XSmall)
-                                    .color(Color::Error),
-                            )
-                            .child(div().min_w_0().flex_1().child(
-                                Label::new(error).color(Color::Muted).size(LabelSize::Small),
-                            )),
-                    )
-                    .when(should_show_logout_button, |this| {
-                        this.child(
-                            Button::new("error-logout-server", "Log Out")
-                                .style(ButtonStyle::Outlined)
-                                .label_size(LabelSize::Small)
-                                .on_click({
-                                    let context_server_store = context_server_store.clone();
-                                    let context_server_id = context_server_id.clone();
-                                    move |_event, _window, cx| {
-                                        context_server_store.update(cx, |store, cx| {
-                                            store.logout_server(&context_server_id, cx).log_err();
-                                        });
-                                    }
-                                }),
-                        )
-                    })
-                    .into_any_element(),
-            )
-        } else if auth_required {
-            Some(
-                feedback_base_container()
-                    .child(
-                        h_flex()
-                            .pr_4()
-                            .min_w_0()
-                            .w_full()
-                            .gap_2()
-                            .child(
-                                Icon::new(IconName::Info)
-                                    .size(IconSize::XSmall)
-                                    .color(Color::Muted),
-                            )
-                            .child(
-                                Label::new("Authenticate to connect this server")
-                                    .color(Color::Muted)
-                                    .size(LabelSize::Small),
-                            ),
-                    )
-                    .child(
-                        Button::new("error-logout-server", "Authenticate")
-                            .style(ButtonStyle::Outlined)
-                            .label_size(LabelSize::Small)
-                            .on_click({
-                                let context_server_id = context_server_id.clone();
-                                move |_event, _window, cx| {
-                                    context_server_store.update(cx, |store, cx| {
-                                        store.authenticate_server(&context_server_id, cx).log_err();
-                                    });
-                                }
-                            }),
-                    )
-                    .into_any_element(),
-            )
-        } else if authenticating {
-            Some(
-                h_flex()
-                    .mt_1()
-                    .pr_4()
-                    .min_w_0()
-                    .w_full()
-                    .gap_2()
-                    .child(div().size_3().flex_shrink_0())
-                    .child(
-                        Label::new("Authenticating…")
-                            .color(Color::Muted)
-                            .size(LabelSize::Small),
-                    )
-                    .into_any_element(),
-            )
-        } else {
-            None
-        };
-
-        let tool_label = if is_running {
-            Some(if tool_count == 1 {
-                SharedString::from("1 tool")
-            } else {
-                SharedString::from(format!("{} tools", tool_count))
-            })
-        } else {
-            None
-        };
-
-        AiSettingItem::new(item_id, display_name, status, source)
-            .action(context_server_configuration_menu)
-            .action(
-                Switch::new("context-server-switch", is_running.into()).on_click({
-                    let context_server_manager = self.context_server_store.clone();
-                    let fs = self.fs.clone();
-
-                    move |state, _window, cx| {
-                        let is_enabled = match state {
-                            ToggleState::Unselected | ToggleState::Indeterminate => {
-                                context_server_manager.update(cx, |this, cx| {
-                                    this.stop_server(&context_server_id, cx).log_err();
-                                });
-                                false
-                            }
-                            ToggleState::Selected => {
-                                context_server_manager.update(cx, |this, cx| {
-                                    if let Some(server) = this.get_server(&context_server_id) {
-                                        this.start_server(server, cx);
-                                    }
-                                });
-                                true
-                            }
-                        };
-                        update_settings_file(fs.clone(), cx, {
-                            let context_server_id = context_server_id.clone();
-
-                            move |settings, _| {
-                                settings
-                                    .project
-                                    .context_servers
-                                    .entry(context_server_id.0)
-                                    .or_insert_with(|| {
-                                        settings::ContextServerSettingsContent::Extension {
-                                            enabled: is_enabled,
-                                            remote: false,
-                                            settings: serde_json::json!({}),
-                                        }
-                                    })
-                                    .set_enabled(is_enabled);
-                            }
-                        });
-                    }
-                }),
-            )
-            .when_some(tool_label, |this, label| this.detail_label(label))
-            .when_some(details, |this, details| this.details(details))
-    }
-
     fn render_agent_servers_section(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let agent_server_store = self.agent_server_store.read(cx);
 
@@ -1531,8 +1075,8 @@ impl Render for AgentConfiguration {
                             .size_full()
                             .min_w_0()
                             .overflow_y_scroll()
+                            // ponytail: seção de MCP Servers removida — os MCPs vivem na sidebar
                             .child(self.render_agent_servers_section(cx))
-                            .child(self.render_context_servers_section(cx))
                             .child(self.render_stt_section(cx))
                             .child(self.render_provider_configuration_section(cx)),
                     )

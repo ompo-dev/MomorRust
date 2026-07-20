@@ -687,6 +687,8 @@ pub struct AgentPanel {
     selected_agent: Agent,
     _thread_view_subscription: Option<Subscription>,
     _active_thread_focus_subscription: Option<Subscription>,
+    /// Escuta Ativa: dono único do disparo — roteia a pergunta do interlocutor pra thread ativa.
+    _stt_answer_subscription: Subscription,
     _base_view_observation: Option<Subscription>,
     _draft_editor_observation: Option<Subscription>,
     _thread_metadata_store_subscription: Subscription,
@@ -936,7 +938,7 @@ impl AgentPanel {
     pub(crate) fn new(
         workspace: &Workspace,
         prompt_store: Option<Entity<PromptStore>>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
         let fs = workspace.app_state().fs.clone();
@@ -1002,6 +1004,24 @@ impl AgentPanel {
             },
         );
 
+        // Escuta Ativa: dono ÚNICO do disparo. O STT emite InterlocutorTurn quando o
+        // interlocutor termina de perguntar; roteamos pra thread ativa (evita o fan-out de
+        // N ThreadViews). `active_thread_view` devolve None se o painel não está numa thread.
+        let _stt_answer_subscription = cx.subscribe_in(
+            &stt::Stt::global(cx),
+            window,
+            |this, _stt, event: &stt::SttEvent, window, cx| {
+                if let stt::SttEvent::InterlocutorTurn(question) = event
+                    && let Some(thread_view) = this.active_thread_view(cx)
+                {
+                    let question = question.clone();
+                    thread_view.update(cx, |thread_view, cx| {
+                        thread_view.auto_answer(question, window, cx);
+                    });
+                }
+            },
+        );
+
         let mut panel = Self {
             workspace_id,
             base_view,
@@ -1030,6 +1050,7 @@ impl AgentPanel {
             selected_agent: Agent::default(),
             _thread_view_subscription: None,
             _active_thread_focus_subscription: None,
+            _stt_answer_subscription,
             _base_view_observation: None,
             _draft_editor_observation: None,
             _thread_metadata_store_subscription,

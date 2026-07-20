@@ -47,6 +47,30 @@ pub fn refresh_panel(cx: &mut App) {
     }
 }
 
+/// Marca um item para abrir no próximo render do painel. Usado por tools da IA, que não têm
+/// `Window` para criar o editor imediatamente.
+pub fn open_on_next_render(kind: &str, id: String, cx: &mut App) {
+    workspace::set_notebook_open(true, cx);
+    let val = format!("{kind}:{id}");
+    let store = db::kvp::KeyValueStore::global(cx);
+    db::write_and_log(cx, move || {
+        let val = val.clone();
+        async move { store.write_kvp("momor_open_item".into(), val).await }
+    });
+    let Some(view) = cx
+        .try_global::<workspace::NotebookSlot>()
+        .and_then(|slot| slot.view.clone())
+    else {
+        return;
+    };
+    if let Ok(panel) = view.downcast::<NotebookPanel>() {
+        panel.update(cx, |panel, cx| {
+            panel.restored = false;
+            panel.reload(cx);
+        });
+    }
+}
+
 /// Abre um item (nota/reunião/skill/mcp) no painel a partir de fora — ex.: clicar num badge
 /// de citação no chat. Garante a sidebar aberta.
 pub fn open_item(kind: &str, id: String, window: &mut Window, cx: &mut App) {

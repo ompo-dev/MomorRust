@@ -24,6 +24,15 @@ const TARGET_RATE: u32 = 16000;
 const MAX_SEGMENTS: usize = 60;
 /// Quantas barras o waveform do pill mostra.
 const WAVEFORM_BARS: usize = 14;
+/// Escuta Ativa: mínimo de palavras num turno do interlocutor pra valer uma auto-resposta.
+const MIN_TURN_WORDS: usize = 3;
+/// Escuta Ativa: intervalo mínimo entre auto-respostas (anti-duplo-disparo).
+const ACTIVE_LISTEN_COOLDOWN: std::time::Duration = std::time::Duration::from_millis(1500);
+/// Palavras de preenchimento que, sozinhas, NÃO viram pergunta (pt-BR + en).
+const FILLERS: &[&str] = &[
+    "ok", "okay", "tá", "ta", "sim", "não", "nao", "certo", "aham", "ãn", "an", "né", "ne",
+    "entendi", "hmm", "uhum", "uhn", "yeah", "yep", "right", "sure", "mm", "hm",
+];
 
 /// Quem falou. `Me` = microfone (você), `Other` = áudio do sistema (interlocutor).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -61,6 +70,8 @@ pub enum DeliveryMode {
     Context,
     /// Vai digitada na caixa de mensagem (o usuário revê/edita).
     Prompt,
+    /// Escuta Ativa: quando o interlocutor termina de perguntar, a IA responde sozinha.
+    ActiveListen,
 }
 
 pub enum SttEvent {
@@ -73,6 +84,9 @@ pub enum SttEvent {
     /// Sessão encerrada: transcrição completa formatada (pro registro da reunião).
     /// Vazio se nada foi falado.
     SessionEnded(String),
+    /// Escuta Ativa: o interlocutor terminou uma pergunta (já coalescida e filtrada).
+    /// O painel do agent auto-responde na thread ativa.
+    InterlocutorTurn(String),
 }
 
 /// Filas de áudio já resampladas pra 16 kHz mono i16, uma por fonte.
@@ -88,6 +102,13 @@ struct RawTranscript {
     is_final: bool,
 }
 
+/// Mensagem do canal de captura → UI: um trecho transcrito, ou o fim de um turno de fala
+/// (detectado pelo `UtteranceEnd` do Deepgram) daquele falante.
+enum SttMsg {
+    Transcript(RawTranscript),
+    TurnEnd(Speaker),
+}
+
 struct GlobalStt(Entity<Stt>);
 impl Global for GlobalStt {}
 
@@ -98,6 +119,10 @@ pub struct Stt {
     session_log: Vec<Segment>,
     partials: [String; 2],
     delivery: DeliveryMode,
+    /// Escuta Ativa: acumula os trechos finais do interlocutor até o fim do turno.
+    active_turn: String,
+    /// Escuta Ativa: quando a última auto-resposta disparou (cooldown).
+    last_fired: Option<std::time::Instant>,
     selected_mic: Option<String>,
     stop_flag: Arc<AtomicBool>,
     /// Quando a sessão começou (pro cronômetro).
@@ -121,6 +146,8 @@ pub fn init(cx: &mut App) {
         session_log: Vec::new(),
         partials: [String::new(), String::new()],
         delivery: DeliveryMode::Context,
+        active_turn: String::new(),
+        last_fired: None,
         selected_mic: None,
         stop_flag: Arc::new(AtomicBool::new(false)),
         started_at: None,
@@ -148,7 +175,17 @@ impl Stt {
     }
 
     pub fn set_delivery(&mut self, mode: DeliveryMode, cx: &mut Context<Self>) {
+        let needs_system =
+            |d: DeliveryMode| matches!(d, DeliveryMode::Context | DeliveryMode::ActiveListen);
+        // Se a exigência de captura do sistema (loopback) muda com a sessão rodando, reinicia
+        // pra ligar/desligar a 2ª sessão. ponytail: reiniciar emite SessionEnded → a reunião
+        // sai em duas partes; aceitável (armar antes do play evita).
+        let restart = self.running && needs_system(self.delivery) != needs_system(mode);
         self.delivery = mode;
+        if restart {
+            self.stop(cx);
+            self.start(cx);
+        }
         cx.emit(SttEvent::Updated);
         cx.notify();
     }
@@ -283,6 +320,8 @@ impl Stt {
         self._capture.clear();
         self.running = false;
         self.partials = [String::new(), String::new()];
+        self.active_turn.clear();
+        self.last_fired = None;
         self.started_at = None;
         self.waveform_mic.clear();
         self.waveform_sys.clear();
@@ -313,6 +352,8 @@ impl Stt {
         log::info!("STT: iniciando com {} ({} chave(s))", provider.name(), keys.len());
 
         self.session_log.clear();
+        self.active_turn.clear();
+        self.last_fired = None;
         self.started_at = Some(std::time::Instant::now());
         self.waveform_mic.clear();
         self.waveform_sys.clear();
@@ -336,9 +377,10 @@ impl Stt {
             Ok(handle) => capture.push(handle),
             Err(e) => log::error!("STT: falha ao capturar microfone: {e:#}"),
         }
-        // ponytail: modo Prompt = ditado (só o meu mic). Só o modo Contexto ("reunião")
-        // captura o áudio do sistema (interlocutor).
-        let capture_system = self.delivery == DeliveryMode::Context;
+        // ponytail: modo Prompt = ditado (só o meu mic). Contexto ("reunião") e Escuta Ativa
+        // capturam o áudio do sistema (interlocutor).
+        let capture_system =
+            matches!(self.delivery, DeliveryMode::Context | DeliveryMode::ActiveListen);
         #[cfg(target_os = "windows")]
         if capture_system {
             match spawn_capture(
@@ -354,7 +396,7 @@ impl Stt {
         }
         self._capture = capture;
 
-        let (msg_tx, mut msg_rx) = mpsc::unbounded::<RawTranscript>();
+        let (msg_tx, mut msg_rx) = mpsc::unbounded::<SttMsg>();
 
         // Duas sessões Deepgram: uma pro mic (Você), uma pro sistema (Interlocutor).
         let mic_task = gpui_tokio::Tokio::spawn(cx, {
@@ -386,23 +428,50 @@ impl Stt {
         });
 
         let ui_task = cx.spawn(async move |this, cx| {
-            while let Some(raw) = msg_rx.next().await {
+            while let Some(msg) = msg_rx.next().await {
                 this.update(cx, |stt, cx| {
-                    if raw.is_final {
-                        let text = raw.text.trim().to_string();
-                        if !text.is_empty() {
-                            stt.push_segment(raw.speaker, text.clone());
-                            cx.emit(SttEvent::FinalSegment(Segment {
-                                speaker: raw.speaker,
-                                text,
-                            }));
+                    match msg {
+                        SttMsg::Transcript(raw) => {
+                            if raw.is_final {
+                                let text = raw.text.trim().to_string();
+                                if !text.is_empty() {
+                                    // Escuta Ativa: acumula a fala do interlocutor até o fim do turno.
+                                    if raw.speaker == Speaker::Other {
+                                        if !stt.active_turn.is_empty() {
+                                            stt.active_turn.push(' ');
+                                        }
+                                        stt.active_turn.push_str(&text);
+                                    }
+                                    stt.push_segment(raw.speaker, text.clone());
+                                    cx.emit(SttEvent::FinalSegment(Segment {
+                                        speaker: raw.speaker,
+                                        text,
+                                    }));
+                                }
+                                stt.partials[raw.speaker.idx()].clear();
+                            } else {
+                                stt.partials[raw.speaker.idx()] = raw.text;
+                            }
+                            cx.emit(SttEvent::Updated);
+                            cx.notify();
                         }
-                        stt.partials[raw.speaker.idx()].clear();
-                    } else {
-                        stt.partials[raw.speaker.idx()] = raw.text;
+                        SttMsg::TurnEnd(speaker) => {
+                            // Só o interlocutor dispara auto-resposta; drena o buffer sempre
+                            // (mesmo fora da Escuta Ativa) pra ele nunca crescer.
+                            if speaker == Speaker::Other {
+                                let q = std::mem::take(&mut stt.active_turn).trim().to_string();
+                                let ready = stt.delivery == DeliveryMode::ActiveListen
+                                    && is_fireable(&q)
+                                    && stt
+                                        .last_fired
+                                        .is_none_or(|t| t.elapsed() >= ACTIVE_LISTEN_COOLDOWN);
+                                if ready {
+                                    stt.last_fired = Some(std::time::Instant::now());
+                                    cx.emit(SttEvent::InterlocutorTurn(q));
+                                }
+                            }
+                        }
                     }
-                    cx.emit(SttEvent::Updated);
-                    cx.notify();
                 })
                 .ok();
             }
@@ -771,7 +840,7 @@ async fn run_deepgram_fallback(
     keys: Vec<String>,
     shared: Arc<SharedAudio>,
     stop_flag: Arc<AtomicBool>,
-    msg_tx: mpsc::UnboundedSender<RawTranscript>,
+    msg_tx: mpsc::UnboundedSender<SttMsg>,
 ) -> Result<()> {
     let mut last_err = None;
     for (i, key) in keys.iter().enumerate() {
@@ -806,16 +875,18 @@ async fn run_deepgram(
     api_key: String,
     shared: Arc<SharedAudio>,
     stop_flag: Arc<AtomicBool>,
-    msg_tx: mpsc::UnboundedSender<RawTranscript>,
+    msg_tx: mpsc::UnboundedSender<SttMsg>,
 ) -> Result<()> {
     use async_tungstenite::tungstenite::{client::IntoClientRequest, http::HeaderValue, Message};
 
     // ponytail: nova-3 + language=pt-BR (modelo PT atualizado do Deepgram) +
-    // endpointing=100 (recomendado pra streaming).
+    // endpointing=100 (recomendado pra streaming). utterance_end_ms=1000 emite {"type":
+    // "UtteranceEnd"} quando o falante para ~1s → sinal de fim de turno da Escuta Ativa
+    // (robusto a ruído; requer interim_results, já ligado).
     let url = format!(
         "wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate={TARGET_RATE}\
          &channels=1&model=nova-3&language=pt-BR&interim_results=true&smart_format=true\
-         &endpointing=100"
+         &endpointing=100&utterance_end_ms=1000"
     );
     log::info!("STT: conectando no Deepgram ({})...", speaker.label());
     let mut request = url.as_str().into_client_request()?;
@@ -860,25 +931,38 @@ async fn run_deepgram(
     };
 
     let reader = async move {
+        // Escuta Ativa: só emite TurnEnd se houve fala desde o último fim de turno
+        // (evita disparar num UtteranceEnd de silêncio puro).
+        let mut spoke_since_turn = false;
         while let Some(msg) = read.next().await {
             match msg {
-                Ok(Message::Text(text)) => {
-                    if let Some((transcript, is_final)) = parse_deepgram(&text) {
-                        if transcript.is_empty() {
+                Ok(Message::Text(text)) => match parse_deepgram(&text) {
+                    Some(DgMsg::Transcript { text, is_final }) => {
+                        if text.is_empty() {
                             continue;
                         }
+                        spoke_since_turn = true;
                         if msg_tx
-                            .unbounded_send(RawTranscript {
+                            .unbounded_send(SttMsg::Transcript(RawTranscript {
                                 speaker,
-                                text: transcript,
+                                text,
                                 is_final,
-                            })
+                            }))
                             .is_err()
                         {
                             break;
                         }
                     }
-                }
+                    Some(DgMsg::UtteranceEnd) => {
+                        if spoke_since_turn {
+                            spoke_since_turn = false;
+                            if msg_tx.unbounded_send(SttMsg::TurnEnd(speaker)).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    None => {}
+                },
                 Ok(Message::Close(frame)) => {
                     log::warn!("STT: Deepgram fechou ({}): {frame:?}", speaker.label());
                     break;
@@ -905,9 +989,19 @@ fn drain(shared: &SharedAudio, speaker: Speaker) -> Vec<i16> {
     queue.drain(..).collect()
 }
 
-/// Extrai `channel.alternatives[0].transcript` e `is_final` do JSON do Deepgram.
-fn parse_deepgram(text: &str) -> Option<(String, bool)> {
+/// Mensagem relevante vinda do Deepgram: um trecho transcrito ou o fim de um turno de fala.
+enum DgMsg {
+    Transcript { text: String, is_final: bool },
+    UtteranceEnd,
+}
+
+/// Classifica o JSON do Deepgram: `{"type":"UtteranceEnd"}` → fim de turno; senão extrai
+/// `channel.alternatives[0].transcript` + `is_final`.
+fn parse_deepgram(text: &str) -> Option<DgMsg> {
     let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    if value.get("type").and_then(|v| v.as_str()) == Some("UtteranceEnd") {
+        return Some(DgMsg::UtteranceEnd);
+    }
     let transcript = value
         .get("channel")?
         .get("alternatives")?
@@ -919,5 +1013,55 @@ fn parse_deepgram(text: &str) -> Option<(String, bool)> {
         .get("is_final")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    Some((transcript, is_final))
+    Some(DgMsg::Transcript {
+        text: transcript,
+        is_final,
+    })
+}
+
+/// Escuta Ativa: o turno do interlocutor vira uma auto-resposta? Falso se for curto demais
+/// ou só palavras de preenchimento ("ok", "aham", "certo aham"...).
+fn is_fireable(text: &str) -> bool {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.len() < MIN_TURN_WORDS {
+        return false;
+    }
+    let all_filler = words.iter().all(|w| {
+        let w = w
+            .trim_matches(|c: char| !c.is_alphanumeric())
+            .to_lowercase();
+        w.is_empty() || FILLERS.contains(&w.as_str())
+    });
+    !all_filler
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fireable_gate() {
+        // pergunta real dispara
+        assert!(is_fireable("me fala sobre seu projeto anterior"));
+        assert!(is_fireable("qual foi o maior desafio técnico?"));
+        // curto demais não dispara
+        assert!(!is_fireable("ok"));
+        assert!(!is_fireable("sim claro"));
+        // só filler não dispara, mesmo com 3+ palavras
+        assert!(!is_fireable("ok certo aham"));
+    }
+
+    #[test]
+    fn parses_utterance_end() {
+        assert!(matches!(
+            parse_deepgram(r#"{"type":"UtteranceEnd","channel":[0,1],"last_word_end":3.2}"#),
+            Some(DgMsg::UtteranceEnd)
+        ));
+        assert!(matches!(
+            parse_deepgram(
+                r#"{"type":"Results","is_final":true,"channel":{"alternatives":[{"transcript":"oi"}]}}"#
+            ),
+            Some(DgMsg::Transcript { is_final: true, .. })
+        ));
+    }
 }
