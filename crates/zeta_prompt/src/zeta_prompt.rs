@@ -5961,7 +5961,7 @@ mod tests {
 
     #[test]
     fn test_special_tokens_not_triggered_by_comment_separator() {
-        // Regression test for https://github.com/zed-industries/zed/issues/52489
+        // Regression test for https://github.com/momor-industries/momor/issues/52489
         let excerpt = "fn main() {\n    // =======\n    println!(\"hello\");\n}\n";
         let input = make_input(excerpt, 0..excerpt.len(), 0, vec![], vec![]);
         assert!(

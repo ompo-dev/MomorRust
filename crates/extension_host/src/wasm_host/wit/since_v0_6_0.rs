@@ -23,17 +23,17 @@ wasmtime::component::bindgen!({
         "worktree": ExtensionWorktree,
         "project": ExtensionProject,
         "key-value-store": ExtensionKeyValueStore,
-        "zed:extension/common": latest::zed::extension::common,
-        "zed:extension/http-client": latest::zed::extension::http_client,
-        "zed:extension/nodejs": latest::zed::extension::nodejs,
-        "zed:extension/platform": latest::zed::extension::platform,
-        "zed:extension/process": latest::zed::extension::process,
-        "zed:extension/slash-command": latest::zed::extension::slash_command,
-        "zed:extension/context-server": latest::zed::extension::context_server,
+        "momor:extension/common": latest::momor::extension::common,
+        "momor:extension/http-client": latest::momor::extension::http_client,
+        "momor:extension/nodejs": latest::momor::extension::nodejs,
+        "momor:extension/platform": latest::momor::extension::platform,
+        "momor:extension/process": latest::momor::extension::process,
+        "momor:extension/slash-command": latest::momor::extension::slash_command,
+        "momor:extension/context-server": latest::momor::extension::context_server,
     },
 });
 
-pub use self::zed::extension::*;
+pub use self::momor::extension::*;
 
 mod settings {
     #![allow(dead_code)]
@@ -139,7 +139,7 @@ impl From<github::GithubReleaseOptions> for latest::github::GithubReleaseOptions
     }
 }
 
-impl zed::extension::github::Host for WasmState {
+impl momor::extension::github::Host for WasmState {
     async fn github_release_by_tag_name(
         &mut self,
         repo: String,
@@ -696,7 +696,7 @@ impl TryFrom<latest::DebugAdapterBinary> for DebugAdapterBinary {
     }
 }
 
-impl zed::extension::dap::Host for WasmState {
+impl momor::extension::dap::Host for WasmState {
     async fn resolve_tcp_template(
         &mut self,
         template: dap::TcpArgumentsTemplate,

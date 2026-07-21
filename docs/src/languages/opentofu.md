@@ -1,11 +1,11 @@
 ---
 title: OpenTofu
-description: "Configure OpenTofu language support in Zed, including language servers, formatting, and debugging."
+description: "Configure OpenTofu language support in Momor, including language servers, formatting, and debugging."
 ---
 
 # OpenTofu
 
-OpenTofu support is available through the [OpenTofu extension](https://github.com/ashpool37/zed-extension-opentofu).
+OpenTofu support is available through the [OpenTofu extension](https://github.com/ashpool37/momor-extension-opentofu).
 
 - Tree-sitter: [MichaHoffmann/tree-sitter-hcl](https://github.com/MichaHoffmann/tree-sitter-hcl)
 - Language Server: [opentofu/tofu-ls](https://github.com/opentofu/tofu-ls)

@@ -23,4 +23,4 @@ rustflags = ["-C", "link-arg=-fuse-ld=lld"]
 [env]
 MACOSX_DEPLOYMENT_TARGET = "10.15.7"
 # ponytail: MSVC 2019 não tem stdalign.h (C11); shim em build-support/ p/ headers C do wasmtime
-CFLAGS = "-IC:\\Projects\\Teste\\zed+momor\\zed\\build-support"
+CFLAGS = "-IC:\\Projects\\Teste\\momor+momor\\momor\\build-support"

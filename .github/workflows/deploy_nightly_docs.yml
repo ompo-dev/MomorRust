@@ -4,13 +4,13 @@ name: deploy_nightly_docs
 on:
   push:
     branches:
-    - main
+      - main
 jobs:
   deploy_docs:
-    if: (github.repository_owner == 'zed-industries' || github.repository_owner == 'zed-extensions')
+    if: (github.repository_owner == 'momor-industries' || github.repository_owner == 'momor-extensions')
     permissions:
       contents: read
-    uses: zed-industries/zed/.github/workflows/deploy_docs.yml@main
+    uses: momor-industries/momor/.github/workflows/deploy_docs.yml@main
     secrets:
       DOCS_AMPLITUDE_API_KEY: ${{ secrets.DOCS_AMPLITUDE_API_KEY }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

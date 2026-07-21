@@ -520,7 +520,7 @@ impl TerminalElement {
     /// and borders where color matching with adjacent backgrounds is critical.
     /// Regular icons (git, folders, etc.) are excluded as they need to remain readable.
     ///
-    /// Fixes https://github.com/zed-industries/zed/issues/34234
+    /// Fixes https://github.com/momor-industries/momor/issues/34234
     fn is_decorative_character(ch: char) -> bool {
         matches!(
             ch as u32,
@@ -983,7 +983,7 @@ impl Element for TerminalElement {
                     size.width -= gutter;
                     let available_height = size.height;
 
-                    // https://github.com/zed-industries/zed/issues/2750
+                    // https://github.com/momor-industries/momor/issues/2750
                     // if the terminal is one column wide, rendering 🦀
                     // causes alacritty to misbehave.
                     if size.width < cell_width * 2.0 {

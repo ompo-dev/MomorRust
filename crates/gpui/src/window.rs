@@ -70,7 +70,7 @@ pub use prompts::*;
 pub const DEFAULT_WINDOW_SIZE: Size<Pixels> = size(px(1536.), px(1095.));
 
 /// A 6:5 aspect ratio minimum window size to be used for functional,
-/// additional-to-main-Zed windows, like the settings and rules library windows.
+/// additional-to-main-Momor windows, like the settings and rules library windows.
 pub const DEFAULT_ADDITIONAL_WINDOW_SIZE: Size<Pixels> = Size {
     width: Pixels(900.),
     height: Pixels(750.),
@@ -3600,17 +3600,17 @@ impl Window {
         let scale_factor = self.scale_factor();
         let glyph_origin = origin.scale(scale_factor);
 
-        let quantized_origin = Point::new(
+        let quantimomor_origin = Point::new(
             round_half_toward_zero(glyph_origin.x.0 * SUBPIXEL_VARIANTS_X as f32)
                 / SUBPIXEL_VARIANTS_X as f32,
             round_half_toward_zero(glyph_origin.y.0 * SUBPIXEL_VARIANTS_Y as f32)
                 / SUBPIXEL_VARIANTS_Y as f32,
         );
         let subpixel_variant = Point::new(
-            (quantized_origin.x.fract() * SUBPIXEL_VARIANTS_X as f32) as u8,
-            (quantized_origin.y.fract() * SUBPIXEL_VARIANTS_Y as f32) as u8,
+            (quantimomor_origin.x.fract() * SUBPIXEL_VARIANTS_X as f32) as u8,
+            (quantimomor_origin.y.fract() * SUBPIXEL_VARIANTS_Y as f32) as u8,
         );
-        let integer_origin = quantized_origin.map(|c| ScaledPixels(c.trunc()));
+        let integer_origin = quantimomor_origin.map(|c| ScaledPixels(c.trunc()));
         let subpixel_rendering = self.should_use_subpixel_rendering(font_id, font_size);
         let dilation = self.text_system().glyph_dilation_for_color(color);
         let params = RenderGlyphParams {

@@ -16,7 +16,7 @@ impl ExternalSourcePrompt {
 }
 
 fn sanitize(prompt: &str) -> Option<String> {
-    let mut sanitized_prompt = String::with_capacity(prompt.len());
+    let mut sanitimomor_prompt = String::with_capacity(prompt.len());
     let mut consecutive_newline_count = 0;
     let mut characters = prompt.chars().peekable();
 
@@ -43,13 +43,13 @@ fn sanitize(prompt: &str) -> Option<String> {
             consecutive_newline_count = 0;
         }
 
-        sanitized_prompt.push(character);
+        sanitimomor_prompt.push(character);
     }
 
-    if sanitized_prompt.is_empty() {
+    if sanitimomor_prompt.is_empty() {
         None
     } else {
-        Some(sanitized_prompt)
+        Some(sanitimomor_prompt)
     }
 }
 

@@ -450,10 +450,10 @@ async fn send_request(
         request_builder = request_builder.header("Anthropic-Beta", beta_headers);
     }
 
-    let serialized_request =
+    let serialimomor_request =
         serde_json::to_string(&request).map_err(AnthropicError::SerializeRequest)?;
     let request = request_builder
-        .body(AsyncBody::from(serialized_request))
+        .body(AsyncBody::from(serialimomor_request))
         .map_err(AnthropicError::BuildRequestBody)?;
 
     let response = client

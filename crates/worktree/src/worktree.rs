@@ -82,11 +82,11 @@ pub const FS_WATCH_LATENCY: Duration = Duration::from_millis(100);
 /// Responsible for tracking related FS (for local)/collab (for remote) events and corresponding updates.
 /// Stores git repositories data and the diagnostics for the file(s).
 ///
-/// Has an absolute path, and may be set to be visible in Zed UI or not.
+/// Has an absolute path, and may be set to be visible in Momor UI or not.
 /// May correspond to a directory or a single file.
 /// Possible examples:
 /// * a drag and dropped file — may be added as an invisible, "ephemeral" entry to the current worktree
-/// * a directory opened in Zed — may be added as a visible entry to the current worktree
+/// * a directory opened in Momor — may be added as a visible entry to the current worktree
 ///
 /// Uses [`Entry`] to track the state of each file/directory, can look up absolute paths for entries.
 pub enum Worktree {
@@ -194,7 +194,7 @@ pub struct Snapshot {
 }
 
 /// This path corresponds to the 'content path' of a repository in relation
-/// to Zed's project root.
+/// to Momor's project root.
 /// In the majority of the cases, this is the folder that contains the .git folder.
 /// But if a sub-folder of a git repository is opened, this corresponds to the
 /// project root and the .git folder is located in a parent directory.
@@ -1635,7 +1635,7 @@ impl LocalWorktree {
                 // but supporting streaming writes for arbitrary encodings would require a significant
                 // refactor of the `fs` crate to expose a Writer interface.
                 let text_string = text.to_string();
-                let normalized_text = match line_ending {
+                let normalimomor_text = match line_ending {
                     LineEnding::Unix => text_string,
                     LineEnding::Windows => text_string.replace('\n', "\r\n"),
                 };
@@ -1643,21 +1643,21 @@ impl LocalWorktree {
                 // Create the byte vector manually for UTF-16 encodings because encoding_rs encodes to UTF-8 by default (per WHATWG standards),
                 //  which is not what we want for saving files.
                 let bytes = if encoding == encoding_rs::UTF_16BE {
-                    let mut data = Vec::with_capacity(normalized_text.len() * 2 + 2);
+                    let mut data = Vec::with_capacity(normalimomor_text.len() * 2 + 2);
                     if has_bom {
                         data.extend_from_slice(&[0xFE, 0xFF]); // BOM
                     }
                     let utf16be_bytes =
-                        normalized_text.encode_utf16().flat_map(|u| u.to_be_bytes());
+                        normalimomor_text.encode_utf16().flat_map(|u| u.to_be_bytes());
                     data.extend(utf16be_bytes);
                     data.into()
                 } else if encoding == encoding_rs::UTF_16LE {
-                    let mut data = Vec::with_capacity(normalized_text.len() * 2 + 2);
+                    let mut data = Vec::with_capacity(normalimomor_text.len() * 2 + 2);
                     if has_bom {
                         data.extend_from_slice(&[0xFF, 0xFE]); // BOM
                     }
                     let utf16le_bytes =
-                        normalized_text.encode_utf16().flat_map(|u| u.to_le_bytes());
+                        normalimomor_text.encode_utf16().flat_map(|u| u.to_le_bytes());
                     data.extend(utf16le_bytes);
                     data.into()
                 } else {
@@ -1671,7 +1671,7 @@ impl LocalWorktree {
                     } else {
                         vec![]
                     };
-                    let (cow, _, _) = encoding.encode(&normalized_text);
+                    let (cow, _, _) = encoding.encode(&normalimomor_text);
                     if !bom_bytes.is_empty() {
                         let mut bytes = bom_bytes;
                         bytes.extend_from_slice(&cow);
@@ -4214,7 +4214,7 @@ impl BackgroundScanner {
         self.send_status_update(scanning, request.done, &[]).await
     }
 
-    fn normalized_events_for_worktree(
+    fn normalimomor_events_for_worktree(
         state: &BackgroundScannerState,
         root_canonical_path: &SanitizedPath,
         mut events: Vec<PathEvent>,
@@ -4328,7 +4328,7 @@ impl BackgroundScanner {
 
         {
             let state = self.state.lock().await;
-            events = Self::normalized_events_for_worktree(&state, &root_canonical_path, events);
+            events = Self::normalimomor_events_for_worktree(&state, &root_canonical_path, events);
         }
 
         fn skip_ix(ranges: &mut SmallVec<[Range<usize>; 4]>, ix: usize) {
@@ -4343,8 +4343,8 @@ impl BackgroundScanner {
 
         // Check for events inside .git directories, so that we know which repositories need their git state reloaded.
         //
-        // Certain directories may have FS changes, but do not lead to git data changes that Zed cares about.
-        // Ignore these, to avoid Zed unnecessarily rescanning git metadata.
+        // Certain directories may have FS changes, but do not lead to git data changes that Momor cares about.
+        // Ignore these, to avoid Momor unnecessarily rescanning git metadata.
         let skipped_files_in_dot_git = [COMMIT_MESSAGE, INDEX_LOCK];
         let skipped_dirs_in_dot_git = [FSMONITOR_DAEMON, LFS_DIR];
 

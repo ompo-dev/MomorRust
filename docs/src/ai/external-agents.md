@@ -1,29 +1,29 @@
 ---
-title: Use Claude Agent, Gemini CLI, and Codex in Zed
-description: Run Claude Agent, Gemini CLI, Codex, and other AI coding agents directly in Zed via the Agent Client Protocol (ACP).
+title: Use Claude Agent, Gemini CLI, and Codex in Momor
+description: Run Claude Agent, Gemini CLI, Codex, and other AI coding agents directly in Momor via the Agent Client Protocol (ACP).
 ---
 
 # External Agents
 
-Zed supports many external agents, including CLI-based ones, through the [Agent Client Protocol (ACP)](https://agentclientprotocol.com).
+Momor supports many external agents, including CLI-based ones, through the [Agent Client Protocol (ACP)](https://agentclientprotocol.com).
 
-Zed supports [Gemini CLI](https://github.com/google-gemini/gemini-cli) (the reference ACP implementation), [Claude Agent](https://platform.claude.com/docs/en/agent-sdk/overview), [Codex](https://developers.openai.com/codex), [GitHub Copilot](https://github.com/github/copilot-language-server-release), and [additional agents](#add-more-agents) you can configure.
+Momor supports [Gemini CLI](https://github.com/google-gemini/gemini-cli) (the reference ACP implementation), [Claude Agent](https://platform.claude.com/docs/en/agent-sdk/overview), [Codex](https://developers.openai.com/codex), [GitHub Copilot](https://github.com/github/copilot-language-server-release), and [additional agents](#add-more-agents) you can configure.
 
-For Zed's built-in agent and the full list of tools it can use natively, see [Agent Tools](./tools.md).
+For Momor's built-in agent and the full list of tools it can use natively, see [Agent Tools](./tools.md).
 
-> Note that Zed's interaction with external agents is strictly UI-based; the billing, legal, and terms arrangement is directly between you and the agent provider.
-> Zed does not charge for use of external agents, and our [zero-data retention agreements/privacy guarantees](./ai-improvement.md) are **_only_** applicable for Zed's hosted models.
+> Note that Momor's interaction with external agents is strictly UI-based; the billing, legal, and terms arrangement is directly between you and the agent provider.
+> Momor does not charge for use of external agents, and our [zero-data retention agreements/privacy guarantees](./ai-improvement.md) are **_only_** applicable for Momor's hosted models.
 
 ## Gemini CLI {#gemini-cli}
 
-Zed provides the ability to run [Gemini CLI](https://github.com/google-gemini/gemini-cli) directly in the [agent panel](./agent-panel.md).
+Momor provides the ability to run [Gemini CLI](https://github.com/google-gemini/gemini-cli) directly in the [agent panel](./agent-panel.md).
 Under the hood we run Gemini CLI in the background, and talk to it over ACP.
 
 ### Getting Started
 
 First open the agent panel with {#kb agent::ToggleFocus}, and then use the `+` button in the top right to start a new Gemini CLI thread.
 
-If you'd like to bind this to a keyboard shortcut, you can do so by editing your `keymap.json` file via the `zed: open keymap file` command to include:
+If you'd like to bind this to a keyboard shortcut, you can do so by editing your `keymap.json` file via the `momor: open keymap file` command to include:
 
 ```json [keymap]
 [
@@ -40,36 +40,36 @@ If you'd like to bind this to a keyboard shortcut, you can do so by editing your
 
 #### Installation
 
-The first time you create a Gemini CLI thread, Zed will install [@google/gemini-cli](https://github.com/google-gemini/gemini-cli).
-This installation is only available to Zed and is kept up to date as you use the agent.
+The first time you create a Gemini CLI thread, Momor will install [@google/gemini-cli](https://github.com/google-gemini/gemini-cli).
+This installation is only available to Momor and is kept up to date as you use the agent.
 
 #### Authentication
 
 After you have Gemini CLI running, you'll be prompted to authenticate.
 
 Click the "Login" button to open the Gemini CLI interactively, where you can log in with your Google account or [Vertex AI](https://cloud.google.com/vertex-ai) credentials.
-Zed does not see your OAuth or access tokens in this case.
+Momor does not see your OAuth or access tokens in this case.
 
-If the `GEMINI_API_KEY` environment variable (or `GOOGLE_AI_API_KEY`) is already set, or you have configured a Google AI API key in Zed's [language model provider settings](./llm-providers.md#google-ai), it will be passed to Gemini CLI automatically.
+If the `GEMINI_API_KEY` environment variable (or `GOOGLE_AI_API_KEY`) is already set, or you have configured a Google AI API key in Momor's [language model provider settings](./llm-providers.md#google-ai), it will be passed to Gemini CLI automatically.
 
 For more information, see the [Gemini CLI docs](https://github.com/google-gemini/gemini-cli/blob/main/docs/index.md).
 
 ### Usage
 
-Gemini CLI supports the same workflows as Zed's first-party agent: code generation, refactoring, debugging, and Q&A. Add context by @-mentioning files, recent threads, or symbols.
+Gemini CLI supports the same workflows as Momor's first-party agent: code generation, refactoring, debugging, and Q&A. Add context by @-mentioning files, recent threads, or symbols.
 
 > Some agent panel features are not yet available with Gemini CLI: editing past messages, resuming threads from history, and checkpointing.
 
 ## Claude Agent
 
-Similar to Gemini CLI, you can also run [Claude Agent](https://platform.claude.com/docs/en/agent-sdk/overview) directly via Zed's [agent panel](./agent-panel.md).
-Under the hood, Zed runs the Claude Agent SDK, which runs Claude Code under the hood, and communicates to it over ACP, through [a dedicated adapter](https://github.com/zed-industries/claude-agent-acp).
+Similar to Gemini CLI, you can also run [Claude Agent](https://platform.claude.com/docs/en/agent-sdk/overview) directly via Momor's [agent panel](./agent-panel.md).
+Under the hood, Momor runs the Claude Agent SDK, which runs Claude Code under the hood, and communicates to it over ACP, through [a dedicated adapter](https://github.com/momor-industries/claude-agent-acp).
 
 ### Getting Started
 
 Open the agent panel with {#kb agent::ToggleFocus}, and then use the `+` button in the top right to start a new Claude Agent thread.
 
-If you'd like to bind this to a keyboard shortcut, you can do so by editing your `keymap.json` file via the `zed: open keymap file` command to include:
+If you'd like to bind this to a keyboard shortcut, you can do so by editing your `keymap.json` file via the `momor: open keymap file` command to include:
 
 ```json [keymap]
 [
@@ -86,7 +86,7 @@ If you'd like to bind this to a keyboard shortcut, you can do so by editing your
 
 ### Authentication
 
-As of version `0.202.7`, authentication to Zed's Claude Agent installation is decoupled entirely from Zed's agent.
+As of version `0.202.7`, authentication to Momor's Claude Agent installation is decoupled entirely from Momor's agent.
 That is to say, an Anthropic API key added via the [Momor Agent's settings](./llm-providers.md#anthropic) will _not_ be utilized by Claude Agent for authentication and billing.
 
 To ensure you're using your billing method of choice, [open a new Claude Agent thread](./agent-panel.md#new-thread).
@@ -94,10 +94,10 @@ Then, run `/login`, and authenticate either via API key, or via `Log in with Cla
 
 #### Installation
 
-The first time you create a Claude Agent thread, Zed will install [@zed-industries/claude-agent-acp](https://github.com/zed-industries/claude-agent-acp).
-This installation is only available to Zed and is kept up to date as you use the agent.
+The first time you create a Claude Agent thread, Momor will install [@momor-industries/claude-agent-acp](https://github.com/momor-industries/claude-agent-acp).
+This installation is only available to Momor and is kept up to date as you use the agent.
 
-Zed will always use this managed version of the Claude Agent adapter, which includes a vendored version of the Claude Code CLI, even if you have it installed globally.
+Momor will always use this managed version of the Claude Agent adapter, which includes a vendored version of the Claude Code CLI, even if you have it installed globally.
 
 If you want to override the executable used by the adapter, you can set the `CLAUDE_CODE_EXECUTABLE` environment variable in your settings to the path of your preferred executable.
 
@@ -116,9 +116,9 @@ If you want to override the executable used by the adapter, you can set the `CLA
 
 ### Usage
 
-Claude Agent supports the same workflows as Zed's first-party agent. Add context by @-mentioning files, recent threads, diagnostics, or symbols.
+Claude Agent supports the same workflows as Momor's first-party agent. Add context by @-mentioning files, recent threads, diagnostics, or symbols.
 
-In complement to talking to it [over ACP](https://agentclientprotocol.com), Zed relies on the [Claude Agent SDK](https://platform.claude.com/docs/en/agent-sdk/overview) to support some of its specific features.
+In complement to talking to it [over ACP](https://agentclientprotocol.com), Momor relies on the [Claude Agent SDK](https://platform.claude.com/docs/en/agent-sdk/overview) to support some of its specific features.
 However, the SDK doesn't yet expose everything needed to fully support all of them:
 
 - Slash Commands: [Custom slash commands](https://code.claude.com/docs/en/slash-commands#custom-slash-commands) are fully supported, and have been merged into skills. A subset of [built-in commands](https://code.claude.com/docs/en/slash-commands#built-in-slash-commands) are supported.
@@ -130,21 +130,21 @@ However, the SDK doesn't yet expose everything needed to fully support all of th
 
 #### CLAUDE.md
 
-Claude Agent in Zed will automatically use any `CLAUDE.md` file found in your project root, project subdirectories, or root `.claude` directory.
+Claude Agent in Momor will automatically use any `CLAUDE.md` file found in your project root, project subdirectories, or root `.claude` directory.
 
 If you don't have a `CLAUDE.md` file, you can ask Claude Agent to create one for you through the `init` slash command.
 
 ## Codex CLI
 
-You can also run [Codex CLI](https://github.com/openai/codex) directly via Zed's [agent panel](./agent-panel.md).
-Under the hood, Zed runs Codex CLI and communicates to it over ACP, through [a dedicated adapter](https://github.com/zed-industries/codex-acp).
+You can also run [Codex CLI](https://github.com/openai/codex) directly via Momor's [agent panel](./agent-panel.md).
+Under the hood, Momor runs Codex CLI and communicates to it over ACP, through [a dedicated adapter](https://github.com/momor-industries/codex-acp).
 
 ### Getting Started
 
-As of version `0.208`, you should be able to use Codex directly from Zed.
+As of version `0.208`, you should be able to use Codex directly from Momor.
 Open the agent panel with {#kb agent::ToggleFocus}, and then use the `+` button in the top right to start a new Codex thread.
 
-If you'd like to bind this to a keyboard shortcut, you can do so by editing your `keymap.json` file via the `zed: open keymap file` command to include:
+If you'd like to bind this to a keyboard shortcut, you can do so by editing your `keymap.json` file via the `momor: open keymap file` command to include:
 
 ```json
 [
@@ -161,7 +161,7 @@ If you'd like to bind this to a keyboard shortcut, you can do so by editing your
 
 ### Authentication
 
-Authentication to Zed's Codex installation is decoupled entirely from Zed's agent.
+Authentication to Momor's Codex installation is decoupled entirely from Momor's agent.
 That is to say, an OpenAI API key added via the [Momor Agent's settings](./llm-providers.md#openai) will _not_ be utilized by Codex for authentication and billing.
 
 To ensure you're using your billing method of choice, [open a new Codex thread](./agent-panel.md#new-thread).
@@ -177,14 +177,14 @@ If you want to use a third-party provider with Codex, you can configure that wit
 
 #### Installation
 
-The first time you create a Codex thread, Zed will install [codex-acp](https://github.com/zed-industries/codex-acp).
-This installation is only available to Zed and is kept up to date as you use the agent.
+The first time you create a Codex thread, Momor will install [codex-acp](https://github.com/momor-industries/codex-acp).
+This installation is only available to Momor and is kept up to date as you use the agent.
 
-Zed will always use this managed version of Codex even if you have it installed globally.
+Momor will always use this managed version of Codex even if you have it installed globally.
 
 ### Usage
 
-Codex supports the same workflows as Zed's first-party agent. Add context by @-mentioning files or symbols.
+Codex supports the same workflows as Momor's first-party agent. Add context by @-mentioning files or symbols.
 
 > Some agent panel features are not yet available with Codex: editing past messages, resuming threads from history, and checkpointing.
 
@@ -194,15 +194,15 @@ Codex supports the same workflows as Zed's first-party agent. Add context by @-m
 
 <div class="warning">
 
-Starting from `v0.221.x`, [the ACP Registry](https://agentclientprotocol.com/registry) is the preferred way to install external agents in Zed.
-Learn more about it in [the release blog post](https://zed.dev/blog/acp-registry).
+Starting from `v0.221.x`, [the ACP Registry](https://agentclientprotocol.com/registry) is the preferred way to install external agents in Momor.
+Learn more about it in [the release blog post](https://momor.dev/blog/acp-registry).
 At some point in the near future, Agent Server extensions will be deprecated.
 
 </div>
 
-Add more external agents to Zed by installing [Agent Server extensions](../extensions/agent-servers.md).
+Add more external agents to Momor by installing [Agent Server extensions](../extensions/agent-servers.md).
 
-See what agents are available by filtering for "Agent Servers" in the extensions page, which you can access via the command palette with `zed: extensions`, or the [Zed website](https://zed.dev/extensions?filter=agent-servers).
+See what agents are available by filtering for "Agent Servers" in the extensions page, which you can access via the command palette with `momor: extensions`, or the [Momor website](https://momor.dev/extensions?filter=agent-servers).
 
 ### Via The ACP Registry
 
@@ -214,9 +214,9 @@ As mentioned above, the Agent Server extensions will be deprecated in the near f
 
 At the moment, the registry is a curated set of agents, including only the ones that [support authentication](https://agentclientprotocol.com/rfds/auth-methods).
 
-#### Using it in Zed
+#### Using it in Momor
 
-Use the `zed: acp registry` command to quickly go to the ACP Registry page.
+Use the `momor: acp registry` command to quickly go to the ACP Registry page.
 There's also a button ("Add Agent") that takes you there in the agent panel's configuration view.
 
 From there, you can click to install your preferred agent and it will become available right away in the `+` icon button in the agent panel.
@@ -225,7 +225,7 @@ From there, you can click to install your preferred agent and it will become ava
 
 ### Custom Agents
 
-You can also add agents through your settings file ([how to edit](../configuring-zed.md#settings-files)) by specifying certain fields under `agent_servers`, like so:
+You can also add agents through your settings file ([how to edit](../configuring-momor.md#settings-files)) by specifying certain fields under `agent_servers`, like so:
 
 ```json [settings]
 {
@@ -246,20 +246,20 @@ It's also possible to customize environment variables for registry-installed age
 
 ## Debugging Agents
 
-When using external agents in Zed, you can access the debug view via with `dev: open acp logs` from the Command Palette.
-This lets you see the messages being sent and received between Zed and the agent.
+When using external agents in Momor, you can access the debug view via with `dev: open acp logs` from the Command Palette.
+This lets you see the messages being sent and received between Momor and the agent.
 
-![The debug view for ACP logs.](https://zed.dev/img/acp/acp-logs.webp)
+![The debug view for ACP logs.](https://momor.dev/img/acp/acp-logs.webp)
 
 It's helpful to attach data from this view if you're opening issues about problems with external agents like Claude Agent, Codex, OpenCode, etc.
 
 ## Configuration Boundaries {#configuration-boundaries}
 
-External agents run as separate processes that communicate with Zed via the [Agent Client Protocol (ACP)](https://agentclientprotocol.com). This creates important boundaries between Zed's configuration and the agent's native configuration.
+External agents run as separate processes that communicate with Momor via the [Agent Client Protocol (ACP)](https://agentclientprotocol.com). This creates important boundaries between Momor's configuration and the agent's native configuration.
 
-### What Zed Forwards to External Agents
+### What Momor Forwards to External Agents
 
-When you start an external agent thread, Zed sends:
+When you start an external agent thread, Momor sends:
 
 | Setting               | How to Configure                                                      |
 | --------------------- | --------------------------------------------------------------------- |
@@ -271,13 +271,13 @@ When you start an external agent thread, Zed sends:
 
 **Not forwarded:**
 
-- [Profiles](./agent-panel.md#profiles) — profiles only apply to Zed's first-party agent
+- [Profiles](./agent-panel.md#profiles) — profiles only apply to Momor's first-party agent
 - [Tool permissions](./tool-permissions.md) settings — external agents request permissions at runtime via UI prompts
-- Rules files — Zed's [rules system](./rules.md) only applies to Zed's first-party agent (external agents read their own rules files directly)
+- Rules files — Momor's [rules system](./rules.md) only applies to Momor's first-party agent (external agents read their own rules files directly)
 
 ### What External Agents Read Directly {#native-config}
 
-External agents run as CLI tools with full filesystem access. They read their own configuration files directly — Zed doesn't forward or block these.
+External agents run as CLI tools with full filesystem access. They read their own configuration files directly — Momor doesn't forward or block these.
 
 #### Claude Agent
 
@@ -288,25 +288,25 @@ Claude Agent runs Claude Code under the hood, which reads its standard configura
 | `~/.claude/` directory              | Yes — Claude Code reads its own settings and memory               |
 | CLAUDE.md files                     | Yes — Claude Code reads these directly from the project           |
 | Skills                              | Yes — exposed via the Claude Agent SDK                            |
-| MCP servers from Claude Code config | Yes — but Zed also forwards its own MCP servers via ACP           |
+| MCP servers from Claude Code config | Yes — but Momor also forwards its own MCP servers via ACP         |
 | Hooks                               | No — [not supported](https://code.claude.com/docs/en/hooks-guide) |
-| Authentication                      | Separate — you must authenticate via `/login` in Zed              |
+| Authentication                      | Separate — you must authenticate via `/login` in Momor            |
 
-> **Why separate authentication?** Zed isolates Claude Agent authentication to give you control over which account and billing method you use.
+> **Why separate authentication?** Momor isolates Claude Agent authentication to give you control over which account and billing method you use.
 
 #### Codex
 
 Codex runs the Codex CLI under the hood, which reads its standard configuration:
 
-| Config                        | Read by Codex?                                  |
-| ----------------------------- | ----------------------------------------------- |
-| `~/.codex/config.toml`        | Yes — Codex CLI reads its own config            |
-| MCP servers from Codex config | Yes — but Zed also forwards its own MCP servers |
-| `CODEX_API_KEY` env var       | Yes — inherited from your shell environment     |
-| `OPENAI_API_KEY` env var      | Yes — inherited from your shell environment     |
-| ChatGPT OAuth login           | Separate — you must re-authenticate in Zed      |
+| Config                        | Read by Codex?                                    |
+| ----------------------------- | ------------------------------------------------- |
+| `~/.codex/config.toml`        | Yes — Codex CLI reads its own config              |
+| MCP servers from Codex config | Yes — but Momor also forwards its own MCP servers |
+| `CODEX_API_KEY` env var       | Yes — inherited from your shell environment       |
+| `OPENAI_API_KEY` env var      | Yes — inherited from your shell environment       |
+| ChatGPT OAuth login           | Separate — you must re-authenticate in Momor      |
 
-You can also pass environment variables through Zed settings:
+You can also pass environment variables through Momor settings:
 
 ```json [settings]
 {
@@ -324,31 +324,31 @@ You can also pass environment variables through Zed settings:
 
 ### MCP Server Access {#mcp-server-access}
 
-MCP servers configured in Zed's `context_servers` are forwarded to Claude Agent and Codex via the ACP protocol.
+MCP servers configured in Momor's `context_servers` are forwarded to Claude Agent and Codex via the ACP protocol.
 
 - **Local stdio-based MCP servers:** Work reliably
-- **Remote MCP servers with OAuth:** May have issues ([#54410](https://github.com/zed-industries/zed/issues/54410))
+- **Remote MCP servers with OAuth:** May have issues ([#54410](https://github.com/momor-industries/momor/issues/54410))
 
-External agents can access MCP servers from two sources: Zed's `context_servers` (forwarded via ACP) and their own native configuration files (`~/.claude/`, `~/.codex/config.toml`).
+External agents can access MCP servers from two sources: Momor's `context_servers` (forwarded via ACP) and their own native configuration files (`~/.claude/`, `~/.codex/config.toml`).
 
 For more on configuring MCP servers, see [Model Context Protocol](./mcp.md).
 
 ### Troubleshooting {#troubleshooting}
 
-**"I enabled MCP tools in Zed but the agent can't see them"**
+**"I enabled MCP tools in Momor but the agent can't see them"**
 
 1. Verify the MCP server is enabled in `context_servers` settings
-2. For remote MCP servers with OAuth, this is a [known issue](https://github.com/zed-industries/zed/issues/54410) — try local stdio-based servers instead
+2. For remote MCP servers with OAuth, this is a [known issue](https://github.com/momor-industries/momor/issues/54410) — try local stdio-based servers instead
 3. Open `dev: open acp logs` from the Command Palette to debug
 
-**"My existing Claude Code / Codex setup isn't working in Zed"**
+**"My existing Claude Code / Codex setup isn't working in Momor"**
 
 External agents read their own config files, but authentication is handled separately:
 
 1. Re-authenticate via `/login` (Claude Agent) or the authentication prompt (Codex)
 2. Your existing MCP servers and settings from `~/.claude/` or `~/.codex/config.toml` should work
-3. You can also configure additional settings via `agent_servers.<agent>.env` in Zed
+3. You can also configure additional settings via `agent_servers.<agent>.env` in Momor
 
 **"Profiles don't affect my external agent"**
 
-Correct — [profiles](./agent-panel.md#profiles) only apply to Zed's first-party agent. External agents have their own tool sets and don't use Zed's profile system.
+Correct — [profiles](./agent-panel.md#profiles) only apply to Momor's first-party agent. External agents have their own tool sets and don't use Momor's profile system.

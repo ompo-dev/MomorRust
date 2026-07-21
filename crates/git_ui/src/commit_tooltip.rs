@@ -234,7 +234,7 @@ impl Render for CommitTooltip {
             .unwrap_or_else(|| self.commit.sha.clone());
         let full_sha = self.commit.sha.to_string();
         let local_offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
-        let absolute_timestamp = time_format::format_localized_timestamp(
+        let absolute_timestamp = time_format::format_localimomor_timestamp(
             self.commit.commit_time,
             OffsetDateTime::now_utc(),
             local_offset,
@@ -389,7 +389,7 @@ fn blame_entry_timestamp(blame_entry: &BlameEntry, format: time_format::Timestam
     match blame_entry.author_offset_date_time() {
         Ok(timestamp) => {
             let local_offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
-            time_format::format_localized_timestamp(
+            time_format::format_localimomor_timestamp(
                 timestamp,
                 time::OffsetDateTime::now_utc(),
                 local_offset,

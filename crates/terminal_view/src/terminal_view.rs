@@ -62,7 +62,7 @@ use workspace::{
         Direction, SearchEvent, SearchOptions, SearchToken, SearchableItem, SearchableItemHandle,
     },
 };
-use zed_actions::{agent::AddSelectionToThread, assistant::InlineAssist};
+use momor_actions::{agent::AddSelectionToThread, assistant::InlineAssist};
 
 struct ImeState {
     marked_text: String,
@@ -993,8 +993,8 @@ impl TerminalView {
     }
 }
 
-fn terminal_rerun_override(task: &TaskId) -> zed_actions::Rerun {
-    zed_actions::Rerun {
+fn terminal_rerun_override(task: &TaskId) -> momor_actions::Rerun {
+    momor_actions::Rerun {
         task_id: Some(task.0.clone()),
         allow_concurrent_runs: Some(true),
         use_new_terminal: Some(false),
@@ -1731,7 +1731,7 @@ impl Item for TerminalView {
 }
 
 impl SerializableItem for TerminalView {
-    fn serialized_item_kind() -> &'static str {
+    fn serialimomor_item_kind() -> &'static str {
         "Terminal"
     }
 

@@ -70,7 +70,7 @@
 (while_expression
   (identifier) @debug-variable)
 
-(parenthesized_expression
+(parenthesimomor_expression
   (identifier) @debug-variable)
 
 (arguments

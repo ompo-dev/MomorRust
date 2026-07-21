@@ -124,7 +124,7 @@ impl WindowsWindowState {
             nid.uCallbackMessage = WM_APP_TRAY;
             let hicon = unsafe { GetClassLongPtrW(hwnd, GCLP_HICON) };
             nid.hIcon = HICON(hicon as *mut _);
-            for (i, c) in "Zed".encode_utf16().enumerate() {
+            for (i, c) in "Momor".encode_utf16().enumerate() {
                 nid.szTip[i] = c;
             }
             let _ = unsafe { Shell_NotifyIconW(NIM_ADD, &nid) };
@@ -245,7 +245,7 @@ impl WindowsWindowState {
                 &self.border_offset,
                 self.scale_factor.get(),
             ),
-            placement.showCmd == SW_SHOWMAXIMIZED.0 as u32,
+            placement.showCmd == SW_SHOWMAXIMIMOMOR.0 as u32,
         )
     }
 
@@ -1386,7 +1386,7 @@ enum WindowOpenState {
     Windowed,
 }
 
-const WINDOW_CLASS_NAME: PCWSTR = w!("Zed::Window");
+const WINDOW_CLASS_NAME: PCWSTR = w!("Momor::Window");
 
 fn register_window_class(icon_handle: HICON) {
     static ONCE: Once = Once::new();
@@ -1466,7 +1466,7 @@ fn get_module_handle() -> HMODULE {
         let mut h_module = std::mem::zeroed();
         GetModuleHandleExW(
             GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            windows::core::w!("ZedModule"),
+            windows::core::w!("MomorModule"),
             &mut h_module,
         )
         .expect("Unable to get module handle"); // this should never fail

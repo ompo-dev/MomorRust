@@ -272,7 +272,7 @@ impl WorktreeStore {
             (WorktreeStoreState::Local { .. }, Some((client, REMOTE_SERVER_PROJECT_ID))) => {
                 Either::Left(client.clone())
             }
-            // we are just a local zed project, we can assign ids
+            // we are just a local momor project, we can assign ids
             (WorktreeStoreState::Local { .. }, _) => Either::Right(self.next_worktree_id.next()),
             // we are connected to a remote server, we are in charge of assigning worktree ids
             (WorktreeStoreState::Remote { .. }, _) => Either::Right(self.next_worktree_id.next()),
@@ -811,7 +811,7 @@ impl WorktreeStore {
                 return Ok(existing_worktree);
             }
 
-            let root_path_buf = PathBuf::from(response.canonicalized_path.clone());
+            let root_path_buf = PathBuf::from(response.canonicalimomor_path.clone());
             let root_name = root_path_buf
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
@@ -825,7 +825,7 @@ impl WorktreeStore {
                         id: response.worktree_id,
                         root_name,
                         visible,
-                        abs_path: response.canonicalized_path,
+                        abs_path: response.canonicalimomor_path,
                         root_repo_common_dir: response.root_repo_common_dir,
                     },
                     client,

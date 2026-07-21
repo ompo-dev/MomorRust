@@ -298,7 +298,7 @@ impl DevContainerManifest {
         let mut hasher = DefaultHasher::new();
         let prefix = match &self.dev_container().name {
             Some(name) => &safe_id_lower(name),
-            None => "zed-dc",
+            None => "momor-dc",
         };
         let prefix = prefix.get(..6).unwrap_or(prefix);
         let prefix = prefix.trim_matches(|c: char| !c.is_alphanumeric());
@@ -375,7 +375,7 @@ impl DevContainerManifest {
         let root_image_tag = self.get_base_image_from_config().await?;
         let root_image = self.docker_client.inspect(&root_image_tag).await?;
 
-        let temp_base = std::env::temp_dir().join("devcontainer-zed");
+        let temp_base = std::env::temp_dir().join("devcontainer-momor");
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
@@ -972,7 +972,7 @@ RUN sed -i -E 's/((^|\s)PATH=)([^\$]*)$/\1\${{PATH:-\3}}/g' /etc/profile || true
                 volumes: HashMap::new(),
             };
 
-            let temp_base = std::env::temp_dir().join("devcontainer-zed");
+            let temp_base = std::env::temp_dir().join("devcontainer-momor");
             let config_location = temp_base.join("docker_compose_build.json");
 
             let config_json = serde_json_lenient::to_string(&build_override).map_err(|e| {
@@ -1065,7 +1065,7 @@ RUN sed -i -E 's/((^|\s)PATH=)([^\$]*)$/\1\${{PATH:-\3}}/g' /etc/profile || true
                     volumes: HashMap::new(),
                 };
 
-                let temp_base = std::env::temp_dir().join("devcontainer-zed");
+                let temp_base = std::env::temp_dir().join("devcontainer-momor");
                 let config_location = temp_base.join("docker_compose_build.json");
 
                 let config_json = serde_json_lenient::to_string(&build_override).map_err(|e| {
@@ -1125,7 +1125,7 @@ RUN sed -i -E 's/((^|\s)PATH=)([^\$]*)$/\1\${{PATH:-\3}}/g' /etc/profile || true
     ) -> Result<PathBuf, DevContainerError> {
         let config =
             self.build_runtime_override(main_service_name, network_mode_service, resources)?;
-        let temp_base = std::env::temp_dir().join("devcontainer-zed");
+        let temp_base = std::env::temp_dir().join("devcontainer-momor");
         let config_location = temp_base.join("docker_compose_runtime.json");
 
         let config_json = serde_json_lenient::to_string(&config).map_err(|e| {
@@ -1153,12 +1153,12 @@ RUN sed -i -E 's/((^|\s)PATH=)([^\$]*)$/\1\${{PATH:-\3}}/g' /etc/profile || true
         let mut runtime_labels = HashMap::new();
 
         if let Some(metadata) = &resources.image.config.labels.metadata {
-            let serialized_metadata = serde_json_lenient::to_string(metadata).map_err(|e| {
+            let serialimomor_metadata = serde_json_lenient::to_string(metadata).map_err(|e| {
                 log::error!("Error serializing docker image metadata: {e}");
                 DevContainerError::ContainerNotValid(resources.image.id.clone())
             })?;
 
-            runtime_labels.insert("devcontainer.metadata".to_string(), serialized_metadata);
+            runtime_labels.insert("devcontainer.metadata".to_string(), serialimomor_metadata);
         }
 
         for (k, v) in self.identifying_labels() {
@@ -1893,14 +1893,14 @@ RUN sed -i -E 's/((^|\s)PATH=)([^\$]*)$/\1\${PATH:-\3}/g' /etc/profile || true
         }
 
         if let Some(metadata) = &build_resources.image.config.labels.metadata {
-            let serialized_metadata = serde_json_lenient::to_string(metadata).map_err(|e| {
+            let serialimomor_metadata = serde_json_lenient::to_string(metadata).map_err(|e| {
                 log::error!("Problem serializing image metadata: {e}");
                 DevContainerError::ContainerNotValid(build_resources.image.id.clone())
             })?;
             command.arg("-l");
             command.arg(format!(
                 "{}={}",
-                "devcontainer.metadata", serialized_metadata
+                "devcontainer.metadata", serialimomor_metadata
             ));
         }
 
@@ -1932,7 +1932,7 @@ RUN sed -i -E 's/((^|\s)PATH=)([^\$]*)$/\1\${PATH:-\3}/g' /etc/profile || true
         self.dev_container()
             .customizations
             .as_ref()
-            .map(|c| c.zed.extensions.clone())
+            .map(|c| c.momor.extensions.clone())
             .unwrap_or_default()
     }
 
@@ -3521,7 +3521,7 @@ mod test {
                     "GitHub.vscode-pull-request-github",
                   ],
                 },
-                "zed": {
+                "momor": {
                   "extensions": ["vue", "ruby"],
                 },
                 "codespaces": {
@@ -4252,7 +4252,7 @@ ENV DOCKER_BUILDKIT=1
         // that directory IS `<config>/.devcontainer`. A compose file at the
         // workspace root (as `"dockerComposeFile": "../docker-compose.yml"`
         // produces) must derive to the plain dir basename, not
-        // `project_devcontainer` — otherwise Zed diverges from the CLI.
+        // `project_devcontainer` — otherwise Momor diverges from the CLI.
         use crate::devcontainer_manifest::derive_project_name;
 
         let got = derive_project_name(
@@ -4946,7 +4946,7 @@ ENV DOCKER_BUILDKIT=1
                     "GitHub.vscode-pull-request-github",
                   ],
                 },
-                "zed": {
+                "momor": {
                   "extensions": ["vue", "ruby"],
                 },
                 "codespaces": {

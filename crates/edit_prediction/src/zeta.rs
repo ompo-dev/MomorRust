@@ -1,7 +1,7 @@
 use crate::{
     CurrentEditPrediction, DebugEvent, EditPredictionFinishedDebugEvent, EditPredictionId,
     EditPredictionModelInput, EditPredictionStartedDebugEvent, EditPredictionStore, StoredEvent,
-    ZedUpdateRequiredError, buffer_path_with_id_fallback,
+    MomorUpdateRequiredError, buffer_path_with_id_fallback,
     cursor_excerpt::{self, compute_cursor_excerpt, compute_syntax_ranges},
     prediction::EditPredictionResult,
 };
@@ -452,7 +452,7 @@ fn handle_api_response<T>(
             Ok(data)
         }
         Err(err) => {
-            if err.is::<ZedUpdateRequiredError>() {
+            if err.is::<MomorUpdateRequiredError>() {
                 cx.update(|cx| {
                     this.update(cx, |this, _cx| {
                         this.update_required = true;
@@ -461,12 +461,12 @@ fn handle_api_response<T>(
 
                     let error_message: SharedString = err.to_string().into();
                     show_app_notification(
-                        NotificationId::unique::<ZedUpdateRequiredError>(),
+                        NotificationId::unique::<MomorUpdateRequiredError>(),
                         cx,
                         move |cx| {
                             cx.new(|cx| {
                                 ErrorMessagePrompt::new(error_message.clone(), cx)
-                                    .with_link_button("Update Zed", "https://zed.dev/releases")
+                                    .with_link_button("Update Momor", "https://momor.dev/releases")
                             })
                         },
                     );
@@ -566,7 +566,7 @@ pub(crate) fn edit_prediction_accepted(
     current_prediction: CurrentEditPrediction,
     cx: &App,
 ) {
-    let custom_accept_url = env::var("ZED_ACCEPT_PREDICTION_URL").ok();
+    let custom_accept_url = env::var("MOMOR_ACCEPT_PREDICTION_URL").ok();
     if store.zeta2_raw_config().is_some() && custom_accept_url.is_none() {
         return;
     }
@@ -590,7 +590,7 @@ pub(crate) fn edit_prediction_accepted(
         } else {
             client
                 .http_client()
-                .build_zed_llm_url("/predict_edits/accept", &[])?
+                .build_momor_llm_url("/predict_edits/accept", &[])?
         };
 
         let response = EditPredictionStore::send_api_request::<()>(

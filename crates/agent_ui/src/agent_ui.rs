@@ -75,8 +75,8 @@ pub use thread_import::{
     AcpThreadImportOnboarding, CrossChannelImportOnboarding, ThreadImportModal,
     channels_with_threads, import_threads_from_other_channels,
 };
-use zed_actions;
-pub use zed_actions::{CreateWorktree, NewWorktreeBranchTarget, SwitchWorktree};
+use momor_actions;
+pub use momor_actions::{CreateWorktree, NewWorktreeBranchTarget, SwitchWorktree};
 
 pub const DEFAULT_THREAD_TITLE: &str = "New Agent Thread";
 const PARALLEL_AGENT_LAYOUT_BACKFILL_KEY: &str = "parallel_agent_layout_backfilled";
@@ -181,7 +181,7 @@ actions!(
         ScrollOutputToPreviousMessage,
         /// Scroll the output to the next user message.
         ScrollOutputToNextMessage,
-        /// Import agent threads from other Zed release channels (e.g. Preview, Nightly).
+        /// Import agent threads from other Momor release channels (e.g. Preview, Nightly).
         ImportThreadsFromOtherChannels,
     ]
 );
@@ -273,7 +273,7 @@ pub enum Agent {
 
 impl From<AgentId> for Agent {
     fn from(id: AgentId) -> Self {
-        if id.as_ref() == agent::ZED_AGENT_ID.as_ref() {
+        if id.as_ref() == agent::MOMOR_AGENT_ID.as_ref() {
             Self::NativeAgent
         } else {
             Self::Custom { id }
@@ -284,7 +284,7 @@ impl From<AgentId> for Agent {
 impl Agent {
     pub fn id(&self) -> AgentId {
         match self {
-            Self::NativeAgent => agent::ZED_AGENT_ID.clone(),
+            Self::NativeAgent => agent::MOMOR_AGENT_ID.clone(),
             Self::Custom { id } => id.clone(),
             #[cfg(any(test, feature = "test-support"))]
             Self::Stub => "stub".into(),
@@ -439,7 +439,7 @@ pub fn init(
     cx.observe_new(|workspace: &mut Workspace, _window, _cx| {
         workspace.register_action(
             move |workspace: &mut Workspace,
-                  _: &zed_actions::AcpRegistry,
+                  _: &momor_actions::AcpRegistry,
                   window: &mut Window,
                   cx: &mut Context<Workspace>| {
                 let existing = workspace
@@ -550,11 +550,11 @@ fn update_command_palette_filter(cx: &mut App) {
             filter.hide_namespace("agents");
             filter.hide_namespace("assistant");
             filter.hide_namespace("copilot");
-            filter.hide_namespace("zed_predict_onboarding");
+            filter.hide_namespace("momor_predict_onboarding");
             filter.hide_namespace("edit_prediction");
 
             filter.hide_action_types(&edit_prediction_actions);
-            filter.hide_action_types(&[TypeId::of::<zed_actions::OpenZedPredictOnboarding>()]);
+            filter.hide_action_types(&[TypeId::of::<momor_actions::OpenMomorPredictOnboarding>()]);
         } else {
             if agent_enabled {
                 filter.show_namespace("agent");
@@ -577,7 +577,7 @@ fn update_command_palette_filter(cx: &mut App) {
                     filter.show_namespace("copilot");
                     filter.show_action_types(edit_prediction_actions.iter());
                 }
-                EditPredictionProvider::Zed
+                EditPredictionProvider::Momor
                 | EditPredictionProvider::Codestral
                 | EditPredictionProvider::Ollama
                 | EditPredictionProvider::OpenAiCompatibleApi
@@ -588,8 +588,8 @@ fn update_command_palette_filter(cx: &mut App) {
                 }
             }
 
-            filter.show_namespace("zed_predict_onboarding");
-            filter.show_action_types(&[TypeId::of::<zed_actions::OpenZedPredictOnboarding>()]);
+            filter.show_namespace("momor_predict_onboarding");
+            filter.show_action_types(&[TypeId::of::<momor_actions::OpenMomorPredictOnboarding>()]);
 
             filter.show_namespace("multi_workspace");
         }

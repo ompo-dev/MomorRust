@@ -1,17 +1,17 @@
 ---
-title: AI Agent Settings - Zed
-description: "Customize Zed's AI agent: default models, temperature, tool approval, auto-run commands, notifications, and panel options."
+title: AI Agent Settings - Momor
+description: "Customize Momor's AI agent: default models, temperature, tool approval, auto-run commands, notifications, and panel options."
 ---
 
 # Agent Settings
 
-Settings for Zed's Agent Panel, including model selection, UI preferences, and tool permissions.
+Settings for Momor's Agent Panel, including model selection, UI preferences, and tool permissions.
 
 ## Model Settings {#model-settings}
 
 ### Default Model {#default-model}
 
-If you're using [Zed's hosted LLM service](./subscription.md), it sets `claude-sonnet-4-5` as the default model for agentic work (agent panel, inline assistant) and `gpt-5-nano` as the default "fast" model (thread summarization, git commit messages). If you're not subscribed or want to change these defaults, you can manually edit the `default_model` object in your settings:
+If you're using [Momor's hosted LLM service](./subscription.md), it sets `claude-sonnet-4-5` as the default model for agentic work (agent panel, inline assistant) and `gpt-5-nano` as the default "fast" model (thread summarization, git commit messages). If you're not subscribed or want to change these defaults, you can manually edit the `default_model` object in your settings:
 
 ```json [settings]
 {
@@ -36,7 +36,7 @@ You can assign distinct and specific models for the following AI-powered feature
 {
   "agent": {
     "default_model": {
-      "provider": "zed.dev",
+      "provider": "momor.dev",
       "model": "claude-sonnet-4-5"
     },
     "inline_assistant_model": {
@@ -61,18 +61,18 @@ You can assign distinct and specific models for the following AI-powered feature
 
 With the Inline Assistant in particular, you can send the same prompt to multiple models at once.
 
-Here's how you can customize your settings file ([how to edit](../configuring-zed.md#settings-files)) to add this functionality:
+Here's how you can customize your settings file ([how to edit](../configuring-momor.md#settings-files)) to add this functionality:
 
 ```json [settings]
 {
   "agent": {
     "default_model": {
-      "provider": "zed.dev",
+      "provider": "momor.dev",
       "model": "claude-sonnet-4-5"
     },
     "inline_alternatives": [
       {
-        "provider": "zed.dev",
+        "provider": "momor.dev",
         "model": "gpt-5-mini"
       }
     ]
@@ -91,16 +91,16 @@ One with Claude Sonnet 4.5 (the default model), another with GPT-5-mini, and ano
 {
   "agent": {
     "default_model": {
-      "provider": "zed.dev",
+      "provider": "momor.dev",
       "model": "claude-sonnet-4-5"
     },
     "inline_alternatives": [
       {
-        "provider": "zed.dev",
+        "provider": "momor.dev",
         "model": "gpt-5-mini"
       },
       {
-        "provider": "zed.dev",
+        "provider": "momor.dev",
         "model": "gemini-3-flash"
       }
     ]
@@ -127,7 +127,7 @@ Specify a custom temperature for a provider and/or model:
       },
       // To set parameters for a specific provider and model:
       {
-        "provider": "zed.dev",
+        "provider": "momor.dev",
         "model": "claude-sonnet-4-5",
         "temperature": 1.0
       }
@@ -154,9 +154,9 @@ Use the `agent_ui_font_size` setting to change the font size of rendered agent r
 
 ### Default Tool Permissions
 
-> **Note:** In Zed v0.224.0 and above, tool approval uses the `agent.tool_permissions` settings described below.
+> **Note:** In Momor v0.224.0 and above, tool approval uses the `agent.tool_permissions` settings described below.
 
-The `agent.tool_permissions.default` setting controls the baseline tool approval behavior for Zed's native agent:
+The `agent.tool_permissions.default` setting controls the baseline tool approval behavior for Momor's native agent:
 
 - `"confirm"` (default) — Prompts for approval before running any tool action
 - `"allow"` — Auto-approves tool actions without prompting
@@ -275,7 +275,7 @@ The `default` key on each MCP tool entry is the primary mechanism for controllin
 
 See the [Tool Permissions](./tool-permissions.md) documentation for more examples and complete details.
 
-> **Note:** Before Zed v0.224.0, tool approval was controlled by the `agent.always_allow_tool_actions` boolean (default `false`). Set it to `true` to auto-approve tool actions, or leave it `false` to require confirmation for edits and tool calls.
+> **Note:** Before Momor v0.224.0, tool approval was controlled by the `agent.always_allow_tool_actions` boolean (default `false`). Set it to `true` to auto-approve tool actions, or leave it `false` to require confirmation for edits and tool calls.
 
 ### Edit Display Mode
 
@@ -360,7 +360,7 @@ It is set to `true` by default, but if set to false, the card will be fully coll
 
 ### Feedback Controls
 
-Control whether to display the thumbs up/down buttons at the bottom of each agent response, allowing you to give Zed feedback about the agent's performance.
+Control whether to display the thumbs up/down buttons at the bottom of each agent response, allowing you to give Momor feedback about the agent's performance.
 The default value is `true`.
 
 ```json [settings]

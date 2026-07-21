@@ -1,14 +1,14 @@
 ---
-title: Business Support - Zed Business
-description: How to contact Zed for business inquiries and support.
+title: Business Support - Momor Business
+description: How to contact Momor for business inquiries and support.
 ---
 
 # Business Support
 
-For billing and business support (account setup, invoices, organization questions), email [billing-support@zed.dev](mailto:billing-support@zed.dev). Business support is prioritized relative to other support channels.
+For billing and business support (account setup, invoices, organization questions), email [billing-support@momor.dev](mailto:billing-support@momor.dev). Business support is prioritized relative to other support channels.
 
-For general questions, email [hi@zed.dev](mailto:hi@zed.dev).
+For general questions, email [hi@momor.dev](mailto:hi@momor.dev).
 
 ## Open-source issues
 
-Questions and bugs about the Zed editor itself (features, extensions, language support, crashes) go through the main Zed project on [GitHub](https://github.com/zed-industries/zed/issues).
+Questions and bugs about the Momor editor itself (features, extensions, language support, crashes) go through the main Momor project on [GitHub](https://github.com/momor-industries/momor/issues).

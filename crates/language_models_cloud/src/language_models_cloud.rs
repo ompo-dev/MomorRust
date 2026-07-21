@@ -4,7 +4,7 @@ use cloud_llm_client::{
     CLIENT_SUPPORTS_STATUS_MESSAGES_HEADER_NAME, CLIENT_SUPPORTS_STATUS_STREAM_ENDED_HEADER_NAME,
     CLIENT_SUPPORTS_X_AI_HEADER_NAME, CompletionBody, CompletionEvent, CompletionRequestStatus,
     EXPIRED_LLM_TOKEN_HEADER_NAME, ListModelsResponse, OUTDATED_LLM_TOKEN_HEADER_NAME,
-    SERVER_SUPPORTS_STATUS_MESSAGES_HEADER_NAME, ZED_VERSION_HEADER_NAME,
+    SERVER_SUPPORTS_STATUS_MESSAGES_HEADER_NAME, MOMOR_VERSION_HEADER_NAME,
 };
 use futures::{
     AsyncBufReadExt, AsyncReadExt as _, FutureExt, Stream, StreamExt,
@@ -25,7 +25,7 @@ use language_model::{
     LanguageModelProviderId, LanguageModelProviderName, LanguageModelRequest,
     LanguageModelToolChoice, LanguageModelToolSchemaFormat, OPEN_AI_PROVIDER_ID,
     OPEN_AI_PROVIDER_NAME, PaymentRequiredError, RateLimiter, X_AI_PROVIDER_ID, X_AI_PROVIDER_NAME,
-    ZED_CLOUD_PROVIDER_ID, ZED_CLOUD_PROVIDER_NAME,
+    MOMOR_CLOUD_PROVIDER_ID, MOMOR_CLOUD_PROVIDER_NAME,
 };
 
 use schemars::JsonSchema;
@@ -45,8 +45,8 @@ use open_ai::completion::{
     OpenAiEventMapper, OpenAiResponseEventMapper, into_open_ai, into_open_ai_response,
 };
 
-const PROVIDER_ID: LanguageModelProviderId = ZED_CLOUD_PROVIDER_ID;
-const PROVIDER_NAME: LanguageModelProviderName = ZED_CLOUD_PROVIDER_NAME;
+const PROVIDER_ID: LanguageModelProviderId = MOMOR_CLOUD_PROVIDER_ID;
+const PROVIDER_NAME: LanguageModelProviderName = MOMOR_CLOUD_PROVIDER_NAME;
 
 /// Trait for acquiring and refreshing LLM authentication tokens.
 pub trait CloudLlmTokenProvider: Send + Sync {
@@ -105,9 +105,9 @@ impl<TP: CloudLlmTokenProvider> CloudLanguageModel<TP> {
         loop {
             let request = http_client::Request::builder()
                 .method(Method::POST)
-                .uri(http_client.build_zed_llm_url("/completions", &[])?.as_ref())
+                .uri(http_client.build_momor_llm_url("/completions", &[])?.as_ref())
                 .when_some(app_version.as_ref(), |builder, app_version| {
-                    builder.header(ZED_VERSION_HEADER_NAME, app_version.to_string())
+                    builder.header(MOMOR_VERSION_HEADER_NAME, app_version.to_string())
                 })
                 .header("Content-Type", "application/json")
                 .header("Authorization", format!("Bearer {token}"))
@@ -170,7 +170,7 @@ struct ApiError {
     headers: HeaderMap<HeaderValue>,
 }
 
-/// Represents error responses from Zed's cloud API.
+/// Represents error responses from Momor's cloud API.
 ///
 /// Example JSON for an upstream HTTP error:
 /// ```json
@@ -330,7 +330,7 @@ impl<TP: CloudLlmTokenProvider + 'static> LanguageModel for CloudLanguageModel<T
     }
 
     fn telemetry_id(&self) -> String {
-        format!("zed.dev/{}", self.model.id)
+        format!("momor.dev/{}", self.model.id)
     }
 
     fn tool_input_format(&self) -> LanguageModelToolSchemaFormat {
@@ -640,7 +640,7 @@ impl<TP: CloudLlmTokenProvider + 'static> CloudModelProvider<TP> {
         let request = http_client::Request::builder()
             .method(Method::GET)
             .header(CLIENT_SUPPORTS_X_AI_HEADER_NAME, "true")
-            .uri(http_client.build_zed_llm_url("/models", &[])?.as_ref())
+            .uri(http_client.build_momor_llm_url("/models", &[])?.as_ref())
             .header("Authorization", format!("Bearer {token}"))
             .body(AsyncBody::empty())?;
         let mut response = http_client
@@ -909,7 +909,7 @@ mod tests {
             ),
         }
 
-        // Regular 500 error without upstream_http_error should remain ApiInternalServerError for Zed
+        // Regular 500 error without upstream_http_error should remain ApiInternalServerError for Momor
         let error_body = "Regular internal server error";
 
         let api_error = ApiError {

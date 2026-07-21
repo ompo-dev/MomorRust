@@ -196,7 +196,7 @@ dependencies = [
  "uuid",
  "watch",
  "web_search",
- "zed_env_vars",
+ "momor_env_vars",
  "zlog",
  "zstd",
 ]
@@ -292,7 +292,7 @@ dependencies = [
  "util",
  "uuid",
  "watch",
- "zed_credentials_provider",
+ "momor_credentials_provider",
 ]
 
 [[package]]
@@ -419,7 +419,7 @@ dependencies = [
  "uuid",
  "watch",
  "workspace",
- "zed_actions",
+ "momor_actions",
 ]
 
 [[package]]
@@ -459,13 +459,13 @@ dependencies = [
  "smallvec",
  "telemetry",
  "ui",
- "zed_actions",
+ "momor_actions",
 ]
 
 [[package]]
 name = "alacritty_terminal"
 version = "0.25.1"
-source = "git+https://github.com/zed-industries/alacritty?rev=9d9640d4#9d9640d4e56d67a09d049f9c0a300aae08d4f61e"
+source = "git+https://github.com/momor-industries/alacritty?rev=9d9640d4#9d9640d4e56d67a09d049f9c0a300aae08d4f61e"
 dependencies = [
  "base64 0.22.1",
  "bitflags 2.10.0",
@@ -894,7 +894,7 @@ dependencies = [
 [[package]]
 name = "async-pipe"
 version = "0.1.3"
-source = "git+https://github.com/zed-industries/async-pipe-rs?rev=82d00a04211cf4e1236029aa03e6b6ce2a74c553#82d00a04211cf4e1236029aa03e6b6ce2a74c553"
+source = "git+https://github.com/momor-industries/async-pipe-rs?rev=82d00a04211cf4e1236029aa03e6b6ce2a74c553#82d00a04211cf4e1236029aa03e6b6ce2a74c553"
 dependencies = [
  "futures",
  "log",
@@ -2048,7 +2048,7 @@ dependencies = [
 [[package]]
 name = "calloop"
 version = "0.14.3"
-source = "git+https://github.com/zed-industries/calloop#eb6b4fd17b9af5ecc226546bdd04185391b3e265"
+source = "git+https://github.com/momor-industries/calloop#eb6b4fd17b9af5ecc226546bdd04185391b3e265"
 dependencies = [
  "bitflags 2.10.0",
  "polling",
@@ -2072,7 +2072,7 @@ dependencies = [
 [[package]]
 name = "candle-core"
 version = "0.9.1"
-source = "git+https://github.com/zed-industries/candle?branch=9.1-patched#724d75eb3deebefe83f2a7381a45d4fac6eda383"
+source = "git+https://github.com/momor-industries/candle?branch=9.1-patched#724d75eb3deebefe83f2a7381a45d4fac6eda383"
 dependencies = [
  "byteorder",
  "float8",
@@ -2094,7 +2094,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.9.1"
-source = "git+https://github.com/zed-industries/candle?branch=9.1-patched#724d75eb3deebefe83f2a7381a45d4fac6eda383"
+source = "git+https://github.com/momor-industries/candle?branch=9.1-patched#724d75eb3deebefe83f2a7381a45d4fac6eda383"
 dependencies = [
  "candle-core",
  "half",
@@ -2109,7 +2109,7 @@ dependencies = [
 [[package]]
 name = "candle-onnx"
 version = "0.9.1"
-source = "git+https://github.com/zed-industries/candle?branch=9.1-patched#724d75eb3deebefe83f2a7381a45d4fac6eda383"
+source = "git+https://github.com/momor-industries/candle?branch=9.1-patched#724d75eb3deebefe83f2a7381a45d4fac6eda383"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -2526,7 +2526,7 @@ dependencies = [
  "util",
  "windows 0.61.3",
  "worktree",
- "zed_credentials_provider",
+ "momor_credentials_provider",
 ]
 
 [[package]]
@@ -2687,7 +2687,7 @@ dependencies = [
  "serde",
  "serde_json",
  "text",
- "zed_credentials_provider",
+ "momor_credentials_provider",
  "zeta_prompt",
 ]
 
@@ -2758,7 +2758,7 @@ dependencies = [
  "ui",
  "util",
  "workspace",
- "zed_actions",
+ "momor_actions",
 ]
 
 [[package]]
@@ -3719,7 +3719,7 @@ dependencies = [
 [[package]]
 name = "dap-types"
 version = "0.0.1"
-source = "git+https://github.com/zed-industries/dap-types?rev=1b461b310481d01e02b2603c16d7144b926339f8#1b461b310481d01e02b2603c16d7144b926339f8"
+source = "git+https://github.com/momor-industries/dap-types?rev=1b461b310481d01e02b2603c16d7144b926339f8#1b461b310481d01e02b2603c16d7144b926339f8"
 dependencies = [
  "schemars 1.0.4",
  "serde",
@@ -3829,7 +3829,7 @@ dependencies = [
  "tempfile",
  "util",
  "uuid",
- "zed_env_vars",
+ "momor_env_vars",
 ]
 
 [[package]]
@@ -4261,8 +4261,8 @@ dependencies = [
  "uuid",
  "workspace",
  "worktree",
- "zed_actions",
- "zed_credentials_provider",
+ "momor_actions",
+ "momor_credentials_provider",
  "zeta_prompt",
  "zlog",
  "zstd",
@@ -4358,7 +4358,7 @@ dependencies = [
  "ui",
  "util",
  "workspace",
- "zed_actions",
+ "momor_actions",
  "zeta_prompt",
 ]
 
@@ -4446,7 +4446,7 @@ dependencies = [
  "uuid",
  "vim_mode_setting",
  "workspace",
- "zed_actions",
+ "momor_actions",
  "zlog",
  "ztracing",
 ]
@@ -4899,7 +4899,7 @@ dependencies = [
  "util",
  "vim_mode_setting",
  "workspace",
- "zed_actions",
+ "momor_actions",
 ]
 
 [[package]]
@@ -6026,7 +6026,7 @@ dependencies = [
  "watch",
  "windows 0.61.3",
  "workspace",
- "zed_actions",
+ "momor_actions",
  "zeroize",
  "zlog",
  "ztracing",
@@ -6296,8 +6296,8 @@ dependencies = [
  "wasm-bindgen",
  "web-time",
  "windows 0.61.3",
- "zed-font-kit",
- "zed-scap",
+ "momor-font-kit",
+ "momor-scap",
 ]
 
 [[package]]
@@ -6344,8 +6344,8 @@ dependencies = [
  "x11-clipboard",
  "x11rb",
  "xkbcommon",
- "zed-scap",
- "zed-xim",
+ "momor-scap",
+ "momor-xim",
 ]
 
 [[package]]
@@ -6387,7 +6387,7 @@ dependencies = [
  "strum 0.27.2",
  "util",
  "uuid",
- "zed-font-kit",
+ "momor-font-kit",
 ]
 
 [[package]]
@@ -6487,7 +6487,7 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-sys",
  "wgpu",
- "zed-font-kit",
+ "momor-font-kit",
 ]
 
 [[package]]
@@ -6512,7 +6512,7 @@ dependencies = [
  "windows-core 0.61.2",
  "windows-numerics 0.2.0",
  "windows-registry 0.5.3",
- "zed-scap",
+ "momor-scap",
 ]
 
 [[package]]
@@ -7742,7 +7742,7 @@ dependencies = [
  "ui_input",
  "util",
  "workspace",
- "zed_actions",
+ "momor_actions",
 ]
 
 [[package]]
@@ -8219,7 +8219,7 @@ dependencies = [
 [[package]]
 name = "libwebrtc"
 version = "0.3.26"
-source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1#147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1"
+source = "git+https://github.com/momor-industries/livekit-rust-sdks?rev=147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1#147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1"
 dependencies = [
  "cxx",
  "glib",
@@ -8303,7 +8303,7 @@ checksum = "11d3d7f243d5c5a8b9bb5d6dd2b1602c0cb0b9db1621bafc7ed66e35ff9fe092"
 [[package]]
 name = "livekit"
 version = "0.7.32"
-source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1#147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1"
+source = "git+https://github.com/momor-industries/livekit-rust-sdks?rev=147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1#147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1"
 dependencies = [
  "base64 0.22.1",
  "bmrng",
@@ -8329,7 +8329,7 @@ dependencies = [
 [[package]]
 name = "livekit-api"
 version = "0.4.14"
-source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1#147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1"
+source = "git+https://github.com/momor-industries/livekit-rust-sdks?rev=147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1#147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1"
 dependencies = [
  "base64 0.21.7",
  "futures-util",
@@ -8356,7 +8356,7 @@ dependencies = [
 [[package]]
 name = "livekit-protocol"
 version = "0.7.1"
-source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1#147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1"
+source = "git+https://github.com/momor-industries/livekit-rust-sdks?rev=147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1#147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1"
 dependencies = [
  "futures-util",
  "livekit-runtime",
@@ -8372,7 +8372,7 @@ dependencies = [
 [[package]]
 name = "livekit-runtime"
 version = "0.4.0"
-source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1#147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1"
+source = "git+https://github.com/momor-industries/livekit-rust-sdks?rev=147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1#147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1"
 dependencies = [
  "tokio",
  "tokio-stream",
@@ -8390,7 +8390,7 @@ dependencies = [
  "prost-build 0.9.0",
  "prost-types 0.9.0",
  "serde",
- "zed-reqwest",
+ "momor-reqwest",
 ]
 
 [[package]]
@@ -8431,7 +8431,7 @@ dependencies = [
  "ui",
  "util",
  "webrtc-sys",
- "zed-scap",
+ "momor-scap",
 ]
 
 [[package]]
@@ -8532,7 +8532,7 @@ dependencies = [
 [[package]]
 name = "lsp-types"
 version = "0.95.1"
-source = "git+https://github.com/zed-industries/lsp-types?rev=f4dfa89a21ca35cd929b70354b1583fabae325f8#f4dfa89a21ca35cd929b70354b1583fabae325f8"
+source = "git+https://github.com/momor-industries/lsp-types?rev=f4dfa89a21ca35cd929b70354b1583fabae325f8#f4dfa89a21ca35cd929b70354b1583fabae325f8"
 dependencies = [
  "bitflags 1.3.2",
  "serde",
@@ -8797,7 +8797,7 @@ dependencies = [
 [[package]]
 name = "mermaid-rs-renderer"
 version = "0.2.0"
-source = "git+https://github.com/zed-industries/mermaid-rs-renderer?rev=374db9ead5426697c6c2111151d9f246899bc638#374db9ead5426697c6c2111151d9f246899bc638"
+source = "git+https://github.com/momor-industries/mermaid-rs-renderer?rev=374db9ead5426697c6c2111151d9f246899bc638#374db9ead5426697c6c2111151d9f246899bc638"
 dependencies = [
  "anyhow",
  "fontdb 0.16.2",
@@ -9054,7 +9054,7 @@ checksum = "e5ce46fe64a9d73be07dcbe690a38ce1b293be448fd8ce1e6c1b8062c9f72c6a"
 [[package]]
 name = "naga"
 version = "29.0.0"
-source = "git+https://github.com/zed-industries/wgpu.git?branch=v29#a466bc382ea747f8e1ac810efdb6dcd49a514575"
+source = "git+https://github.com/momor-industries/wgpu.git?branch=v29#a466bc382ea747f8e1ac810efdb6dcd49a514575"
 dependencies = [
  "arrayvec",
  "bit-set 0.9.1",
@@ -9298,13 +9298,13 @@ dependencies = [
  "ui",
  "util",
  "workspace",
- "zed_actions",
+ "momor_actions",
 ]
 
 [[package]]
 name = "notify"
 version = "8.2.0"
-source = "git+https://github.com/zed-industries/notify.git?rev=ce58c24cad542c28e04ced02e20325a4ec28a31d#ce58c24cad542c28e04ced02e20325a4ec28a31d"
+source = "git+https://github.com/momor-industries/notify.git?rev=ce58c24cad542c28e04ced02e20325a4ec28a31d#ce58c24cad542c28e04ced02e20325a4ec28a31d"
 dependencies = [
  "bitflags 2.10.0",
  "fsevent-sys",
@@ -9321,7 +9321,7 @@ dependencies = [
 [[package]]
 name = "notify-types"
 version = "2.0.0"
-source = "git+https://github.com/zed-industries/notify.git?rev=ce58c24cad542c28e04ced02e20325a4ec28a31d#ce58c24cad542c28e04ced02e20325a4ec28a31d"
+source = "git+https://github.com/momor-industries/notify.git?rev=ce58c24cad542c28e04ced02e20325a4ec28a31d#ce58c24cad542c28e04ced02e20325a4ec28a31d"
 
 [[package]]
 name = "ntapi"
@@ -10819,7 +10819,7 @@ dependencies = [
  "ui",
  "ui_input",
  "workspace",
- "zed_actions",
+ "momor_actions",
 ]
 
 [[package]]
@@ -10917,7 +10917,7 @@ dependencies = [
  "ui",
  "windows 0.61.3",
  "workspace",
- "zed_actions",
+ "momor_actions",
 ]
 
 [[package]]
@@ -11317,7 +11317,7 @@ dependencies = [
  "wax",
  "which 6.0.3",
  "worktree",
- "zed_credentials_provider",
+ "momor_credentials_provider",
  "zeroize",
  "zlog",
  "ztracing",
@@ -11987,7 +11987,7 @@ dependencies = [
  "windows-registry 0.6.1",
  "workspace",
  "worktree",
- "zed_actions",
+ "momor_actions",
 ]
 
 [[package]]
@@ -12232,7 +12232,7 @@ dependencies = [
  "regex",
  "serde",
  "tokio",
- "zed-reqwest",
+ "momor-reqwest",
 ]
 
 [[package]]
@@ -12425,7 +12425,7 @@ dependencies = [
  "ui_input",
  "util",
  "workspace",
- "zed_actions",
+ "momor_actions",
 ]
 
 [[package]]
@@ -12911,7 +12911,7 @@ dependencies = [
  "util",
  "util_macros",
  "workspace",
- "zed_actions",
+ "momor_actions",
  "ztracing",
 ]
 
@@ -13289,8 +13289,8 @@ dependencies = [
  "ui",
  "util",
  "workspace",
- "zed_actions",
- "zed_credentials_provider",
+ "momor_actions",
+ "momor_credentials_provider",
 ]
 
 [[package]]
@@ -13414,7 +13414,7 @@ dependencies = [
  "ui",
  "util",
  "workspace",
- "zed_actions",
+ "momor_actions",
 ]
 
 [[package]]
@@ -14404,7 +14404,7 @@ dependencies = [
  "sha2",
  "shellexpand",
  "util",
- "zed_actions",
+ "momor_actions",
 ]
 
 [[package]]
@@ -14539,7 +14539,7 @@ dependencies = [
  "ui",
  "util",
  "workspace",
- "zed_actions",
+ "momor_actions",
 ]
 
 [[package]]
@@ -14615,7 +14615,7 @@ dependencies = [
  "ui",
  "util",
  "workspace",
- "zed_actions",
+ "momor_actions",
 ]
 
 [[package]]
@@ -14867,7 +14867,7 @@ dependencies = [
  "util",
  "windows 0.61.3",
  "workspace",
- "zed_actions",
+ "momor_actions",
 ]
 
 [[package]]
@@ -15239,7 +15239,7 @@ dependencies = [
 [[package]]
 name = "trash"
 version = "5.2.5"
-source = "git+https://github.com/zed-industries/trash-rs?rev=3bf27effd4eb8699f2e484d3326b852fe3e53af7#3bf27effd4eb8699f2e484d3326b852fe3e53af7"
+source = "git+https://github.com/momor-industries/trash-rs?rev=3bf27effd4eb8699f2e484d3326b852fe3e53af7#3bf27effd4eb8699f2e484d3326b852fe3e53af7"
 dependencies = [
  "chrono",
  "libc",
@@ -15341,7 +15341,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-gitcommit"
 version = "0.0.1"
-source = "git+https://github.com/zed-industries/tree-sitter-git-commit?rev=88309716a69dd13ab83443721ba6e0b491d37ee9#88309716a69dd13ab83443721ba6e0b491d37ee9"
+source = "git+https://github.com/momor-industries/tree-sitter-git-commit?rev=88309716a69dd13ab83443721ba6e0b491d37ee9#88309716a69dd13ab83443721ba6e0b491d37ee9"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -15369,7 +15369,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-gowork"
 version = "0.0.1"
-source = "git+https://github.com/zed-industries/tree-sitter-go-work?rev=acb0617bf7f4fda02c6217676cc64acb89536dc7#acb0617bf7f4fda02c6217676cc64acb89536dc7"
+source = "git+https://github.com/momor-industries/tree-sitter-go-work?rev=acb0617bf7f4fda02c6217676cc64acb89536dc7#acb0617bf7f4fda02c6217676cc64acb89536dc7"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -15378,7 +15378,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-heex"
 version = "0.0.1"
-source = "git+https://github.com/zed-industries/tree-sitter-heex?rev=1dd45142fbb05562e35b2040c6129c9bca346592#1dd45142fbb05562e35b2040c6129c9bca346592"
+source = "git+https://github.com/momor-industries/tree-sitter-heex?rev=1dd45142fbb05562e35b2040c6129c9bca346592#1dd45142fbb05562e35b2040c6129c9bca346592"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -15472,7 +15472,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-typescript"
 version = "0.23.2"
-source = "git+https://github.com/zed-industries/tree-sitter-typescript?rev=e2c53597d6a5d9cf7bbe8dccde576fe1e46c5899#e2c53597d6a5d9cf7bbe8dccde576fe1e46c5899"
+source = "git+https://github.com/momor-industries/tree-sitter-typescript?rev=e2c53597d6a5d9cf7bbe8dccde576fe1e46c5899#e2c53597d6a5d9cf7bbe8dccde576fe1e46c5899"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -15481,7 +15481,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-yaml"
 version = "0.6.1"
-source = "git+https://github.com/zed-industries/tree-sitter-yaml?rev=baff0b51c64ef6a1fb1f8390f3ad6015b83ec13a#baff0b51c64ef6a1fb1f8390f3ad6015b83ec13a"
+source = "git+https://github.com/momor-industries/tree-sitter-yaml?rev=baff0b51c64ef6a1fb1f8390f3ad6015b83ec13a#baff0b51c64ef6a1fb1f8390f3ad6015b83ec13a"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -16790,7 +16790,7 @@ dependencies = [
 [[package]]
 name = "webrtc-sys"
 version = "0.3.23"
-source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1#147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1"
+source = "git+https://github.com/momor-industries/livekit-rust-sdks?rev=147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1#147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1"
 dependencies = [
  "cc",
  "cxx",
@@ -16804,7 +16804,7 @@ dependencies = [
 [[package]]
 name = "webrtc-sys-build"
 version = "0.3.13"
-source = "git+https://github.com/zed-industries/livekit-rust-sdks?rev=147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1#147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1"
+source = "git+https://github.com/momor-industries/livekit-rust-sdks?rev=147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1#147fbca3d4b592d96d33f5e6a84b59fc0b5d9bf1"
 dependencies = [
  "anyhow",
  "fs2",
@@ -16824,7 +16824,7 @@ checksum = "a751b3277700db47d3e574514de2eced5e54dc8a5436a3bf7a0b248b2cee16f3"
 [[package]]
 name = "wgpu"
 version = "29.0.0"
-source = "git+https://github.com/zed-industries/wgpu.git?branch=v29#a466bc382ea747f8e1ac810efdb6dcd49a514575"
+source = "git+https://github.com/momor-industries/wgpu.git?branch=v29#a466bc382ea747f8e1ac810efdb6dcd49a514575"
 dependencies = [
  "arrayvec",
  "bitflags 2.10.0",
@@ -16853,7 +16853,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core"
 version = "29.0.0"
-source = "git+https://github.com/zed-industries/wgpu.git?branch=v29#a466bc382ea747f8e1ac810efdb6dcd49a514575"
+source = "git+https://github.com/momor-industries/wgpu.git?branch=v29#a466bc382ea747f8e1ac810efdb6dcd49a514575"
 dependencies = [
  "arrayvec",
  "bit-set 0.9.1",
@@ -16885,7 +16885,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-apple"
 version = "29.0.0"
-source = "git+https://github.com/zed-industries/wgpu.git?branch=v29#a466bc382ea747f8e1ac810efdb6dcd49a514575"
+source = "git+https://github.com/momor-industries/wgpu.git?branch=v29#a466bc382ea747f8e1ac810efdb6dcd49a514575"
 dependencies = [
  "wgpu-hal",
 ]
@@ -16893,7 +16893,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-emscripten"
 version = "29.0.0"
-source = "git+https://github.com/zed-industries/wgpu.git?branch=v29#a466bc382ea747f8e1ac810efdb6dcd49a514575"
+source = "git+https://github.com/momor-industries/wgpu.git?branch=v29#a466bc382ea747f8e1ac810efdb6dcd49a514575"
 dependencies = [
  "wgpu-hal",
 ]
@@ -16901,7 +16901,7 @@ dependencies = [
 [[package]]
 name = "wgpu-core-deps-windows-linux-android"
 version = "29.0.0"
-source = "git+https://github.com/zed-industries/wgpu.git?branch=v29#a466bc382ea747f8e1ac810efdb6dcd49a514575"
+source = "git+https://github.com/momor-industries/wgpu.git?branch=v29#a466bc382ea747f8e1ac810efdb6dcd49a514575"
 dependencies = [
  "wgpu-hal",
 ]
@@ -16909,7 +16909,7 @@ dependencies = [
 [[package]]
 name = "wgpu-hal"
 version = "29.0.0"
-source = "git+https://github.com/zed-industries/wgpu.git?branch=v29#a466bc382ea747f8e1ac810efdb6dcd49a514575"
+source = "git+https://github.com/momor-industries/wgpu.git?branch=v29#a466bc382ea747f8e1ac810efdb6dcd49a514575"
 dependencies = [
  "android_system_properties",
  "arrayvec",
@@ -16961,7 +16961,7 @@ dependencies = [
 [[package]]
 name = "wgpu-naga-bridge"
 version = "29.0.0"
-source = "git+https://github.com/zed-industries/wgpu.git?branch=v29#a466bc382ea747f8e1ac810efdb6dcd49a514575"
+source = "git+https://github.com/momor-industries/wgpu.git?branch=v29#a466bc382ea747f8e1ac810efdb6dcd49a514575"
 dependencies = [
  "naga",
  "wgpu-types",
@@ -16970,7 +16970,7 @@ dependencies = [
 [[package]]
 name = "wgpu-types"
 version = "29.0.0"
-source = "git+https://github.com/zed-industries/wgpu.git?branch=v29#a466bc382ea747f8e1ac810efdb6dcd49a514575"
+source = "git+https://github.com/momor-industries/wgpu.git?branch=v29#a466bc382ea747f8e1ac810efdb6dcd49a514575"
 dependencies = [
  "bitflags 2.10.0",
  "bytemuck",
@@ -17165,7 +17165,7 @@ dependencies = [
 [[package]]
 name = "windows-capture"
 version = "1.4.3"
-source = "git+https://github.com/zed-industries/windows-capture.git?rev=f0d6c1b6691db75461b732f6d5ff56eed002eeb9#f0d6c1b6691db75461b732f6d5ff56eed002eeb9"
+source = "git+https://github.com/momor-industries/windows-capture.git?rev=f0d6c1b6691db75461b732f6d5ff56eed002eeb9#f0d6c1b6691db75461b732f6d5ff56eed002eeb9"
 dependencies = [
  "clap",
  "ctrlc",
@@ -17998,7 +17998,7 @@ dependencies = [
  "util",
  "uuid",
  "windows 0.61.3",
- "zed_actions",
+ "momor_actions",
  "zlog",
 ]
 
@@ -18043,7 +18043,7 @@ dependencies = [
 [[package]]
 name = "wprcontrol"
 version = "0.1.0"
-source = "git+https://github.com/zed-industries/wprcontrol?rev=cd811f7#cd811f7d744f65291e13131b1d907fda63ed91a1"
+source = "git+https://github.com/momor-industries/wprcontrol?rev=cd811f7#cd811f7d744f65291e13131b1d907fda63ed91a1"
 dependencies = [
  "windows 0.61.3",
  "windows-bindgen",
@@ -18137,7 +18137,7 @@ checksum = "bec9e4a500ca8864c5b47b8b482a73d62e4237670e5b5f1d6b9e3cae50f28f2b"
 [[package]]
 name = "xim-ctext"
 version = "0.3.0"
-source = "git+https://github.com/zed-industries/xim-rs.git?rev=16f35a2c881b815a2b6cdfd6687988e84f8447d8#16f35a2c881b815a2b6cdfd6687988e84f8447d8"
+source = "git+https://github.com/momor-industries/xim-rs.git?rev=16f35a2c881b815a2b6cdfd6687988e84f8447d8#16f35a2c881b815a2b6cdfd6687988e84f8447d8"
 dependencies = [
  "encoding_rs",
 ]
@@ -18145,7 +18145,7 @@ dependencies = [
 [[package]]
 name = "xim-parser"
 version = "0.2.1"
-source = "git+https://github.com/zed-industries/xim-rs.git?rev=16f35a2c881b815a2b6cdfd6687988e84f8447d8#16f35a2c881b815a2b6cdfd6687988e84f8447d8"
+source = "git+https://github.com/momor-industries/xim-rs.git?rev=16f35a2c881b815a2b6cdfd6687988e84f8447d8#16f35a2c881b815a2b6cdfd6687988e84f8447d8"
 dependencies = [
  "bitflags 2.10.0",
 ]
@@ -18376,7 +18376,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "zed"
+name = "momor"
 version = "1.3.0"
 dependencies = [
  "acp_thread",
@@ -18494,18 +18494,18 @@ dependencies = [
  "windows 0.61.3",
  "windows_resources",
  "workspace",
- "zed-reqwest",
- "zed_actions",
- "zed_env_vars",
+ "momor-reqwest",
+ "momor_actions",
+ "momor_env_vars",
  "zlog",
  "zlog_settings",
  "ztracing",
 ]
 
 [[package]]
-name = "zed-font-kit"
-version = "0.14.1-zed"
-source = "git+https://github.com/zed-industries/font-kit?rev=94b0f28166665e8fd2f53ff6d268a14955c82269#94b0f28166665e8fd2f53ff6d268a14955c82269"
+name = "momor-font-kit"
+version = "0.14.1-momor"
+source = "git+https://github.com/momor-industries/font-kit?rev=94b0f28166665e8fd2f53ff6d268a14955c82269#94b0f28166665e8fd2f53ff6d268a14955c82269"
 dependencies = [
  "bitflags 2.10.0",
  "byteorder",
@@ -18527,9 +18527,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "zed-reqwest"
-version = "0.12.15-zed"
-source = "git+https://github.com/zed-industries/reqwest.git?rev=c15662463bda39148ba154100dd44d3fba5873a4#c15662463bda39148ba154100dd44d3fba5873a4"
+name = "momor-reqwest"
+version = "0.12.15-momor"
+source = "git+https://github.com/momor-industries/reqwest.git?rev=c15662463bda39148ba154100dd44d3fba5873a4#c15662463bda39148ba154100dd44d3fba5873a4"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -18576,9 +18576,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "zed-scap"
-version = "0.0.8-zed"
-source = "git+https://github.com/zed-industries/scap?rev=4afea48c3b002197176fb19cd0f9b180dd36eaac#4afea48c3b002197176fb19cd0f9b180dd36eaac"
+name = "momor-scap"
+version = "0.0.8-momor"
+source = "git+https://github.com/momor-industries/scap?rev=4afea48c3b002197176fb19cd0f9b180dd36eaac#4afea48c3b002197176fb19cd0f9b180dd36eaac"
 dependencies = [
  "anyhow",
  "cocoa 0.25.0",
@@ -18597,9 +18597,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "zed-xim"
-version = "0.4.0-zed"
-source = "git+https://github.com/zed-industries/xim-rs.git?rev=16f35a2c881b815a2b6cdfd6687988e84f8447d8#16f35a2c881b815a2b6cdfd6687988e84f8447d8"
+name = "momor-xim"
+version = "0.4.0-momor"
+source = "git+https://github.com/momor-industries/xim-rs.git?rev=16f35a2c881b815a2b6cdfd6687988e84f8447d8#16f35a2c881b815a2b6cdfd6687988e84f8447d8"
 dependencies = [
  "ahash",
  "hashbrown 0.14.5",
@@ -18610,7 +18610,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "zed_actions"
+name = "momor_actions"
 version = "0.1.0"
 dependencies = [
  "gpui",
@@ -18621,7 +18621,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "zed_credentials_provider"
+name = "momor_credentials_provider"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -18635,7 +18635,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "zed_env_vars"
+name = "momor_env_vars"
 version = "0.1.0"
 dependencies = [
  "env_var",

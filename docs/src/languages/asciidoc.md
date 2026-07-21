@@ -1,11 +1,11 @@
 ---
 title: AsciiDoc
-description: "Configure AsciiDoc language support in Zed, including language servers, formatting, and debugging."
+description: "Configure AsciiDoc language support in Momor, including language servers, formatting, and debugging."
 ---
 
 # AsciiDoc
 
-AsciiDoc language support in Zed is provided by the community-maintained [AsciiDoc extension](https://github.com/andreicek/zed-asciidoc).
-Report issues to: [https://github.com/andreicek/zed-asciidoc/issues](https://github.com/andreicek/zed-asciidoc/issues)
+AsciiDoc language support in Momor is provided by the community-maintained [AsciiDoc extension](https://github.com/andreicek/momor-asciidoc).
+Report issues to: [https://github.com/andreicek/momor-asciidoc/issues](https://github.com/andreicek/momor-asciidoc/issues)
 
 - Tree-sitter: [cathaysia/tree-sitter-asciidoc](https://github.com/cathaysia/tree-sitter-asciidoc)

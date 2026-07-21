@@ -57,10 +57,10 @@ use workspace::{
     notifications::NotificationId, sidebar_side_context_menu,
 };
 
-use zed_actions::OpenRecent;
-use zed_actions::editor::{MoveDown, MoveUp};
+use momor_actions::OpenRecent;
+use momor_actions::editor::{MoveDown, MoveUp};
 
-use zed_actions::agents_sidebar::{FocusSidebarFilter, ToggleThreadSwitcher};
+use momor_actions::agents_sidebar::{FocusSidebarFilter, ToggleThreadSwitcher};
 
 use crate::thread_switcher::{ThreadSwitcher, ThreadSwitcherEntry, ThreadSwitcherEvent};
 
@@ -4655,7 +4655,7 @@ impl Sidebar {
         render_import_onboarding_banner(
             "acp",
             "Looking for threads from external agents?",
-            "Import threads from agents like Claude Agent, Codex, and more, whether started in Zed or another client.",
+            "Import threads from agents like Claude Agent, Codex, and more, whether started in Momor or another client.",
             if verbose_labels {
                 "Import Threads from External Agents"
             } else {
@@ -4901,7 +4901,7 @@ impl WorkspaceSidebar for Sidebar {
         self.cycle_thread_impl(forward, window, cx);
     }
 
-    fn serialized_state(&self, _cx: &App) -> Option<String> {
+    fn serialimomor_state(&self, _cx: &App) -> Option<String> {
         let serialized = SerializedSidebar {
             width: Some(f32::from(self.width)),
             active_view: match self.view {
@@ -4912,7 +4912,7 @@ impl WorkspaceSidebar for Sidebar {
         serde_json::to_string(&serialized).ok()
     }
 
-    fn restore_serialized_state(
+    fn restore_serialimomor_state(
         &mut self,
         state: &str,
         window: &mut Window,

@@ -224,7 +224,7 @@ fn possible_open_target(
             };
 
             // Normalize the path by joining with cwd if available (handles `.` and `..` segments)
-            let normalized_path = if path_to_check.path.is_relative() {
+            let normalimomor_path = if path_to_check.path.is_relative() {
                 relative_cwd.as_ref().and_then(|relative_cwd| {
                     let joined = relative_cwd
                         .as_ref()
@@ -242,7 +242,7 @@ fn possible_open_target(
             let original_path = RelPath::new(&path_to_check.path, PathStyle::local()).ok();
 
             if !worktree.read(cx).is_single_file()
-                && let Some(entry) = normalized_path
+                && let Some(entry) = normalimomor_path
                     .as_ref()
                     .and_then(|p| worktree.read(cx).entry_for_path(p))
                     .or_else(|| {
@@ -934,7 +934,7 @@ mod tests {
     mod issues {
         use super::*;
 
-        // https://github.com/zed-industries/zed/issues/28407
+        // https://github.com/momor-industries/momor/issues/28407
         #[gpui::test]
         async fn issue_28407_siblings(cx: &mut TestAppContext) {
             test_path_likes!(
@@ -959,9 +959,9 @@ mod tests {
             )
         }
 
-        // https://github.com/zed-industries/zed/issues/28407
-        // See https://github.com/zed-industries/zed/issues/34027
-        // See https://github.com/zed-industries/zed/issues/33498
+        // https://github.com/momor-industries/momor/issues/28407
+        // See https://github.com/momor-industries/momor/issues/34027
+        // See https://github.com/momor-industries/momor/issues/33498
         #[gpui::test]
         async fn issue_28407_nesting(cx: &mut TestAppContext) {
             test_path_likes!(
@@ -1015,7 +1015,7 @@ mod tests {
             )
         }
 
-        // https://github.com/zed-industries/zed/issues/28339
+        // https://github.com/momor-industries/momor/issues/28339
         #[gpui::test]
         async fn issue_28339(cx: &mut TestAppContext) {
             test_path_likes!(
@@ -1072,7 +1072,7 @@ mod tests {
             )
         }
 
-        // https://github.com/zed-industries/zed/issues/28339
+        // https://github.com/momor-industries/momor/issues/28339
         #[gpui::test]
         async fn issue_28339_remote(cx: &mut TestAppContext) {
             test_path_likes!(
@@ -1123,7 +1123,7 @@ mod tests {
             )
         }
 
-        // https://github.com/zed-industries/zed/issues/34027
+        // https://github.com/momor-industries/momor/issues/34027
         #[gpui::test]
         async fn issue_34027(cx: &mut TestAppContext) {
             test_path_likes!(
@@ -1149,7 +1149,7 @@ mod tests {
             )
         }
 
-        // https://github.com/zed-industries/zed/issues/34027
+        // https://github.com/momor-industries/momor/issues/34027
         #[gpui::test]
         async fn issue_34027_siblings(cx: &mut TestAppContext) {
             test_path_likes!(
@@ -1177,7 +1177,7 @@ mod tests {
             )
         }
 
-        // https://github.com/zed-industries/zed/issues/34027
+        // https://github.com/momor-industries/momor/issues/34027
         #[gpui::test]
         async fn issue_34027_nesting(cx: &mut TestAppContext) {
             test_path_likes!(
@@ -1243,7 +1243,7 @@ mod tests {
             )
         }
 
-        // https://github.com/zed-industries/zed/issues/34027
+        // https://github.com/momor-industries/momor/issues/34027
         #[gpui::test]
         async fn issue_34027_non_worktree_local_file(cx: &mut TestAppContext) {
             test_path_likes!(
@@ -1270,7 +1270,7 @@ mod tests {
             )
         }
 
-        // https://github.com/zed-industries/zed/issues/34027
+        // https://github.com/momor-industries/momor/issues/34027
         #[gpui::test]
         async fn issue_34027_non_worktree_remote_file(cx: &mut TestAppContext) {
             test_path_likes!(
@@ -1298,7 +1298,7 @@ mod tests {
             )
         }
 
-        // See https://github.com/zed-industries/zed/issues/34027
+        // See https://github.com/momor-industries/momor/issues/34027
         #[gpui::test]
         #[should_panic(expected = "Tooltip mismatch")]
         async fn issue_34027_gaps(cx: &mut TestAppContext) {
@@ -1325,7 +1325,7 @@ mod tests {
             )
         }
 
-        // See https://github.com/zed-industries/zed/issues/34027
+        // See https://github.com/momor-industries/momor/issues/34027
         #[gpui::test]
         #[should_panic(expected = "Tooltip mismatch")]
         async fn issue_34027_overlap(cx: &mut TestAppContext) {

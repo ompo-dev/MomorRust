@@ -4,7 +4,7 @@ use collections::HashMap;
 use settings::RegisterSetting;
 
 use crate::provider::{
-    anthropic::AnthropicSettings, bedrock::AmazonBedrockSettings, cloud::ZedDotDevSettings,
+    anthropic::AnthropicSettings, bedrock::AmazonBedrockSettings, cloud::MomorDotDevSettings,
     deepseek::DeepSeekSettings, google::GoogleSettings, lmstudio::LmStudioSettings,
     mistral::MistralSettings, ollama::OllamaSettings, open_ai::OpenAiSettings,
     open_ai_compatible::OpenAiCompatibleSettings, open_router::OpenRouterSettings,
@@ -26,7 +26,7 @@ pub struct AllLanguageModelSettings {
     pub openai_compatible: HashMap<Arc<str>, OpenAiCompatibleSettings>,
     pub vercel_ai_gateway: VercelAiGatewaySettings,
     pub x_ai: XAiSettings,
-    pub zed_dot_dev: ZedDotDevSettings,
+    pub momor_dot_dev: MomorDotDevSettings,
 }
 
 impl settings::Settings for AllLanguageModelSettings {
@@ -47,7 +47,7 @@ impl settings::Settings for AllLanguageModelSettings {
         let openai_compatible = language_models.openai_compatible.unwrap();
         let vercel_ai_gateway = language_models.vercel_ai_gateway.unwrap();
         let x_ai = language_models.x_ai.unwrap();
-        let zed_dot_dev = language_models.zed_dot_dev.unwrap();
+        let momor_dot_dev = language_models.momor_dot_dev.unwrap();
         Self {
             anthropic: AnthropicSettings {
                 api_url: anthropic.api_url.unwrap(),
@@ -120,8 +120,8 @@ impl settings::Settings for AllLanguageModelSettings {
                 api_url: x_ai.api_url.unwrap(),
                 available_models: x_ai.available_models.unwrap_or_default(),
             },
-            zed_dot_dev: ZedDotDevSettings {
-                available_models: zed_dot_dev.available_models.unwrap_or_default(),
+            momor_dot_dev: MomorDotDevSettings {
+                available_models: momor_dot_dev.available_models.unwrap_or_default(),
             },
         }
     }

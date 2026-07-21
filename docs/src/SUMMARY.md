@@ -63,7 +63,7 @@
 - [Plans & Pricing](./ai/plans-and-usage.md)
 - [Billing](./ai/billing.md)
 
-# Zed Business
+# Momor Business
 
 - [Overview](./business/overview.md)
 - [Organizations](./business/organizations.md)
@@ -202,9 +202,9 @@
 - [All Actions](./all-actions.md)
 - [CLI Reference](./reference/cli.md)
 
-# Developing Zed
+# Developing Momor
 
-- [Developing Zed](./development.md)
+- [Developing Momor](./development.md)
   - [macOS](./development/macos.md)
   - [Linux](./development/linux.md)
   - [Windows](./development/windows.md)

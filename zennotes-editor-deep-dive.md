@@ -49,6 +49,7 @@ flowchart TD
 ```
 
 Divisão de responsabilidades (do comentário de topo de cada arquivo):
+
 - **`Editor.tsx`** → "Renders the pane-layout tree recursively: every leaf becomes an `EditorPane`; every split becomes a flex container with resize handles. Global concerns (vim command registration, the bottom StatusBar, app-level keyboard shortcuts) live here."
 - **`EditorPane.tsx`** → "Per-pane concerns: the CM view, tabs, breadcrumb + toolbar, preview surface, and drag-drop zones."
 
@@ -59,6 +60,7 @@ Divisão de responsabilidades (do comentário de topo de cada arquivo):
 Não é o editor de texto em si — é o **container recursivo de panes** + o que é global.
 
 **O que faz:**
+
 1. **Renderiza a árvore de layout** (`PaneLayout`/`PaneSplit` de `lib/pane-layout.ts`): folhas → `<EditorPane>`, splits → flex com `<ResizeHandle>` entre filhos. É isso que dá **split panes** (vários editores lado a lado).
 2. **Registra os comandos Vim uma vez** (`vimCommandsRegistered`), traduzindo os keymaps configuráveis do app para o formato do Vim (`@replit/codemirror-vim`).
 3. Monta a **`StatusBar`** (rodapé: modo Vim, contagem de palavras, posição do cursor…).
@@ -74,21 +76,24 @@ Não é o editor de texto em si — é o **container recursivo de panes** + o qu
 É o coração da UI. Um pane = **uma pilha de tabs + um EditorView + a preview surface + toolbars**. Cada pane tem seu path ativo, modo e refs de CM.
 
 ### 3.1 Partes visuais
-| Parte | O que é |
-|---|---|
-| **Tab strip** | Tabs abertas no pane (`workspace-tabs.ts`, overflow via `tab-strip-overflow.ts`, scroll memory via `tab-scroll-memory.ts`) |
-| **Breadcrumb + toolbar** | Caminho da nota + botões (modo, ações) |
-| **Mode switch** | Botões **Edit / Split / Preview** (`MODES` com `keymapId` `global.modeSplit`/`modeEdit`/`modePreview`) |
-| **EditorView** | A instância CodeMirror 6 (§4) |
-| **EditorSelectionToolbar** | Toolbar flutuante ao selecionar texto (§9) |
-| **ContextMenu** | Menu de botão direito no editor |
-| **Preview surface** | `LazyPreview` (markdown renderizado) ou `LazyDiagramTabView` (§8/§10) |
-| **Drag-drop zones** | Soltar arquivos/imagens/notas no pane |
+
+| Parte                      | O que é                                                                                                                    |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **Tab strip**              | Tabs abertas no pane (`workspace-tabs.ts`, overflow via `tab-strip-overflow.ts`, scroll memory via `tab-scroll-memory.ts`) |
+| **Breadcrumb + toolbar**   | Caminho da nota + botões (modo, ações)                                                                                     |
+| **Mode switch**            | Botões **Edit / Split / Preview** (`MODES` com `keymapId` `global.modeSplit`/`modeEdit`/`modePreview`)                     |
+| **EditorView**             | A instância CodeMirror 6 (§4)                                                                                              |
+| **EditorSelectionToolbar** | Toolbar flutuante ao selecionar texto (§9)                                                                                 |
+| **ContextMenu**            | Menu de botão direito no editor                                                                                            |
+| **Preview surface**        | `LazyPreview` (markdown renderizado) ou `LazyDiagramTabView` (§8/§10)                                                      |
+| **Drag-drop zones**        | Soltar arquivos/imagens/notas no pane                                                                                      |
 
 ### 3.2 Modos por path (`edit` | `split` | `preview`)
+
 O modo é **por caminho de nota**, não global: `modesByPath` + `paneModeForPath(modesByPath, activeTab)` (`lib/pane-mode.ts`). Assim cada nota lembra se você a deixou em edição, split ou só preview. `split` mostra editor + preview lado a lado, com sincronização de scroll (`shouldSyncPreviewFromEditorViewport`).
 
 ### 3.3 Refs e ciclo de vida
+
 `viewRef` guarda o `EditorView`; `setEditorViewRef` registra a view no **store** (para comandos globais agirem no editor ativo). Há refs de **Compartment** para cada feature reconfigurável (§4.2).
 
 ---
@@ -98,6 +103,7 @@ O modo é **por caminho de nota**, não global: `modesByPath` + `paneModeForPath
 O ZenNotes usa **CodeMirror 6 puro** (`@codemirror/state`, `/view`, `/commands`, `/language`, `/search`, `/autocomplete`, `/lang-markdown`) — **não** um wrapper React. O pane cria e gerencia o `EditorView` na mão. Isso dá controle total sobre extensões e performance.
 
 ### 4.1 Criação da view (`EditorPane.tsx:1466`)
+
 ```ts
 const state = EditorState.create({
   doc: initialBody,
@@ -127,20 +133,22 @@ const view = new EditorView({ state, parent: el })
 ```
 
 ### 4.2 Compartments — o padrão-chave
+
 Um **Compartment** permite trocar um pedaço da config **sem recriar o editor** (preserva cursor, histórico, scroll). Cada setting toggleável é um compartment, reconfigurado via `view.dispatch({ effects: compartment.reconfigure(...) })`:
 
-| Compartment | Liga/desliga | Quando reconfigura |
-|---|---|---|
-| `vimCompartment` | Modo Vim (`vim()`) | Toggle da setting Vim |
-| `editorKeymapCompartment` | Keymap (`buildEditorKeymap`) | Muda binding ou muda Vim |
-| `markdownCompartment` | Edição markdown (§4.3) | Defer de doc grande / toggle |
-| `markdownSyntaxCompartment` | Realce de sintaxe | idem |
-| `livePreviewCompartment` | WYSIWYG/live-preview | Toggle `livePreview` |
-| `lineNumbersCompartment` | Números de linha (off/absolute/relative) | Setting |
-| `wordWrapCompartment` | Quebra de linha | Setting |
-| `historyCompartment` | Undo/redo | Reset ao trocar de doc |
+| Compartment                 | Liga/desliga                             | Quando reconfigura           |
+| --------------------------- | ---------------------------------------- | ---------------------------- |
+| `vimCompartment`            | Modo Vim (`vim()`)                       | Toggle da setting Vim        |
+| `editorKeymapCompartment`   | Keymap (`buildEditorKeymap`)             | Muda binding ou muda Vim     |
+| `markdownCompartment`       | Edição markdown (§4.3)                   | Defer de doc grande / toggle |
+| `markdownSyntaxCompartment` | Realce de sintaxe                        | idem                         |
+| `livePreviewCompartment`    | WYSIWYG/live-preview                     | Toggle `livePreview`         |
+| `lineNumbersCompartment`    | Números de linha (off/absolute/relative) | Setting                      |
+| `wordWrapCompartment`       | Quebra de linha                          | Setting                      |
+| `historyCompartment`        | Undo/redo                                | Reset ao trocar de doc       |
 
 ### 4.3 Builders de extensão
+
 - **`markdownEditingExtensions()`** (`:290`): `markdown({ base: markdownLanguage, codeLanguages: resolveCodeLanguage, addKeymap:true })` + `markdownListIndentPlugin` + `frontmatterStyle` + `orderedListRenumber` + `headingFolding()` + `codeBlockFontPlugin`.
 - **`markdownSyntaxHighlightExtensions()`** (`:301`): `syntaxHighlighting(paperHighlight)` (tema próprio: `tok-heading1..6`, etc.) + fallback `defaultHighlightStyle`.
 - **`wysiwygExtensions(renderTables)`** (`:319`) — o bundle **live-preview / WYSIWYG**: `livePreviewPlugin` (esconde marcadores, inline) + `codeBlockFlairPlugin` + (tabelas gated por setting: `tablePlugin` + `tableVimEntry`) + `wysiwygBlocksPlugin` (blocos: blockquote bar, bullets, hr, code cards) + `hashtagExtension` (chips `#tag`) + `highlightExtension` (`==destaque==`) + `wikilinkRenderExtension` (`[[link]]` renderizado).
@@ -152,28 +160,29 @@ Um **Compartment** permite trocar um pedaço da config **sem recriar o editor** 
 
 Cada feature de edição é uma extensão isolada e **testada** (quase toda tem `.test.ts` ao lado).
 
-| Grupo | Arquivos | Função |
-|---|---|---|
-| **Wikilinks** | `cm-wikilinks`, `cm-wikilink-render` | Autocomplete `[[` e `[[#heading`; render/click do link interno |
-| **Tags** | `cm-hashtags` | Chip e autocomplete de `#tag` |
-| **Live preview / WYSIWYG** | `cm-live-preview`, `cm-wysiwyg-blocks`, `cm-wysiwyg-compose` | Renderiza markdown inline enquanto edita |
-| **Slash commands** | `cm-slash-commands` | Menu `/` para inserir blocos/templates |
-| **Snippets / datas / vars** | `cm-markdown-snippets`, `markdown-snippets-config`, `cm-date-shortcuts`, `cm-template-variables` | Expansões, datas, variáveis de template |
-| **Listas** | `cm-markdown-list-indent`, `cm-ordered-list-renumber` | Indentar/desindentar; renumerar `1. 2. 3.` |
-| **Tabelas** | `cm-table`, `cm-table-menu` | Widgets de tabela + menu (gated por setting) |
-| **Frontmatter** | `cm-frontmatter` | Estiliza o bloco `---` de topo |
-| **Headings / fold** | `cm-heading-fold` | Dobrar seções por heading |
-| **Código** | `cm-code-block-flair`, `cm-code-block-font`, `cm-code-languages`, `cm-highlight`, `code-block-copy` | Card/linguagem/fonte/realce/copiar de bloco de código |
-| **Realce (`==`)** | `cm-highlight` | `applyHighlight`, `HIGHLIGHT_COLORS` |
-| **Vim** | `cm-vim-clipboard`, `cm-vim-default-keymap`, `cm-vim-display-line`, `vim-insert-escape`, `cm-yank-highlight` | Clipboard, keymap, movimento por linha visual, esc no insert, realce de yank |
-| **Autocomplete nav** | `cm-completion-nav` | Navegar sugestões por teclado |
-| **Formatação** | `cm-format`, `format-markdown` | `toggleWrap`, `wrapLink`, `setBlockType` |
+| Grupo                       | Arquivos                                                                                                     | Função                                                                       |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| **Wikilinks**               | `cm-wikilinks`, `cm-wikilink-render`                                                                         | Autocomplete `[[` e `[[#heading`; render/click do link interno               |
+| **Tags**                    | `cm-hashtags`                                                                                                | Chip e autocomplete de `#tag`                                                |
+| **Live preview / WYSIWYG**  | `cm-live-preview`, `cm-wysiwyg-blocks`, `cm-wysiwyg-compose`                                                 | Renderiza markdown inline enquanto edita                                     |
+| **Slash commands**          | `cm-slash-commands`                                                                                          | Menu `/` para inserir blocos/templates                                       |
+| **Snippets / datas / vars** | `cm-markdown-snippets`, `markdown-snippets-config`, `cm-date-shortcuts`, `cm-template-variables`             | Expansões, datas, variáveis de template                                      |
+| **Listas**                  | `cm-markdown-list-indent`, `cm-ordered-list-renumber`                                                        | Indentar/desindentar; renumerar `1. 2. 3.`                                   |
+| **Tabelas**                 | `cm-table`, `cm-table-menu`                                                                                  | Widgets de tabela + menu (gated por setting)                                 |
+| **Frontmatter**             | `cm-frontmatter`                                                                                             | Estiliza o bloco `---` de topo                                               |
+| **Headings / fold**         | `cm-heading-fold`                                                                                            | Dobrar seções por heading                                                    |
+| **Código**                  | `cm-code-block-flair`, `cm-code-block-font`, `cm-code-languages`, `cm-highlight`, `code-block-copy`          | Card/linguagem/fonte/realce/copiar de bloco de código                        |
+| **Realce (`==`)**           | `cm-highlight`                                                                                               | `applyHighlight`, `HIGHLIGHT_COLORS`                                         |
+| **Vim**                     | `cm-vim-clipboard`, `cm-vim-default-keymap`, `cm-vim-display-line`, `vim-insert-escape`, `cm-yank-highlight` | Clipboard, keymap, movimento por linha visual, esc no insert, realce de yank |
+| **Autocomplete nav**        | `cm-completion-nav`                                                                                          | Navegar sugestões por teclado                                                |
+| **Formatação**              | `cm-format`, `format-markdown`                                                                               | `toggleWrap`, `wrapLink`, `setBlockType`                                     |
 
 ---
 
 ## 6. Autocomplete — sources plugáveis
 
 O `autocompletion({ override: [...] })` roda 4 sources (`EditorPane.tsx:1490`):
+
 1. **`slashCommandSource`** — dispara em `/`; render custom (`slashCommandRender`), classe `slash-cmd-option`. Insere blocos, templates, comandos.
 2. **`dateShortcutSource`** — datas (ex.: `@today`).
 3. **`wikilinkSource`** — dispara em `[[`; lista notas do vault; classe `wikilink-cmd-option`.
@@ -196,6 +205,7 @@ Navegação das sugestões: `completionNavKeymap` (setas/enter, respeitando Vim)
 ## 8. Seguir links (comportamento de clique) — `EditorView.domEventHandlers.mousedown`
 
 Regra (comentada em `EditorPane.tsx:1503`, issue #201):
+
 - **Clique simples (botão 0, sem alt/shift)** segue um link **renderizado** (cursor fora dele, sintaxe `(url)` escondida) — igual aos `[[wikilinks]]`. Se o cursor já está **dentro** do link, o clique **edita** em vez de seguir.
 - **Cmd/Ctrl-clique** sempre segue (inclusive wikilinks).
 - Resolução: `extractLinkAtCursor` / `markdownLinkAt` → `followEditorLink` → `resolveInternalNoteHref` (nota), `resolveWikilinkTarget` (wikilink), `openWikilinkHeading`/`openDatabaseFromWikilink`, `externalLinkUrl` (externo), `classifyLocalAssetHref` (asset local).
@@ -205,8 +215,9 @@ Regra (comentada em `EditorPane.tsx:1503`, issue #201):
 ## 9. `EditorSelectionToolbar.tsx` — toolbar flutuante (345 linhas)
 
 Estilo Notion: aparece ao selecionar texto, posicionada por `selectionEdgeCoords`. Oferece (`FORMATS`/`BLOCKS`):
+
 - **Menu "Turn into"** (block type): Text, H1, H2, H3, Bulleted list, Numbered list, To-do, Quote, Code → `setBlockType`.
-- **Formatos inline**: **Bold** `**` (Mod+B), *Italic* `*` (Mod+I), ~~Strike~~ `~~` (Shift+Mod+S), ==Highlight== `==` (Shift+Mod+H), `Code` `` ` `` (Mod+E), Math `$` (Shift+Mod+M) → `toggleWrap`.
+- **Formatos inline**: **Bold** `**` (Mod+B), _Italic_ `*` (Mod+I), ~~Strike~~ `~~` (Shift+Mod+S), ==Highlight== `==` (Shift+Mod+H), `Code` `` ` `` (Mod+E), Math `$` (Shift+Mod+M) → `toggleWrap`.
 - **Link** (`wrapLink`) e **Comment** (cria comentário sidecar ancorado na seleção — `getSelectionCommentAction`).
 
 Complemento: **ContextMenu** (botão direito) via `getEditorContextMenuPosition` + `openEditorContextMenu`.
@@ -218,6 +229,7 @@ Complemento: **ContextMenu** (botão direito) via `getEditorContextMenuPosition`
 Carregado **lazy** (code-split). Renderiza o markdown e faz pós-processamento no DOM.
 
 **Pipeline:**
+
 1. `renderMarkdown(markdown)` (de `lib/markdown.ts`, §8 do doc principal) → HTML sanitizado (DOMPurify). Memoizado (`useMemo`).
 2. Injeta via `dangerouslySetInnerHTML` (seguro pós-sanitização).
 3. **Pós-processamento no DOM:**
@@ -233,14 +245,14 @@ Carregado **lazy** (code-split). Renderiza o markdown e faz pós-processamento n
 
 ## 11. Sub-componentes do "componente de nota"
 
-| Componente | Arquivo | O que é |
-|---|---|---|
-| **NoteList** | `NoteList.tsx` (1145) | Lista de notas (por pasta/tag/busca), com preview/excerpt, ordenação, multi-seleção, DnD |
-| **OutlinePanel** | `OutlinePanel.tsx` (125) | Árvore de headings da nota ativa (`lib/outline.ts`); clique salta no editor/preview |
-| **CommentsPanel** | `CommentsPanel.tsx` (662) | Comentários sidecar (âncoras por offset); criar/resolver/deletar |
-| **PinnedReferencePane** | `PinnedReferencePane.tsx` (551) | Painel lateral fixo com uma nota/asset de referência ao lado da edição |
-| **NoteHoverPreview** | `NoteHoverPreview.tsx` | Preview flutuante ao passar o mouse num `[[wikilink]]` |
-| **StatusBar** | `StatusBar.tsx` | Rodapé: modo Vim, contagem de palavras (`word-count.ts`), cursor |
+| Componente              | Arquivo                         | O que é                                                                                  |
+| ----------------------- | ------------------------------- | ---------------------------------------------------------------------------------------- |
+| **NoteList**            | `NoteList.tsx` (1145)           | Lista de notas (por pasta/tag/busca), com preview/excerpt, ordenação, multi-seleção, DnD |
+| **OutlinePanel**        | `OutlinePanel.tsx` (125)        | Árvore de headings da nota ativa (`lib/outline.ts`); clique salta no editor/preview      |
+| **CommentsPanel**       | `CommentsPanel.tsx` (662)       | Comentários sidecar (âncoras por offset); criar/resolver/deletar                         |
+| **PinnedReferencePane** | `PinnedReferencePane.tsx` (551) | Painel lateral fixo com uma nota/asset de referência ao lado da edição                   |
+| **NoteHoverPreview**    | `NoteHoverPreview.tsx`          | Preview flutuante ao passar o mouse num `[[wikilink]]`                                   |
+| **StatusBar**           | `StatusBar.tsx`                 | Rodapé: modo Vim, contagem de palavras (`word-count.ts`), cursor                         |
 
 ---
 
@@ -260,6 +272,7 @@ sequenceDiagram
     B-->>S: NoteMeta fresca (tags/links/excerpt)
     S->>P: re-render (badges, outline, preview)
 ```
+
 O editor **não** salva direto no disco — ele atualiza o `store` (via `updateNoteBody`), que debounce-salva pelo bridge. A preview e o outline reagem ao `noteContents` do store, não ao CM diretamente. (Detalhes de disco no [doc principal](zennotes-notes-core-analysis.md) §6.)
 
 ---
@@ -276,23 +289,23 @@ O editor **não** salva direto no disco — ele atualiza o `store` (via `updateN
 
 ## 14. Índice de arquivos (editor + nota)
 
-| Quero mexer em… | Abrir |
-|---|---|
-| Layout de panes / split / Vim global / StatusBar | `components/Editor.tsx` |
-| O pane de nota (tabs, CM view, toolbar, DnD, modos) | `components/EditorPane.tsx` |
-| Toolbar de formatação na seleção | `components/EditorSelectionToolbar.tsx` |
-| Preview + diagramas | `components/Preview.tsx`, `LazyPreview.tsx`, `lib/diagram-renderers.ts` |
-| Uma feature de edição específica | `lib/cm-<feature>.ts` (+ `.test.ts`) |
-| Autocomplete (`/`, `[[`, datas) | `lib/cm-slash-commands.ts`, `cm-wikilinks.ts`, `cm-date-shortcuts.ts` |
-| Modos edit/split/preview | `lib/pane-mode.ts`, `pane-layout.ts` |
-| Tabs | `lib/workspace-tabs.ts`, `tab-strip-overflow.ts`, `tab-scroll-memory.ts` |
-| Keymaps (config + tradução Vim) | `lib/keymaps.ts`, `Editor.tsx` (`toVimSequence`) |
-| Outline / Comentários / Referência | `OutlinePanel.tsx`, `CommentsPanel.tsx`, `PinnedReferencePane.tsx` |
-| Render de markdown (pipeline) | `lib/markdown.ts` |
+| Quero mexer em…                                     | Abrir                                                                    |
+| --------------------------------------------------- | ------------------------------------------------------------------------ |
+| Layout de panes / split / Vim global / StatusBar    | `components/Editor.tsx`                                                  |
+| O pane de nota (tabs, CM view, toolbar, DnD, modos) | `components/EditorPane.tsx`                                              |
+| Toolbar de formatação na seleção                    | `components/EditorSelectionToolbar.tsx`                                  |
+| Preview + diagramas                                 | `components/Preview.tsx`, `LazyPreview.tsx`, `lib/diagram-renderers.ts`  |
+| Uma feature de edição específica                    | `lib/cm-<feature>.ts` (+ `.test.ts`)                                     |
+| Autocomplete (`/`, `[[`, datas)                     | `lib/cm-slash-commands.ts`, `cm-wikilinks.ts`, `cm-date-shortcuts.ts`    |
+| Modos edit/split/preview                            | `lib/pane-mode.ts`, `pane-layout.ts`                                     |
+| Tabs                                                | `lib/workspace-tabs.ts`, `tab-strip-overflow.ts`, `tab-scroll-memory.ts` |
+| Keymaps (config + tradução Vim)                     | `lib/keymaps.ts`, `Editor.tsx` (`toVimSequence`)                         |
+| Outline / Comentários / Referência                  | `OutlinePanel.tsx`, `CommentsPanel.tsx`, `PinnedReferencePane.tsx`       |
+| Render de markdown (pipeline)                       | `lib/markdown.ts`                                                        |
 
 ---
 
-## 15. Se for portar pro momor (Zed/gpui)
+## 15. Se for portar pro momor (Momor/gpui)
 
 O momor já tem um block editor próprio (`crates/notebook/src/note_editor.rs`) estilo Notion — modelo **diferente** do ZenNotes (que edita **markdown cru** num CodeMirror com live-preview opcional, não blocos). O que vale de referência conceitual:
 

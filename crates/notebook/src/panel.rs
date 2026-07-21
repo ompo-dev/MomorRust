@@ -115,7 +115,7 @@ enum Selection {
 
 #[derive(Clone)]
 enum McpConfigSource {
-    ZedSettings(Arc<str>),
+    MomorSettings(Arc<str>),
     ClaudeConfig(String),
 }
 
@@ -454,11 +454,11 @@ impl NotebookPanel {
 
     /// Salva no KV qual item está aberto → reabrir o app volta pra ele. (Ver `restore_open`.)
     fn mcp_editor_config(&self, name: &str, cx: &mut Context<Self>) -> (String, McpConfigSource) {
-        if let Some((id, settings)) = find_zed_mcp_settings(name, cx) {
+        if let Some((id, settings)) = find_momor_mcp_settings(name, cx) {
             let content: settings::ContextServerSettingsContent = settings.into();
             return (
                 format_one_mcp_json(id.as_ref(), content),
-                McpConfigSource::ZedSettings(id),
+                McpConfigSource::MomorSettings(id),
             );
         }
 
@@ -472,7 +472,7 @@ impl NotebookPanel {
         if let Some((id, content)) = self.store_mcp_settings(name, cx) {
             return (
                 format_one_mcp_json(id.as_ref(), content),
-                McpConfigSource::ZedSettings(id),
+                McpConfigSource::MomorSettings(id),
             );
         }
 
@@ -574,7 +574,7 @@ impl NotebookPanel {
         };
         let text = editor.read(cx).text(cx);
         let result = match source {
-            McpConfigSource::ZedSettings(original_id) => {
+            McpConfigSource::MomorSettings(original_id) => {
                 parse_one_mcp_settings(&text).map(|(id, settings)| {
                     if let Some(ws) = self._workspace.upgrade() {
                         let fs = ws.read(cx).app_state().fs.clone();
@@ -587,7 +587,7 @@ impl NotebookPanel {
                             current.project.context_servers.insert(next_id, settings);
                         });
                     }
-                    self.mcp_editor_source = Some(McpConfigSource::ZedSettings(id.clone()));
+                    self.mcp_editor_source = Some(McpConfigSource::MomorSettings(id.clone()));
                     self.selection = Selection::Mcp(id.to_string());
                     self.persist_open(cx);
                 })
@@ -2080,7 +2080,7 @@ fn mcp_name_matches(left: &str, right: &str) -> bool {
             .any(|candidate| candidate == left)
 }
 
-fn find_zed_mcp_settings(
+fn find_momor_mcp_settings(
     name: &str,
     cx: &App,
 ) -> Option<(Arc<str>, project::project_settings::ContextServerSettings)> {

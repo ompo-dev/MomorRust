@@ -76,12 +76,12 @@ pub trait Watcher: Send + Sync {
 /// Returns `true` for filesystem types where inotify/FSEvents/ReadDirectoryChanges
 /// silently fail to deliver events: 9P (WSL drvfs), NFS, CIFS/SMB, FUSE (sshfs), etc.
 ///
-/// Can be overridden with the `ZED_FILE_WATCHER_MODE` environment variable:
+/// Can be overridden with the `MOMOR_FILE_WATCHER_MODE` environment variable:
 /// - `native` — always use native OS watcher
 /// - `poll` — always use polling
 /// - `auto` (default) — auto-detect based on filesystem type
 pub fn requires_poll_watcher(path: &Path) -> bool {
-    match std::env::var("ZED_FILE_WATCHER_MODE")
+    match std::env::var("MOMOR_FILE_WATCHER_MODE")
         .as_deref()
         .unwrap_or("auto")
     {
@@ -597,14 +597,14 @@ impl FileHandle for std::fs::File {
 
         use windows::Win32::Foundation::HANDLE;
         use windows::Win32::Storage::FileSystem::{
-            FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW,
+            FILE_NAME_NORMALIMOMOR, GetFinalPathNameByHandleW,
         };
 
         let handle = HANDLE(self.as_raw_handle() as _);
 
         // Query required buffer size (in wide chars)
         let required_len =
-            unsafe { GetFinalPathNameByHandleW(handle, &mut [], FILE_NAME_NORMALIZED) };
+            unsafe { GetFinalPathNameByHandleW(handle, &mut [], FILE_NAME_NORMALIMOMOR) };
         anyhow::ensure!(
             required_len != 0,
             "GetFinalPathNameByHandleW returned 0 length"
@@ -612,7 +612,7 @@ impl FileHandle for std::fs::File {
 
         // Allocate buffer and retrieve the path
         let mut buf: Vec<u16> = vec![0u16; required_len as usize + 1];
-        let written = unsafe { GetFinalPathNameByHandleW(handle, &mut buf, FILE_NAME_NORMALIZED) };
+        let written = unsafe { GetFinalPathNameByHandleW(handle, &mut buf, FILE_NAME_NORMALIMOMOR) };
         anyhow::ensure!(
             written != 0,
             "GetFinalPathNameByHandleW failed to write path"
@@ -925,7 +925,7 @@ impl Fs for RealFs {
 
     async fn trash(&self, path: &Path, _options: RemoveOptions) -> Result<TrashedEntry> {
         // We must make the path absolute or trash will make a weird abomination
-        // of the zed working directory (not usually the worktree) and whatever
+        // of the momor working directory (not usually the worktree) and whatever
         // the path variable holds.
         let path = self
             .canonicalize(path)
@@ -984,7 +984,7 @@ impl Fs for RealFs {
         smol::unblock(move || {
             // Use the directory of the destination as temp dir to avoid
             // invalid cross-device link error, and XDG_CACHE_DIR for fallback.
-            // See https://github.com/zed-industries/zed/pull/8437 for more details.
+            // See https://github.com/momor-industries/momor/pull/8437 for more details.
             let mut tmp_file =
                 tempfile::NamedTempFile::new_in(path.parent().unwrap_or(paths::temp_dir()))?;
             tmp_file.write_all(data.as_bytes())?;
@@ -1010,7 +1010,7 @@ impl Fs for RealFs {
             // https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilew#remarks
             //
             // So we use the directory of the destination as a temp dir to avoid it.
-            // https://github.com/zed-industries/zed/issues/16571
+            // https://github.com/momor-industries/momor/issues/16571
             let temp_dir = TempDir::new_in(path.parent().unwrap_or(paths::temp_dir()))?;
             let temp_file = {
                 let temp_file_path = temp_dir.path().join("temp_file");
@@ -1366,13 +1366,13 @@ impl Fs for RealFs {
     ///
     /// It creates both files in a temporary directory it removes at the end.
     async fn is_case_sensitive(&self) -> bool {
-        const UNINITIALIZED: u8 = 0;
+        const UNINITIALIMOMOR: u8 = 0;
         const CASE_SENSITIVE: u8 = 1;
         const NOT_CASE_SENSITIVE: u8 = 2;
 
         // Note we could CAS here, but really, if we race we do this work twice at worst which isn't a big deal.
         let load = self.is_case_sensitive.load(Ordering::Acquire);
-        if load != UNINITIALIZED {
+        if load != UNINITIALIMOMOR {
             return load == CASE_SENSITIVE;
         }
         let temp_dir = self.executor.spawn(async { TempDir::new() });
@@ -3004,9 +3004,9 @@ impl Fs for FakeFs {
     }
 
     async fn trash(&self, path: &Path, options: RemoveOptions) -> Result<TrashedEntry> {
-        let normalized_path = normalize_path(path);
-        let parent_path = normalized_path.parent().context("cannot remove the root")?;
-        let base_name = normalized_path.file_name().unwrap();
+        let normalimomor_path = normalize_path(path);
+        let parent_path = normalimomor_path.parent().context("cannot remove the root")?;
+        let base_name = normalimomor_path.file_name().unwrap();
         let result = if self.is_dir(path).await {
             self.remove_dir_inner(path, options).await?
         } else {
@@ -3025,7 +3025,7 @@ impl Fs for FakeFs {
                 state.trash.push((trashed_entry.clone(), fake_entry));
                 Ok(trashed_entry)
             }
-            None => anyhow::bail!("{normalized_path:?} does not exist"),
+            None => anyhow::bail!("{normalimomor_path:?} does not exist"),
         }
     }
 

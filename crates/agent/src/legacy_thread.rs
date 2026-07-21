@@ -232,7 +232,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn test_legacy_serialized_thread_upgrade() {
+    fn test_legacy_serialimomor_thread_upgrade() {
         let updated_at = Utc::now();
         let legacy_thread = LegacySerializedThread {
             summary: "Test conversation".into(),
@@ -279,7 +279,7 @@ mod tests {
     }
 
     #[test]
-    fn test_serialized_threadv0_1_0_upgrade() {
+    fn test_serialimomor_threadv0_1_0_upgrade() {
         let updated_at = Utc::now();
         let thread_v0_1_0 = SerializedThreadV0_1_0(SerializedThread {
             summary: "Test conversation".into(),

@@ -705,7 +705,7 @@ impl Component for ThreadItem {
                             .icon(IconName::AiClaude)
                             .worktrees(vec![ThreadItemWorktreeInfo {
                                 worktree_name: Some("my-project".into()),
-                                full_path: "/worktrees/my-project/zed".into(),
+                                full_path: "/worktrees/my-project/momor".into(),
                                 highlight_positions: Vec::new(),
                                 kind: WorktreeKind::Linked,
                                 branch_name: Some("feature-branch".into()),
@@ -724,7 +724,7 @@ impl Component for ThreadItem {
                             .icon(IconName::AiClaude)
                             .worktrees(vec![ThreadItemWorktreeInfo {
                                 worktree_name: Some("my-project".into()),
-                                full_path: "/worktrees/my-project/zed".into(),
+                                full_path: "/worktrees/my-project/momor".into(),
                                 highlight_positions: Vec::new(),
                                 kind: WorktreeKind::Linked,
                                 branch_name: Some("fix-very-long-branch-name-here".into()),
@@ -742,8 +742,8 @@ impl Component for ThreadItem {
                         ThreadItem::new("ti-5e", "Main worktree branch with diff stats")
                             .icon(IconName::MomorAgent)
                             .worktrees(vec![ThreadItemWorktreeInfo {
-                                worktree_name: Some("zed".into()),
-                                full_path: "/projects/zed".into(),
+                                worktree_name: Some("momor".into()),
+                                full_path: "/projects/momor".into(),
                                 highlight_positions: Vec::new(),
                                 kind: WorktreeKind::Main,
                                 branch_name: Some("sidebar-show-branch-name".into()),
@@ -764,7 +764,7 @@ impl Component for ThreadItem {
                                 worktree_name: Some(
                                     "very-long-worktree-name-that-should-truncate".into(),
                                 ),
-                                full_path: "/worktrees/very-long-worktree-name/zed".into(),
+                                full_path: "/worktrees/very-long-worktree-name/momor".into(),
                                 highlight_positions: Vec::new(),
                                 kind: WorktreeKind::Linked,
                                 branch_name: None,
@@ -781,7 +781,7 @@ impl Component for ThreadItem {
                             .icon(IconName::AiClaude)
                             .worktrees(vec![ThreadItemWorktreeInfo {
                                 worktree_name: Some("jade-glen".into()),
-                                full_path: "/worktrees/jade-glen/zed".into(),
+                                full_path: "/worktrees/jade-glen/momor".into(),
                                 highlight_positions: vec![0, 1, 2, 3],
                                 kind: WorktreeKind::Linked,
                                 branch_name: Some("fix-scrolling".into()),
@@ -799,14 +799,14 @@ impl Component for ThreadItem {
                             .worktrees(vec![
                                 ThreadItemWorktreeInfo {
                                     worktree_name: Some("jade-glen".into()),
-                                    full_path: "/worktrees/jade-glen/zed".into(),
+                                    full_path: "/worktrees/jade-glen/momor".into(),
                                     highlight_positions: Vec::new(),
                                     kind: WorktreeKind::Linked,
                                     branch_name: None,
                                 },
                                 ThreadItemWorktreeInfo {
                                     worktree_name: Some("fawn-otter".into()),
-                                    full_path: "/worktrees/fawn-otter/zed-slides".into(),
+                                    full_path: "/worktrees/fawn-otter/momor-slides".into(),
                                     highlight_positions: Vec::new(),
                                     kind: WorktreeKind::Linked,
                                     branch_name: None,
@@ -825,14 +825,14 @@ impl Component for ThreadItem {
                             .worktrees(vec![
                                 ThreadItemWorktreeInfo {
                                     worktree_name: Some("jade-glen".into()),
-                                    full_path: "/worktrees/jade-glen/zed".into(),
+                                    full_path: "/worktrees/jade-glen/momor".into(),
                                     highlight_positions: Vec::new(),
                                     kind: WorktreeKind::Linked,
                                     branch_name: Some("fix".into()),
                                 },
                                 ThreadItemWorktreeInfo {
                                     worktree_name: Some("fawn-otter".into()),
-                                    full_path: "/worktrees/fawn-otter/zed-slides".into(),
+                                    full_path: "/worktrees/fawn-otter/momor-slides".into(),
                                     highlight_positions: Vec::new(),
                                     kind: WorktreeKind::Linked,
                                     branch_name: Some("main".into()),
@@ -851,7 +851,7 @@ impl Component for ThreadItem {
                             .project_name("my-remote-server")
                             .worktrees(vec![ThreadItemWorktreeInfo {
                                 worktree_name: Some("jade-glen".into()),
-                                full_path: "/worktrees/jade-glen/zed".into(),
+                                full_path: "/worktrees/jade-glen/momor".into(),
                                 highlight_positions: Vec::new(),
                                 kind: WorktreeKind::Linked,
                                 branch_name: Some("feature-branch".into()),
@@ -867,12 +867,12 @@ impl Component for ThreadItem {
                         ThreadItem::new("ti-5k", "Archived thread with folder paths")
                             .icon(IconName::AiClaude)
                             .project_paths(Arc::from(vec![
-                                PathBuf::from("/projects/zed"),
-                                PathBuf::from("/projects/zed-slides"),
+                                PathBuf::from("/projects/momor"),
+                                PathBuf::from("/projects/momor-slides"),
                             ]))
                             .worktrees(vec![ThreadItemWorktreeInfo {
                                 worktree_name: Some("jade-glen".into()),
-                                full_path: "/worktrees/jade-glen/zed".into(),
+                                full_path: "/worktrees/jade-glen/momor".into(),
                                 highlight_positions: Vec::new(),
                                 kind: WorktreeKind::Linked,
                                 branch_name: Some("feature".into()),
@@ -890,7 +890,7 @@ impl Component for ThreadItem {
                             .project_name("remote-dev")
                             .worktrees(vec![ThreadItemWorktreeInfo {
                                 worktree_name: Some("my-worktree".into()),
-                                full_path: "/worktrees/my-worktree/zed".into(),
+                                full_path: "/worktrees/my-worktree/momor".into(),
                                 highlight_positions: Vec::new(),
                                 kind: WorktreeKind::Linked,
                                 branch_name: Some("main".into()),

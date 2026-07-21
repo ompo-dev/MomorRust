@@ -6,7 +6,7 @@ You are investigating a crash that was observed in the wild. Your goal is to und
 
 ### Step 1: Get the Crash Report
 
-If given a Sentry issue ID (like `ZED-4VS` or a numeric ID), there are several ways to fetch the crash data:
+If given a Sentry issue ID (like `MOMOR-4VS` or a numeric ID), there are several ways to fetch the crash data:
 
 **Option A: Sentry MCP server (preferred if available)**
 If the Sentry MCP server is configured as a context server, use its tools directly (e.g., `get_sentry_issue`) to fetch the issue details and stack trace. This is the simplest path — no tokens or scripts needed.
@@ -33,6 +33,7 @@ Read the stack trace bottom-to-top (from crash site upward) and identify:
 4. **The data flow** — trace how the invalid data reached the crash site. What computed the bad index, the None value, etc.?
 
 Find the relevant source files in the repository and read them. Pay close attention to:
+
 - The crashing function and its callers
 - How inputs to the crashing operation are computed
 - Any assumptions the code makes about its inputs (string encoding, array lengths, option values)
@@ -41,7 +42,7 @@ Find the relevant source files in the repository and read them. Pay close attent
 
 Work backwards from the crash site to determine **what sequence of events or data conditions** produces the invalid state.
 
-Ask yourself: *What user action or sequence of actions could lead to this state?* The crash came from a real user, so there is some natural usage pattern that triggers it.
+Ask yourself: _What user action or sequence of actions could lead to this state?_ The crash came from a real user, so there is some natural usage pattern that triggers it.
 
 ### Step 4: Write a Reproduction Test
 
@@ -65,19 +66,23 @@ Create an `ANALYSIS.md` file (in the working directory root, or wherever instruc
 # Crash Analysis: <short description>
 
 ## Crash Summary
+
 - **Sentry Issue:** <ID and link if available>
 - **Error:** <the panic/error message>
 - **Crash Site:** <function name and file>
 
 ## Root Cause
+
 <Explain what goes wrong and why. Be specific about the data flow.>
 
 ## Reproduction
+
 <Describe what the test does and how it triggers the same crash.
 Include the exact command to run the test, e.g.:
 `cargo test -p <crate> <test_name>`>
 
 ## Suggested Fix
+
 <Describe the fix approach. Be specific: which function, what check to add,
 what computation to change. If there are multiple options, list them with tradeoffs.>
 ```

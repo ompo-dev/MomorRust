@@ -21,8 +21,8 @@ wasmtime::component::bindgen!({
     path: "../extension_api/wit/since_v0.0.1",
     with: {
          "worktree": ExtensionWorktree,
-         "zed:extension/github": since_v0_6_0::zed::extension::github,
-         "zed:extension/platform": latest::zed::extension::platform,
+         "momor:extension/github": since_v0_6_0::momor::extension::github,
+         "momor:extension/platform": latest::momor::extension::platform,
     },
 });
 
@@ -128,11 +128,11 @@ impl ExtensionImports for WasmState {
         repo: String,
         options: GithubReleaseOptions,
     ) -> wasmtime::Result<Result<GithubRelease, String>> {
-        since_v0_6_0::zed::extension::github::Host::latest_github_release(self, repo, options).await
+        since_v0_6_0::momor::extension::github::Host::latest_github_release(self, repo, options).await
     }
 
     async fn current_platform(&mut self) -> Result<(Os, Architecture)> {
-        latest::zed::extension::platform::Host::current_platform(self).await
+        latest::momor::extension::platform::Host::current_platform(self).await
     }
 
     async fn set_language_server_installation_status(

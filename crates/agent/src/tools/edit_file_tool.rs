@@ -1059,15 +1059,15 @@ mod tests {
     async fn test_streaming_authorize(cx: &mut TestAppContext) {
         let (edit_tool, _project, _action_log, _fs, _thread) = setup_test(cx, json!({})).await;
 
-        // Test 1: Path with .zed component should require confirmation
+        // Test 1: Path with .momor component should require confirmation
         let (stream_tx, mut stream_rx) = ToolCallEventStream::test();
         let _auth = cx
-            .update(|cx| edit_tool.authorize(&PathBuf::from(".zed/settings.json"), &stream_tx, cx));
+            .update(|cx| edit_tool.authorize(&PathBuf::from(".momor/settings.json"), &stream_tx, cx));
 
         let event = stream_rx.expect_authorization().await;
         assert_eq!(
             event.tool_call.fields.title,
-            Some("Edit `.zed/settings.json` (local settings)".into())
+            Some("Edit `.momor/settings.json` (local settings)".into())
         );
 
         // Test 2: Path outside project should require confirmation
@@ -1081,22 +1081,22 @@ mod tests {
             Some("Edit `/etc/hosts`".into())
         );
 
-        // Test 3: Relative path without .zed should not require confirmation
+        // Test 3: Relative path without .momor should not require confirmation
         let (stream_tx, mut stream_rx) = ToolCallEventStream::test();
         cx.update(|cx| edit_tool.authorize(&PathBuf::from("root/src/main.rs"), &stream_tx, cx))
             .await
             .unwrap();
         assert!(stream_rx.try_recv().is_err());
 
-        // Test 4: Path with .zed in the middle should require confirmation
+        // Test 4: Path with .momor in the middle should require confirmation
         let (stream_tx, mut stream_rx) = ToolCallEventStream::test();
         let _auth = cx.update(|cx| {
-            edit_tool.authorize(&PathBuf::from("root/.zed/tasks.json"), &stream_tx, cx)
+            edit_tool.authorize(&PathBuf::from("root/.momor/tasks.json"), &stream_tx, cx)
         });
         let event = stream_rx.expect_authorization().await;
         assert_eq!(
             event.tool_call.fields.title,
-            Some("Edit `root/.zed/tasks.json` (local settings)".into())
+            Some("Edit `root/.momor/tasks.json` (local settings)".into())
         );
 
         // Test 5: When global default is allow, sensitive and outside-project
@@ -1107,14 +1107,14 @@ mod tests {
             agent_settings::AgentSettings::override_global(settings, cx);
         });
 
-        // 5.1: .zed/settings.json is a sensitive path — still prompts
+        // 5.1: .momor/settings.json is a sensitive path — still prompts
         let (stream_tx, mut stream_rx) = ToolCallEventStream::test();
         let _auth = cx
-            .update(|cx| edit_tool.authorize(&PathBuf::from(".zed/settings.json"), &stream_tx, cx));
+            .update(|cx| edit_tool.authorize(&PathBuf::from(".momor/settings.json"), &stream_tx, cx));
         let event = stream_rx.expect_authorization().await;
         assert_eq!(
             event.tool_call.fields.title,
-            Some("Edit `.zed/settings.json` (local settings)".into())
+            Some("Edit `.momor/settings.json` (local settings)".into())
         );
 
         // 5.2: /etc/hosts is outside the project, but Allow auto-approves
@@ -1412,7 +1412,7 @@ mod tests {
         fs.insert_tree(
             "/workspace/shared",
             json!({
-                ".zed": {
+                ".momor": {
                     "settings.json": "{}"
                 }
             }),
@@ -1433,9 +1433,9 @@ mod tests {
             ("frontend/src/main.js", false, "File in first worktree"),
             ("backend/src/main.rs", false, "File in second worktree"),
             (
-                "shared/.zed/settings.json",
+                "shared/.momor/settings.json",
                 true,
-                ".zed file in third worktree",
+                ".momor file in third worktree",
             ),
             ("/etc/hosts", true, "Absolute path outside all worktrees"),
             (
@@ -1470,11 +1470,11 @@ mod tests {
         fs.insert_tree(
             "/project",
             json!({
-                ".zed": {
+                ".momor": {
                     "settings.json": "{}"
                 },
                 "src": {
-                    ".zed": {
+                    ".momor": {
                         "local.json": "{}"
                     }
                 }
@@ -1531,7 +1531,7 @@ mod tests {
             "/project",
             json!({
                 "existing.txt": "content",
-                ".zed": {
+                ".momor": {
                     "settings.json": "{}"
                 }
             }),
@@ -1543,10 +1543,10 @@ mod tests {
         let modes = vec![EditSessionMode::Edit, EditSessionMode::Write];
 
         for _mode in modes {
-            // Test .zed path with different modes
+            // Test .momor path with different modes
             let (stream_tx, mut stream_rx) = ToolCallEventStream::test();
             let _auth = cx.update(|cx| {
-                edit_tool.authorize(&PathBuf::from("project/.zed/settings.json"), &stream_tx, cx)
+                edit_tool.authorize(&PathBuf::from("project/.momor/settings.json"), &stream_tx, cx)
             });
 
             stream_rx.expect_authorization().await;

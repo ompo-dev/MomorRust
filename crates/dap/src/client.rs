@@ -98,7 +98,7 @@ impl DebugAdapterClient {
     /// Send a request to an adapter and get a response back
     /// Note: This function will block until a response is sent back from the adapter
     pub async fn request<R: Request>(&self, arguments: R::Arguments) -> Result<R::Response> {
-        let serialized_arguments = serde_json::to_value(arguments)?;
+        let serialimomor_arguments = serde_json::to_value(arguments)?;
 
         let (callback_tx, callback_rx) = oneshot::channel::<Result<Response>>();
 
@@ -107,7 +107,7 @@ impl DebugAdapterClient {
         let request = crate::messages::Request {
             seq: sequence_id,
             command: R::COMMAND.to_string(),
-            arguments: Some(serialized_arguments),
+            arguments: Some(serialimomor_arguments),
         };
         self.transport_delegate
             .pending_requests
@@ -317,8 +317,8 @@ mod tests {
 
         let response = client
             .request::<Initialize>(InitializeRequestArguments {
-                client_id: Some("zed".to_owned()),
-                client_name: Some("Zed".to_owned()),
+                client_id: Some("momor".to_owned()),
+                client_name: Some("Momor".to_owned()),
                 adapter_id: "fake-adapter".to_owned(),
                 locale: Some("en-US".to_owned()),
                 path_format: Some(InitializeRequestArgumentsPathFormat::Path),

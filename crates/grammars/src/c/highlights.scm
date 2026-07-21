@@ -138,7 +138,7 @@
 [
   (type_identifier)
   (primitive_type)
-  (sized_type_specifier)
+  (simomor_type_specifier)
 ] @type
 
 ; GNU __attribute__

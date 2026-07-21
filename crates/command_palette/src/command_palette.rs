@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use client::parse_zed_link;
+use client::parse_momor_link;
 use command_palette_hooks::{
     CommandInterceptItem, CommandInterceptResult, CommandPaletteFilter,
     GlobalCommandPaletteInterceptor,
@@ -26,7 +26,7 @@ use settings::Settings;
 use ui::{HighlightedLabel, KeyBinding, ListItem, ListItemSpacing, prelude::*};
 use util::ResultExt;
 use workspace::{ModalView, Workspace, WorkspaceSettings};
-use zed_actions::{OpenZedUrl, command_palette::Toggle};
+use momor_actions::{OpenMomorUrl, command_palette::Toggle};
 
 pub fn init(cx: &mut App) {
     command_palette_hooks::init(cx);
@@ -50,17 +50,17 @@ pub fn normalize_action_query(input: &str) -> String {
     let mut last_char = None;
 
     for char in input.trim().chars() {
-        let normalized_char = if char == '_' { ' ' } else { char };
-        match (last_char, normalized_char) {
+        let normalimomor_char = if char == '_' { ' ' } else { char };
+        match (last_char, normalimomor_char) {
             (Some(':'), ':') => continue,
             (Some(last_char), c) if last_char.is_whitespace() && c.is_whitespace() => {
                 continue;
             }
             _ => {
-                last_char = Some(normalized_char);
+                last_char = Some(normalimomor_char);
             }
         }
-        result.push(normalized_char);
+        result.push(normalimomor_char);
     }
 
     result
@@ -451,7 +451,7 @@ impl PickerDelegate for CommandPaletteDelegate {
         let (mut tx, mut rx) = postage::dispatch::channel(1);
 
         let query_str = query.as_str();
-        let is_zed_link = parse_zed_link(query_str, cx).is_some();
+        let is_momor_link = parse_momor_link(query_str, cx).is_some();
 
         let task = cx.background_spawn({
             let mut commands = self.all_commands.clone();
@@ -484,10 +484,10 @@ impl PickerDelegate for CommandPaletteDelegate {
                 )
                 .await;
 
-                let intercept_result = if is_zed_link {
+                let intercept_result = if is_momor_link {
                     CommandInterceptResult {
                         results: vec![CommandInterceptItem {
-                            action: OpenZedUrl {
+                            action: OpenMomorUrl {
                                 url: query_for_link.clone(),
                             }
                             .boxed_clone(),
@@ -566,7 +566,7 @@ impl PickerDelegate for CommandPaletteDelegate {
                 return;
             };
             let action_name = selected_command.action.name();
-            let open_keymap = Box::new(zed_actions::ChangeKeybinding {
+            let open_keymap = Box::new(momor_actions::ChangeKeybinding {
                 action: action_name.to_string(),
             });
             window.dispatch_action(open_keymap, cx);
@@ -893,7 +893,7 @@ mod tests {
         });
     }
     #[gpui::test]
-    async fn test_normalized_matches(cx: &mut TestAppContext) {
+    async fn test_normalimomor_matches(cx: &mut TestAppContext) {
         let app_state = init_test(cx);
         let project = Project::test(app_state.fs.clone(), [], cx).await;
         let (multi_workspace, cx) =

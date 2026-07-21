@@ -28,7 +28,7 @@ fn is_plain_command_token(token: &str) -> bool {
 }
 
 struct CommandPrefix {
-    normalized_tokens: Vec<String>,
+    normalimomor_tokens: Vec<String>,
     display: String,
 }
 
@@ -47,7 +47,7 @@ fn extract_command_prefix(command: &str) -> Option<CommandPrefix> {
     }
 
     Some(CommandPrefix {
-        normalized_tokens: prefix.tokens,
+        normalimomor_tokens: prefix.tokens,
         display: prefix.display,
     })
 }
@@ -69,7 +69,7 @@ pub fn extract_terminal_permission_pattern(command: &str) -> Option<PermissionPa
 
 pub fn extract_terminal_pattern(command: &str) -> Option<String> {
     let prefix = extract_command_prefix(command)?;
-    let tokens = prefix.normalized_tokens;
+    let tokens = prefix.normalimomor_tokens;
 
     match tokens.as_slice() {
         [] => None,

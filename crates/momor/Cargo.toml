@@ -1,0 +1,256 @@
+[package]
+description = "Momor — your AI chat assistant."
+edition.workspace = true
+name = "momor"
+version = "1.3.0"
+publish.workspace = true
+license = "GPL-3.0-or-later"
+authors = ["Momor Team <hi@momor.dev>"]
+default-run = "momor"
+
+[lints]
+workspace = true
+
+[features]
+tracy = ["ztracing/tracy"]
+# LEAK_BACKTRACE=1 cargo run --features momor/track-project-leak --profile release-fast
+track-project-leak = ["gpui/leak-detection"]
+test-support = [
+    "gpui/test-support",
+    "gpui_platform/screen-capture",
+    "dep:image",
+    "workspace/test-support",
+    "project/test-support",
+    "editor/test-support",
+    "terminal_view/test-support",
+    "title_bar/test-support",
+]
+visual-tests = [
+    "gpui/test-support",
+    "gpui_platform/screen-capture",
+    "gpui_platform/test-support",
+    "dep:image",
+    "dep:tempfile",
+    "dep:action_log",
+    "dep:agent_servers",
+    "workspace/test-support",
+    "project/test-support",
+    "editor/test-support",
+    "terminal_view/test-support",
+    "clock/test-support",
+    "acp_thread/test-support",
+    "action_log/test-support",
+    "agent_ui/test-support",
+    "db/test-support",
+    "agent/test-support",
+    "language_model/test-support",
+    "fs/test-support",
+    "title_bar/test-support",
+]
+
+[[bin]]
+name = "momor"
+path = "src/main.rs"
+
+[[bin]]
+name = "momor_visual_test_runner"
+path = "src/visual_test_runner.rs"
+required-features = ["visual-tests"]
+
+[dependencies]
+# ponytail: chat-only — deps de editor/collab/debugger/login removidas
+acp_tools.workspace = true
+agent.workspace = true
+agent-client-protocol.workspace = true
+agent_settings.workspace = true
+agent_ui = { workspace = true, features = ["audio"] }
+anyhow.workspace = true
+askpass.workspace = true
+assets.workspace = true
+audio.workspace = true
+auto_update.workspace = true
+call.workspace = true
+chrono.workspace = true
+clap.workspace = true
+cli.workspace = true
+client.workspace = true
+collections.workspace = true
+command_palette.workspace = true
+component.workspace = true
+copilot_chat.workspace = true
+crashes.workspace = true
+db.workspace = true
+debug_adapter_extension.workspace = true
+editor.workspace = true
+env_logger.workspace = true
+extension.workspace = true
+extension_host.workspace = true
+extensions_ui.workspace = true
+feature_flags.workspace = true
+fs.workspace = true
+futures.workspace = true
+git.workspace = true
+git_hosting_providers.workspace = true
+system_specs.workspace = true
+gpui = { workspace = true, features = ["input-latency-histogram"] }
+gpui_platform = {workspace = true, features=["screen-capture", "font-kit", "wayland", "x11"]}
+image = { workspace = true, optional = true }
+semver.workspace = true
+tempfile = { workspace = true, optional = true }
+clock = { workspace = true, optional = true }
+acp_thread.workspace = true
+action_log = { workspace = true, optional = true }
+agent_servers = { workspace = true, optional = true }
+gpui_tokio.workspace = true
+rayon.workspace = true
+
+http_client.workspace = true
+input_latency_ui.workspace = true
+install_cli.workspace = true
+json_schema_store.workspace = true
+keymap_editor.workspace = true
+language.workspace = true
+language_extension.workspace = true
+language_model.workspace = true
+language_models.workspace = true
+languages = { workspace = true, features = ["load-grammars"] }
+log.workspace = true
+markdown.workspace = true
+menu.workspace = true
+migrator.workspace = true
+mimalloc = { version = "0.1", optional = true }
+nc.workspace = true
+node_runtime.workspace = true
+parking_lot.workspace = true
+paths.workspace = true
+picker.workspace = true
+profiling.workspace = true
+project.workspace = true
+prompt_store.workspace = true
+proto.workspace = true
+release_channel.workspace = true
+remote.workspace = true
+reqwest.workspace = true
+reqwest_client.workspace = true
+rope.workspace = true
+search.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+session.workspace = true
+settings.workspace = true
+settings_ui.workspace = true
+shellexpand.workspace = true
+sidebar.workspace = true
+smol.workspace = true
+snippet_provider.workspace = true
+sysinfo.workspace = true
+task.workspace = true
+notebook.workspace = true
+stt.workspace = true
+telemetry.workspace = true
+telemetry_events.workspace = true
+terminal_view.workspace = true
+theme.workspace = true
+theme_settings.workspace = true
+theme_extension.workspace = true
+theme_selector.workspace = true
+time.workspace = true
+time_format.workspace = true
+title_bar.workspace = true
+ztracing.workspace = true
+tracing.workspace = true
+ui.workspace = true
+ui_prompt.workspace = true
+url.workspace = true
+urlencoding.workspace = true
+util.workspace = true
+uuid.workspace = true
+vim_mode_setting.workspace = true
+watch.workspace = true
+web_search.workspace = true
+web_search_providers.workspace = true
+workspace.workspace = true
+momor_actions.workspace = true
+momor_env_vars.workspace = true
+zlog.workspace = true
+zlog_settings.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+etw_tracing.workspace = true
+windows.workspace = true
+gpui = { workspace = true, features = [
+    "input-latency-histogram",
+    "windows-manifest",
+] }
+
+[build-dependencies]
+windows_resources = { path = "../windows_resources" }
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
+gpui = { workspace = true, features = [
+    "input-latency-histogram",
+    "wayland",
+    "x11",
+] }
+ashpd.workspace = true
+image.workspace = true
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.build-dependencies]
+image.workspace = true
+
+
+[target.'cfg(target_os = "linux")'.build-dependencies]
+pkg-config = "0.3.22"
+
+[dev-dependencies]
+call = { workspace = true, features = ["test-support"] }
+editor = { workspace = true, features = ["test-support"] }
+gpui = { workspace = true, features = ["input-latency-histogram", "test-support"] }
+itertools.workspace = true
+language = { workspace = true, features = ["test-support"] }
+pretty_assertions.workspace = true
+project = { workspace = true, features = ["test-support"] }
+semver.workspace = true
+terminal_view = { workspace = true, features = ["test-support"] }
+title_bar = { workspace = true, features = ["test-support"] }
+workspace = { workspace = true, features = ["test-support"] }
+image.workspace = true
+agent_ui = { workspace = true, features = ["test-support"] }
+search = { workspace = true, features = ["test-support"] }
+
+
+
+[package.metadata.bundle-dev]
+icon = ["resources/app-icon-dev@2x.png", "resources/app-icon-dev.png"]
+identifier = "dev.momor.Momor-Dev"
+name = "Momor"
+osx_minimum_system_version = "10.15.7"
+osx_info_plist_exts = ["resources/info/*"]
+osx_url_schemes = ["momor"]
+
+[package.metadata.bundle-nightly]
+icon = ["resources/app-icon-nightly@2x.png", "resources/app-icon-nightly.png"]
+identifier = "dev.momor.Momor-Nightly"
+name = "Momor Nightly"
+osx_minimum_system_version = "10.15.7"
+osx_info_plist_exts = ["resources/info/*"]
+osx_url_schemes = ["momor"]
+
+[package.metadata.bundle-preview]
+icon = ["resources/app-icon-preview@2x.png", "resources/app-icon-preview.png"]
+identifier = "dev.momor.Momor-Preview"
+name = "Momor Preview"
+osx_minimum_system_version = "10.15.7"
+osx_info_plist_exts = ["resources/info/*"]
+osx_url_schemes = ["momor"]
+
+[package.metadata.bundle-stable]
+icon = ["resources/app-icon@2x.png", "resources/app-icon.png"]
+identifier = "dev.momor.Momor"
+name = "Momor"
+osx_minimum_system_version = "10.15.7"
+osx_info_plist_exts = ["resources/info/*"]
+osx_url_schemes = ["momor"]
+
+[package.metadata.cargo-machete]
+ignored = ["profiling", "zstd", "tracing"]

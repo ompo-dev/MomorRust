@@ -2689,7 +2689,7 @@ impl LocalLspStore {
             Patch::new(snapshot.edits_since::<PointUtf16>(saved_version).collect())
         });
 
-        let mut sanitized_diagnostics = Vec::with_capacity(diagnostics.len());
+        let mut sanitimomor_diagnostics = Vec::with_capacity(diagnostics.len());
 
         for (new_diagnostic, entry) in diagnostics {
             let start;
@@ -2721,14 +2721,14 @@ impl LocalLspStore {
                 }
             }
 
-            sanitized_diagnostics.push(DiagnosticEntry {
+            sanitimomor_diagnostics.push(DiagnosticEntry {
                 range,
                 diagnostic: entry.diagnostic,
             });
         }
         drop(edits_since_save);
 
-        let set = DiagnosticSet::new(sanitized_diagnostics, &snapshot);
+        let set = DiagnosticSet::new(sanitimomor_diagnostics, &snapshot);
         buffer.update(cx, |buffer, cx| {
             if let Some(registration_id) = registration_id {
                 if let Some(abs_path) = File::from_dyn(buffer.file()).map(|f| f.abs_path(cx)) {
@@ -6774,7 +6774,7 @@ impl LspStore {
         let mut new_label = match completion_item {
             Some(completion_item) => {
                 // Some language servers always return `detail` lazily via resolve, regardless of
-                // the resolvable properties Zed advertises. Regenerate labels here to handle this.
+                // the resolvable properties Momor advertises. Regenerate labels here to handle this.
                 // See: https://github.com/yioneko/vtsls/issues/213
                 let language = snapshot.language();
                 match language {
@@ -7024,7 +7024,7 @@ impl LspStore {
                             // Special case: if both ranges start at the very beginning of the file (line 0, column 0),
                             // and the primary completion is just an insertion (empty range), then this is likely
                             // an auto-import scenario and should not be considered overlapping
-                            // https://github.com/zed-industries/zed/issues/26136
+                            // https://github.com/momor-industries/momor/issues/26136
                             let is_file_start_auto_import = {
                                 let snapshot = buffer.snapshot();
                                 let primary_start_point = primary.start.to_point(&snapshot);
@@ -7053,7 +7053,7 @@ impl LspStore {
                             };
 
                             //Skip additional edits which overlap with the primary completion edit
-                            //https://github.com/zed-industries/zed/pull/1871
+                            //https://github.com/momor-industries/momor/pull/1871
                             if !has_overlap {
                                 buffer.edit([(range, text)], None, cx);
                             }
@@ -12127,46 +12127,46 @@ impl LspStore {
         result
     }
 
-    fn deserialize_symbol(serialized_symbol: proto::Symbol) -> Result<CoreSymbol> {
-        let source_worktree_id = WorktreeId::from_proto(serialized_symbol.source_worktree_id);
-        let worktree_id = WorktreeId::from_proto(serialized_symbol.worktree_id);
-        let kind = unsafe { mem::transmute::<i32, lsp::SymbolKind>(serialized_symbol.kind) };
+    fn deserialize_symbol(serialimomor_symbol: proto::Symbol) -> Result<CoreSymbol> {
+        let source_worktree_id = WorktreeId::from_proto(serialimomor_symbol.source_worktree_id);
+        let worktree_id = WorktreeId::from_proto(serialimomor_symbol.worktree_id);
+        let kind = unsafe { mem::transmute::<i32, lsp::SymbolKind>(serialimomor_symbol.kind) };
 
-        let path = if serialized_symbol.signature.is_empty() {
+        let path = if serialimomor_symbol.signature.is_empty() {
             SymbolLocation::InProject(ProjectPath {
                 worktree_id,
-                path: RelPath::from_proto(&serialized_symbol.path)
+                path: RelPath::from_proto(&serialimomor_symbol.path)
                     .context("invalid symbol path")?,
             })
         } else {
             SymbolLocation::OutsideProject {
-                abs_path: Path::new(&serialized_symbol.path).into(),
-                signature: serialized_symbol
+                abs_path: Path::new(&serialimomor_symbol.path).into(),
+                signature: serialimomor_symbol
                     .signature
                     .try_into()
                     .map_err(|_| anyhow!("invalid signature"))?,
             }
         };
 
-        let start = serialized_symbol.start.context("invalid start")?;
-        let end = serialized_symbol.end.context("invalid end")?;
+        let start = serialimomor_symbol.start.context("invalid start")?;
+        let end = serialimomor_symbol.end.context("invalid end")?;
         Ok(CoreSymbol {
-            language_server_name: LanguageServerName(serialized_symbol.language_server_name.into()),
+            language_server_name: LanguageServerName(serialimomor_symbol.language_server_name.into()),
             source_worktree_id,
             source_language_server_id: LanguageServerId::from_proto(
-                serialized_symbol.language_server_id,
+                serialimomor_symbol.language_server_id,
             ),
             path,
-            name: serialized_symbol.name,
+            name: serialimomor_symbol.name,
             range: Unclipped(PointUtf16::new(start.row, start.column))
                 ..Unclipped(PointUtf16::new(end.row, end.column)),
             kind,
-            container_name: serialized_symbol.container_name,
+            container_name: serialimomor_symbol.container_name,
         })
     }
 
     pub(crate) fn serialize_completion(completion: &CoreCompletion) -> proto::Completion {
-        let mut serialized_completion = proto::Completion {
+        let mut serialimomor_completion = proto::Completion {
             old_replace_start: Some(serialize_anchor(&completion.replace_range.start)),
             old_replace_end: Some(serialize_anchor(&completion.replace_range.end)),
             new_text: completion.new_text.clone(),
@@ -12185,36 +12185,36 @@ impl LspStore {
                     .map(|range| (serialize_anchor(&range.start), serialize_anchor(&range.end)))
                     .unzip();
 
-                serialized_completion.old_insert_start = old_insert_start;
-                serialized_completion.old_insert_end = old_insert_end;
-                serialized_completion.source = proto::completion::Source::Lsp as i32;
-                serialized_completion.server_id = server_id.0 as u64;
-                serialized_completion.lsp_completion = serde_json::to_vec(lsp_completion).unwrap();
-                serialized_completion.lsp_defaults = lsp_defaults
+                serialimomor_completion.old_insert_start = old_insert_start;
+                serialimomor_completion.old_insert_end = old_insert_end;
+                serialimomor_completion.source = proto::completion::Source::Lsp as i32;
+                serialimomor_completion.server_id = server_id.0 as u64;
+                serialimomor_completion.lsp_completion = serde_json::to_vec(lsp_completion).unwrap();
+                serialimomor_completion.lsp_defaults = lsp_defaults
                     .as_deref()
                     .map(|lsp_defaults| serde_json::to_vec(lsp_defaults).unwrap());
-                serialized_completion.resolved = *resolved;
+                serialimomor_completion.resolved = *resolved;
             }
             CompletionSource::BufferWord {
                 word_range,
                 resolved,
             } => {
-                serialized_completion.source = proto::completion::Source::BufferWord as i32;
-                serialized_completion.buffer_word_start = Some(serialize_anchor(&word_range.start));
-                serialized_completion.buffer_word_end = Some(serialize_anchor(&word_range.end));
-                serialized_completion.resolved = *resolved;
+                serialimomor_completion.source = proto::completion::Source::BufferWord as i32;
+                serialimomor_completion.buffer_word_start = Some(serialize_anchor(&word_range.start));
+                serialimomor_completion.buffer_word_end = Some(serialize_anchor(&word_range.end));
+                serialimomor_completion.resolved = *resolved;
             }
             CompletionSource::Custom => {
-                serialized_completion.source = proto::completion::Source::Custom as i32;
-                serialized_completion.resolved = true;
+                serialimomor_completion.source = proto::completion::Source::Custom as i32;
+                serialimomor_completion.resolved = true;
             }
             CompletionSource::Dap { sort_text } => {
-                serialized_completion.source = proto::completion::Source::Dap as i32;
-                serialized_completion.sort_text = Some(sort_text.clone());
+                serialimomor_completion.source = proto::completion::Source::Dap as i32;
+                serialimomor_completion.sort_text = Some(sort_text.clone());
             }
         }
 
-        serialized_completion
+        serialimomor_completion
     }
 
     pub(crate) fn deserialize_completion(completion: proto::Completion) -> Result<CoreCompletion> {

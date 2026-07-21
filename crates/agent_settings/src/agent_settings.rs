@@ -565,11 +565,11 @@ fn expand_rm_to_single_path_commands(command: &str) -> Vec<String> {
                 if suffix.is_empty() {
                     results.push(format!("rm {flags_str}{path}"));
                 } else if suffix.starts_with('/') {
-                    let normalized_suffix = normalize_path(suffix);
-                    let reconstructed = if normalized_suffix == "/" {
+                    let normalimomor_suffix = normalize_path(suffix);
+                    let reconstructed = if normalimomor_suffix == "/" {
                         prefix.to_string()
                     } else {
-                        format!("{prefix}{normalized_suffix}")
+                        format!("{prefix}{normalimomor_suffix}")
                     };
                     results.push(format!("rm {flags_str}{reconstructed}"));
                 } else {

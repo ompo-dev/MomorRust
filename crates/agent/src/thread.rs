@@ -39,7 +39,7 @@ use language_model::{
     LanguageModelRequest, LanguageModelRequestMessage, LanguageModelRequestTool,
     LanguageModelToolResult, LanguageModelToolResultContent, LanguageModelToolSchemaFormat,
     LanguageModelToolUse, LanguageModelToolUseId, Role, SelectedModel, Speed, StopReason,
-    TokenUsage, ZED_CLOUD_PROVIDER_ID,
+    TokenUsage, MOMOR_CLOUD_PROVIDER_ID,
 };
 use project::Project;
 use prompt_store::ProjectContext;
@@ -2169,7 +2169,7 @@ impl Thread {
             return Err(anyhow!(error));
         };
 
-        let auto_retry = if model.provider_id() == ZED_CLOUD_PROVIDER_ID {
+        let auto_retry = if model.provider_id() == MOMOR_CLOUD_PROVIDER_ID {
             plan.is_some()
         } else {
             true
@@ -3144,7 +3144,7 @@ impl Thread {
             // Retrying these errors definitely shouldn't help.
             HttpResponseError {
                 status_code:
-                    StatusCode::PAYLOAD_TOO_LARGE | StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED,
+                    StatusCode::PAYLOAD_TOO_LARGE | StatusCode::FORBIDDEN | StatusCode::UNAUTHORIMOMOR,
                 ..
             }
             | AuthenticationError { .. }

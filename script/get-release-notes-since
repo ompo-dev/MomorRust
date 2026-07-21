@@ -12,22 +12,14 @@ async function main() {
   console.log(`Release notes from ${startDate} to ${today}\n`);
 
   const releases = await getReleases(startDate, today);
-  const previewReleases = releases.filter((release) =>
-    release.tagName.includes("-pre"),
-  );
+  const previewReleases = releases.filter((release) => release.tagName.includes("-pre"));
 
-  const stableReleases = releases.filter(
-    (release) => !release.tagName.includes("-pre"),
-  );
+  const stableReleases = releases.filter((release) => !release.tagName.includes("-pre"));
 
   // Filter out all preview release, as all of those changes have made it to the stable release, except for the latest preview release
-  const aggregatedReleases = stableReleases
-    .concat(previewReleases[0])
-    .reverse();
+  const aggregatedReleases = stableReleases.concat(previewReleases[0]).reverse();
 
-  const aggregatedReleaseTitles = aggregatedReleases
-    .map((release) => release.name)
-    .join(", ");
+  const aggregatedReleaseTitles = aggregatedReleases.map((release) => release.name).join(", ");
 
   console.log();
   console.log(`Release titles: ${aggregatedReleaseTitles}`);
@@ -82,7 +74,7 @@ async function getReleases(startDate, endDate) {
       },
       body: JSON.stringify({
         query,
-        variables: { owner: "zed-industries", repo: "zed", cursor },
+        variables: { owner: "momor-industries", repo: "momor", cursor },
       }),
     });
 
@@ -108,10 +100,7 @@ async function getReleases(startDate, endDate) {
 
     lastReleaseOnPage = releases[releases.length - 1];
 
-    if (
-      releases.length > 0 &&
-      new Date(lastReleaseOnPage.createdAt) < startDate
-    ) {
+    if (releases.length > 0 && new Date(lastReleaseOnPage.createdAt) < startDate) {
       break;
     }
   }

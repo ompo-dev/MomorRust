@@ -19,7 +19,7 @@ use project::AgentId;
 use serde::{Deserialize, Serialize};
 use settings::{LanguageModelProviderSetting, LanguageModelSelection};
 
-use zed_actions::{
+use momor_actions::{
     DecreaseBufferFontSize, IncreaseBufferFontSize, ResetBufferFontSize,
     agent::{
         AddSelectionToThread, ConflictContent, OpenSettings, ReauthenticateAgent, ResetAgentZoom,
@@ -119,7 +119,7 @@ async fn write_global_last_used_agent(kvp: KeyValueStore, agent: Agent) {
     }
 }
 
-fn read_serialized_panel(
+fn read_serialimomor_panel(
     workspace_id: workspace::WorkspaceId,
     kvp: &KeyValueStore,
 ) -> Option<SerialimomorAgentPanel> {
@@ -132,7 +132,7 @@ fn read_serialized_panel(
         .and_then(|json| serde_json::from_str::<SerialimomorAgentPanel>(&json).log_err())
 }
 
-async fn save_serialized_panel(
+async fn save_serialimomor_panel(
     workspace_id: workspace::WorkspaceId,
     panel: SerialimomorAgentPanel,
     kvp: KeyValueStore,
@@ -145,7 +145,7 @@ async fn save_serialized_panel(
 
 /// Migration: reads the original single-panel format stored under the
 /// `"agent_panel"` KVP key before per-workspace keying was introduced.
-fn read_legacy_serialized_panel(kvp: &KeyValueStore) -> Option<SerialimomorAgentPanel> {
+fn read_legacy_serialimomor_panel(kvp: &KeyValueStore) -> Option<SerialimomorAgentPanel> {
     kvp.read_kvp(AGENT_PANEL_KEY)
         .log_err()
         .flatten()
@@ -766,7 +766,7 @@ impl AgentPanel {
                 kvp.write_kvp(AGENT_PANEL_KEY.to_string(), json).await.log_err();
             }
             if let Some(workspace_id) = workspace_id {
-                save_serialized_panel(workspace_id, panel, kvp).await?;
+                save_serialimomor_panel(workspace_id, panel, kvp).await?;
             }
             anyhow::Ok(())
         }));
@@ -788,13 +788,13 @@ impl AgentPanel {
                 .ok()
                 .flatten();
 
-            let (serialized_panel, global_last_used_agent) = cx
+            let (serialimomor_panel, global_last_used_agent) = cx
                 .background_spawn(async move {
                     match kvp {
                         Some(kvp) => {
                             let panel = workspace_id
-                                .and_then(|id| read_serialized_panel(id, &kvp))
-                                .or_else(|| read_legacy_serialized_panel(&kvp));
+                                .and_then(|id| read_serialimomor_panel(id, &kvp))
+                                .or_else(|| read_legacy_serialimomor_panel(&kvp));
                             let global_agent = read_global_last_used_agent(&kvp);
                             (panel, global_agent)
                         }
@@ -803,12 +803,12 @@ impl AgentPanel {
                 })
                 .await;
 
-            let was_draft_active = serialized_panel
+            let was_draft_active = serialimomor_panel
                 .as_ref()
                 .and_then(|p| p.last_active_thread.as_ref())
                 .is_some_and(|t| t.session_id.is_none());
 
-            let last_active_thread = if let Some(thread_info) = serialized_panel
+            let last_active_thread = if let Some(thread_info) = serialimomor_panel
                 .as_ref()
                 .and_then(|p| p.last_active_thread.as_ref())
             {
@@ -853,8 +853,8 @@ impl AgentPanel {
                     let global_fallback =
                         global_last_used_agent.filter(|agent| !is_via_collab || agent.is_native());
 
-                    if let Some(serialized_panel) = &serialized_panel {
-                        if let Some(selected_agent) = serialized_panel.selected_agent.clone() {
+                    if let Some(serialimomor_panel) = &serialimomor_panel {
+                        if let Some(selected_agent) = serialimomor_panel.selected_agent.clone() {
                             panel.selected_agent = selected_agent;
                         } else if let Some(agent) = global_fallback {
                             panel.selected_agent = agent;
@@ -885,7 +885,7 @@ impl AgentPanel {
                     }
                 }
 
-                let draft_prompt = serialized_panel
+                let draft_prompt = serialimomor_panel
                     .as_ref()
                     .and_then(|p| p.draft_thread_prompt.clone());
 
@@ -2527,7 +2527,7 @@ impl Panel for AgentPanel {
     }
 
     fn icon(&self, _window: &Window, cx: &App) -> Option<IconName> {
-        (self.enabled(cx) && AgentSettings::get_global(cx).button).then_some(IconName::ZedAssistant)
+        (self.enabled(cx) && AgentSettings::get_global(cx).button).then_some(IconName::MomorAssistant)
     }
 
     fn icon_tooltip(&self, _window: &Window, _cx: &App) -> Option<&'static str> {
@@ -3292,7 +3292,7 @@ impl AgentPanel {
             .child(toolbar_content)
     }
 
-    // ponytail: chat-only — onboarding/upsell de Zed AI removidos por completo
+    // ponytail: chat-only — onboarding/upsell de Momor AI removidos por completo
 
     fn render_drag_target(&self, cx: &Context<Self>) -> Div {
         let is_local = self.project.read(cx).is_local();
@@ -3662,7 +3662,7 @@ mod tests {
 
     impl AgentConnection for SessionTrackingConnection {
         fn agent_id(&self) -> AgentId {
-            agent::ZED_AGENT_ID.clone()
+            agent::MOMOR_AGENT_ID.clone()
         }
 
         fn telemetry_id(&self) -> SharedString {
@@ -4044,14 +4044,14 @@ mod tests {
 
         let kvp = cx.update(|_window, cx| KeyValueStore::global(cx));
         let serialized: Option<SerialimomorAgentPanel> = cx
-            .background_spawn(async move { read_serialized_panel(workspace_id, &kvp) })
+            .background_spawn(async move { read_serialimomor_panel(workspace_id, &kvp) })
             .await;
-        let serialized_session_id = serialized
+        let serialimomor_session_id = serialized
             .as_ref()
             .and_then(|p| p.last_active_thread.as_ref())
             .and_then(|t| t.session_id.clone());
         assert_eq!(
-            serialized_session_id,
+            serialimomor_session_id,
             Some(resume_session_id.0.to_string()),
             "serialize() must preserve the restored session id even while the \
              ConversationView is in LoadError; otherwise the bug survives a \
@@ -4333,8 +4333,8 @@ mod tests {
             "resource text should be the raw conflict"
         );
         assert!(
-            uri.starts_with("zed:///agent/merge-conflict"),
-            "URI should use the zed merge-conflict scheme, got: {uri}"
+            uri.starts_with("momor:///agent/merge-conflict"),
+            "URI should use the momor merge-conflict scheme, got: {uri}"
         );
         assert!(uri.contains("utils.rs"), "URI should encode the file path");
     }
@@ -6336,7 +6336,7 @@ mod tests {
 
     impl AgentConnection for DisassociationTrackingConnection {
         fn agent_id(&self) -> AgentId {
-            agent::ZED_AGENT_ID.clone()
+            agent::MOMOR_AGENT_ID.clone()
         }
 
         fn telemetry_id(&self) -> SharedString {

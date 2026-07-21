@@ -214,7 +214,7 @@ pub fn init(languages: Arc<LanguageRegistry>, fs: Arc<dyn Fs>, node: NodeRuntime
             ..Default::default()
         },
         LanguageInfo {
-            name: "zed-keybind-context",
+            name: "momor-keybind-context",
             ..Default::default()
         },
     ];

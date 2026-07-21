@@ -1,12 +1,12 @@
 ---
 title: Kotlin
-description: "Configure Kotlin language support in Zed, including language servers, formatting, and debugging."
+description: "Configure Kotlin language support in Momor, including language servers, formatting, and debugging."
 ---
 
 # Kotlin
 
-Kotlin language support in Zed is provided by the community-maintained [Kotlin extension](https://github.com/zed-extensions/kotlin).
-Report issues to: [https://github.com/zed-extensions/kotlin/issues](https://github.com/zed-extensions/kotlin/issues)
+Kotlin language support in Momor is provided by the community-maintained [Kotlin extension](https://github.com/momor-extensions/kotlin).
+Report issues to: [https://github.com/momor-extensions/kotlin/issues](https://github.com/momor-extensions/kotlin/issues)
 
 - Tree-sitter: [fwcd/tree-sitter-kotlin](https://github.com/fwcd/tree-sitter-kotlin)
 - Language Server: [fwcd/kotlin-language-server](https://github.com/fwcd/kotlin-language-server)

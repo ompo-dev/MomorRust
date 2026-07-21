@@ -38,7 +38,7 @@ use workspace::{
 };
 
 use anyhow::{Result, anyhow};
-use zed_actions::assistant::InlineAssist;
+use momor_actions::assistant::InlineAssist;
 
 const TERMINAL_PANEL_KEY: &str = "TerminalPanel";
 
@@ -175,7 +175,7 @@ impl TerminalPanel {
                                         // context menu will be gone the moment we spawn the modal.
                                         .action(
                                             "Spawn Task",
-                                            zed_actions::Spawn::modal().boxed_clone(),
+                                            momor_actions::Spawn::modal().boxed_clone(),
                                         )
                                 });
 
@@ -255,7 +255,7 @@ impl TerminalPanel {
             })
             .ok()
             .flatten()
-            && let Some(serialized_panel) = cx
+            && let Some(serialimomor_panel) = cx
                 .background_spawn(async move { kvp.read_kvp(&serialization_key) })
                 .await
                 .log_err()
@@ -270,7 +270,7 @@ impl TerminalPanel {
                         workspace.weak_handle(),
                         workspace.project().clone(),
                         database_id,
-                        serialized_panel,
+                        serialimomor_panel,
                         window,
                         cx,
                     )
@@ -1307,10 +1307,10 @@ impl Render for FailedToSpawnTerminal {
             .menu(move |window, cx| {
                 Some(ContextMenu::build(window, cx, |context_menu, _, _| {
                     context_menu
-                        .action("Open Settings", zed_actions::OpenSettings.boxed_clone())
+                        .action("Open Settings", momor_actions::OpenSettings.boxed_clone())
                         .action(
                             "Edit settings.json",
-                            zed_actions::OpenSettingsFile.boxed_clone(),
+                            momor_actions::OpenSettingsFile.boxed_clone(),
                         )
                 }))
             })
@@ -1344,7 +1344,7 @@ impl Render for FailedToSpawnTerminal {
                         ButtonLike::new("open-settings-ui")
                             .child(Label::new("Edit Settings").size(LabelSize::Small))
                             .on_click(|_, window, cx| {
-                                window.dispatch_action(zed_actions::OpenSettings.boxed_clone(), cx);
+                                window.dispatch_action(momor_actions::OpenSettings.boxed_clone(), cx);
                             }),
                         popover_menu.into_any_element(),
                     )),
@@ -1710,7 +1710,7 @@ struct InlineAssistTabBarButton {
 impl Render for InlineAssistTabBarButton {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let focus_handle = self.focus_handle.clone();
-        IconButton::new("terminal_inline_assistant", IconName::ZedAssistant)
+        IconButton::new("terminal_inline_assistant", IconName::MomorAssistant)
             .icon_size(IconSize::Small)
             .on_click(cx.listener(|_, _, window, cx| {
                 window.dispatch_action(InlineAssist::default().boxed_clone(), cx);
@@ -1800,7 +1800,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_prepare_script_like_task() {
-        let user_command = r#"REPO_URL=$(git remote get-url origin | sed -e \"s/^git@\\(.*\\):\\(.*\\)\\.git$/https:\\/\\/\\1\\/\\2/\"); COMMIT_SHA=$(git log -1 --format=\"%H\" -- \"${ZED_RELATIVE_FILE}\"); echo \"${REPO_URL}/blob/${COMMIT_SHA}/${ZED_RELATIVE_FILE}#L${ZED_ROW}-$(echo $(($(wc -l <<< \"$ZED_SELECTED_TEXT\") + $ZED_ROW - 1)))\" | xclip -selection clipboard"#.to_string();
+        let user_command = r#"REPO_URL=$(git remote get-url origin | sed -e \"s/^git@\\(.*\\):\\(.*\\)\\.git$/https:\\/\\/\\1\\/\\2/\"); COMMIT_SHA=$(git log -1 --format=\"%H\" -- \"${MOMOR_RELATIVE_FILE}\"); echo \"${REPO_URL}/blob/${COMMIT_SHA}/${MOMOR_RELATIVE_FILE}#L${MOMOR_ROW}-$(echo $(($(wc -l <<< \"$MOMOR_SELECTED_TEXT\") + $MOMOR_ROW - 1)))\" | xclip -selection clipboard"#.to_string();
         let expected_cwd = PathBuf::from("/some/work");
 
         let input = SpawnInTerminal {

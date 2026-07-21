@@ -1,11 +1,11 @@
 ---
 title: Terraform
-description: "Configure Terraform language support in Zed, including language servers, formatting, and debugging."
+description: "Configure Terraform language support in Momor, including language servers, formatting, and debugging."
 ---
 
 # Terraform
 
-Terraform support is available through the [Terraform extension](https://github.com/zed-extensions/terraform).
+Terraform support is available through the [Terraform extension](https://github.com/momor-extensions/terraform).
 
 - Tree-sitter: [MichaHoffmann/tree-sitter-hcl](https://github.com/MichaHoffmann/tree-sitter-hcl)
 - Language Server: [hashicorp/terraform-ls](https://github.com/hashicorp/terraform-ls)

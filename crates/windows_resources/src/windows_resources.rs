@@ -7,7 +7,7 @@
 use std::process::Command;
 
 fn git_sha() -> Option<String> {
-    if let Ok(sha) = std::env::var("ZED_COMMIT_SHA") {
+    if let Ok(sha) = std::env::var("MOMOR_COMMIT_SHA") {
         return Some(sha);
     }
 
@@ -38,7 +38,7 @@ fn product_version() -> String {
     format!("{pkg_version}+{metadata}")
 }
 
-const ICON_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../zed/resources/windows");
+const ICON_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../momor/resources/windows");
 const MANIFEST_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/resources/manifest.xml");
 
 pub fn compile(manifest: bool) -> Result<(), Box<dyn std::error::Error>> {
@@ -94,8 +94,8 @@ BEGIN
             VALUE "FileVersion", "{pkg_version}\0"
             VALUE "ProductName", "{product_name}\0"
             VALUE "ProductVersion", "{product_version}\0"
-            VALUE "CompanyName", "Zed Industries, Inc.\0"
-            VALUE "LegalCopyright", "Copyright 2022 - 2025 Zed Industries, Inc.\0"
+            VALUE "CompanyName", "Momor Industries, Inc.\0"
+            VALUE "LegalCopyright", "Copyright 2022 - 2025 Momor Industries, Inc.\0"
         END
     END
     BLOCK "VarFileInfo"
@@ -107,10 +107,10 @@ END
     );
 
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR")?);
-    let rc_path = out_dir.join("zed_resources.rc");
+    let rc_path = out_dir.join("momor_resources.rc");
     std::fs::write(&rc_path, rc_content)?;
 
-    if let Ok(toolkit_path) = std::env::var("ZED_RC_TOOLKIT_PATH") {
+    if let Ok(toolkit_path) = std::env::var("MOMOR_RC_TOOLKIT_PATH") {
         let rc_exe = std::path::Path::new(&toolkit_path).join("rc.exe");
         unsafe {
             std::env::set_var("RC", rc_exe);

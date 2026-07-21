@@ -18,7 +18,7 @@ use anyhow::{Result, anyhow};
 #[cfg(feature = "audio")]
 use audio::{Audio, Sound};
 use buffer_diff::BufferDiff;
-use client::zed_urls;
+use client::momor_urls;
 use collections::{HashMap, HashSet, IndexMap};
 use editor::scroll::Autoscroll;
 use editor::{
@@ -69,8 +69,8 @@ use workspace::PathList;
 use workspace::{
     CollaboratorId, MultiWorkspace, NewTerminal, Toast, Workspace, notifications::NotificationId,
 };
-use zed_actions::agent::{Chat, ToggleModelSelector};
-use zed_actions::assistant::OpenRulesLibrary;
+use momor_actions::agent::{Chat, ToggleModelSelector};
+use momor_actions::assistant::OpenRulesLibrary;
 
 use super::config_options::ConfigOptionsView;
 use super::entry_view_state::EntryViewState;
@@ -1513,7 +1513,7 @@ impl ConversationView {
                     } else {
                         "New message"
                     },
-                    IconName::ZedAssistant,
+                    IconName::MomorAssistant,
                     window,
                     cx,
                 );
@@ -1884,7 +1884,7 @@ impl ConversationView {
         window.spawn(cx, async move |cx| {
             let mut task = login.clone();
             if let Some(cmd) = &task.command {
-                // Have "node" command use Zed's managed Node runtime by default
+                // Have "node" command use Momor's managed Node runtime by default
                 if cmd == "node" {
                     let resolved_node_runtime = project.update(cx, |project, cx| {
                         let agent_server_store = project.agent_server_store().clone();
@@ -2195,7 +2195,7 @@ impl ConversationView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let (heading_label, description_label) = (
-            format!("Upgrade {} to work with Zed", self.agent.agent_id()),
+            format!("Upgrade {} to work with Momor", self.agent.agent_id()),
             if version.is_empty() {
                 format!(
                     "Currently using {}, which does not report a valid --version",
@@ -2817,7 +2817,7 @@ fn loading_contents_spinner(size: IconSize) -> AnyElement {
 }
 
 fn placeholder_text(agent_name: &str, has_commands: bool) -> String {
-    if agent_name == agent::ZED_AGENT_ID.as_ref() {
+    if agent_name == agent::MOMOR_AGENT_ID.as_ref() {
         format!("Message the {} — @ to include context", agent_name)
     } else if has_commands {
         format!(
@@ -4447,7 +4447,7 @@ pub(crate) mod tests {
         ) -> Task<gpui::Result<Rc<dyn AgentConnection>>> {
             Task::ready(Err(anyhow!(
                 "extracting downloaded asset for \
-                 https://github.com/zed-industries/codex-acp/releases/download/v0.9.4/\
+                 https://github.com/momor-industries/codex-acp/releases/download/v0.9.4/\
                  codex-acp-0.9.4-aarch64-pc-windows-msvc.zip: \
                  failed to iterate over archive: Invalid gzip header"
             )))

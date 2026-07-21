@@ -998,7 +998,7 @@ pub const TOKEN_USAGE_WARNING_THRESHOLD: f32 = 0.8;
 impl TokenUsage {
     pub fn ratio(&self) -> TokenUsageRatio {
         #[cfg(debug_assertions)]
-        let warning_threshold: f32 = std::env::var("ZED_THREAD_WARNING_THRESHOLD")
+        let warning_threshold: f32 = std::env::var("MOMOR_THREAD_WARNING_THRESHOLD")
             .unwrap_or(TOKEN_USAGE_WARNING_THRESHOLD.to_string())
             .parse()
             .unwrap();
@@ -3489,7 +3489,7 @@ mod tests {
             .unwrap();
 
         thread
-            .update(cx, |thread, cx| thread.send_raw("Hello from Zed!", cx))
+            .update(cx, |thread, cx| thread.send_raw("Hello from Momor!", cx))
             .await
             .unwrap();
 
@@ -3499,7 +3499,7 @@ mod tests {
             indoc! {r#"
             ## User
 
-            Hello from Zed!
+            Hello from Momor!
 
             ## Assistant
 
@@ -3549,12 +3549,12 @@ mod tests {
             .unwrap();
 
         thread
-            .update(cx, |thread, cx| thread.send_raw("Hello from Zed!", cx))
+            .update(cx, |thread, cx| thread.send_raw("Hello from Momor!", cx))
             .await
             .unwrap();
 
         let output = thread.read_with(cx, |thread, cx| thread.to_markdown(cx));
-        assert_eq!(output.matches("Hello from Zed!").count(), 1);
+        assert_eq!(output.matches("Hello from Momor!").count(), 1);
     }
 
     #[gpui::test]

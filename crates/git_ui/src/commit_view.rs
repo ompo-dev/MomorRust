@@ -543,7 +543,7 @@ impl CommitView {
         let commit_date = time::OffsetDateTime::from_unix_timestamp(commit.commit_timestamp)
             .unwrap_or_else(|_| time::OffsetDateTime::now_utc());
         let local_offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
-        let date_string = time_format::format_localized_timestamp(
+        let date_string = time_format::format_localimomor_timestamp(
             commit_date,
             time::OffsetDateTime::now_utc(),
             local_offset,
@@ -1154,13 +1154,13 @@ impl Render for CommitViewToolbar {
                     .tooltip(move |_, cx| {
                         Tooltip::for_action(
                             "Buffer Search",
-                            &zed_actions::buffer_search::Deploy::find(),
+                            &momor_actions::buffer_search::Deploy::find(),
                             cx,
                         )
                     })
                     .on_click(|_, window, cx| {
                         window.dispatch_action(
-                            Box::new(zed_actions::buffer_search::Deploy::find()),
+                            Box::new(momor_actions::buffer_search::Deploy::find()),
                             cx,
                         );
                     }),

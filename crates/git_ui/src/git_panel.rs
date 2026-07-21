@@ -191,7 +191,7 @@ fn git_panel_context_menu(
                 StashAll.boxed_clone(),
             )
             .action_disabled_when(!state.has_stash_items, "Stash Pop", StashPop.boxed_clone())
-            .action("View Stash", zed_actions::git::ViewStash.boxed_clone())
+            .action("View Stash", momor_actions::git::ViewStash.boxed_clone())
             .separator()
             .action("Open Diff", project_diff::Diff.boxed_clone())
             .separator()
@@ -4526,10 +4526,10 @@ impl GitPanel {
                                 this.flex_1().min_h_0().pb(footer_size)
                             })
                             .pr_2p5()
-                            .on_action(|&zed_actions::editor::MoveUp, _, cx| {
+                            .on_action(|&momor_actions::editor::MoveUp, _, cx| {
                                 cx.stop_propagation();
                             })
-                            .on_action(|&zed_actions::editor::MoveDown, _, cx| {
+                            .on_action(|&momor_actions::editor::MoveDown, _, cx| {
                                 cx.stop_propagation();
                             })
                             .child(EditorElement::new(&self.commit_editor, panel_editor_style)),
@@ -4810,7 +4810,7 @@ impl GitPanel {
     fn render_empty_state(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let children = match (self.git_access, &self.active_repository) {
             (GitAccess::No, Some(repository)) => self.render_unsafe_repo_ui(repository, cx),
-            (_, None) => self.render_uninitialized_ui(cx),
+            (_, None) => self.render_uninitialimomor_ui(cx),
             (_, Some(_)) => self.render_no_changes_ui(cx),
         };
 
@@ -4908,7 +4908,7 @@ impl GitPanel {
         )
     }
 
-    fn render_uninitialized_ui(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    fn render_uninitialimomor_ui(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let worktree_count = self.project.read(cx).visible_worktrees(cx).count();
         if worktree_count > 0 && self.active_repository.is_none() {
             vec![
@@ -5841,7 +5841,7 @@ impl GitPanel {
         workspace: WeakEntity<Workspace>,
         mut cx: AsyncWindowContext,
     ) -> anyhow::Result<Entity<Self>> {
-        let serialized_panel = match workspace
+        let serialimomor_panel = match workspace
             .read_with(&cx, |workspace, cx| {
                 Self::serialization_key(workspace).map(|key| (key, KeyValueStore::global(cx)))
             })
@@ -5864,10 +5864,10 @@ impl GitPanel {
         workspace.update_in(&mut cx, |workspace, window, cx| {
             let panel = GitPanel::new(workspace, window, cx);
 
-            if let Some(serialized_panel) = serialized_panel {
+            if let Some(serialimomor_panel) = serialimomor_panel {
                 panel.update(cx, |panel, cx| {
-                    panel.amend_pending = serialized_panel.amend_pending;
-                    panel.signoff_enabled = serialized_panel.signoff_enabled;
+                    panel.amend_pending = serialimomor_panel.amend_pending;
+                    panel.signoff_enabled = serialimomor_panel.signoff_enabled;
                     cx.notify();
                 })
             }
@@ -6406,7 +6406,7 @@ impl RenderOnce for PanelRepoFooter {
             .label_size(LabelSize::Small)
             .truncate(true)
             .on_click(|_, window, cx| {
-                window.dispatch_action(zed_actions::git::Switch.boxed_clone(), cx);
+                window.dispatch_action(momor_actions::git::Switch.boxed_clone(), cx);
             });
 
         let branch_selector = PopoverMenu::new("popover-button")
@@ -6417,7 +6417,7 @@ impl RenderOnce for PanelRepoFooter {
             })
             .trigger_with_tooltip(
                 branch_selector_button,
-                Tooltip::for_action_title("Switch Branch", &zed_actions::git::Switch),
+                Tooltip::for_action_title("Switch Branch", &momor_actions::git::Switch),
             )
             .anchor(Anchor::BottomLeft)
             .offset(gpui::Point {
@@ -6523,7 +6523,7 @@ impl Component for PanelRepoFooter {
                 is_head: true,
                 ref_name: branch_name.to_string().into(),
                 upstream: upstream.map(|tracking| Upstream {
-                    ref_name: format!("zed/{}", branch_name).into(),
+                    ref_name: format!("momor/{}", branch_name).into(),
                     tracking,
                 }),
                 most_recent_commit: Some(CommitSummary {
@@ -6639,7 +6639,7 @@ impl Component for PanelRepoFooter {
                                     .w(example_width)
                                     .overflow_hidden()
                                     .child(PanelRepoFooter::new_preview(
-                                        SharedString::from("zed"),
+                                        SharedString::from("momor"),
                                         Some(custom("main", behind_upstream)),
                                     ))
                                     .into_any_element(),
@@ -6650,7 +6650,7 @@ impl Component for PanelRepoFooter {
                                     .w(example_width)
                                     .overflow_hidden()
                                     .child(PanelRepoFooter::new_preview(
-                                        SharedString::from("zed"),
+                                        SharedString::from("momor"),
                                         Some(custom(
                                             "redesign-and-update-git-ui-list-entry-style",
                                             behind_upstream,
@@ -6664,7 +6664,7 @@ impl Component for PanelRepoFooter {
                                     .w(example_width)
                                     .overflow_hidden()
                                     .child(PanelRepoFooter::new_preview(
-                                        SharedString::from("zed-industries-community-examples"),
+                                        SharedString::from("momor-industries-community-examples"),
                                         Some(custom("gpui", ahead_of_upstream)),
                                     ))
                                     .into_any_element(),
@@ -6675,7 +6675,7 @@ impl Component for PanelRepoFooter {
                                     .w(example_width)
                                     .overflow_hidden()
                                     .child(PanelRepoFooter::new_preview(
-                                        SharedString::from("zed-industries-community-examples"),
+                                        SharedString::from("momor-industries-community-examples"),
                                         Some(custom(
                                             "redesign-and-update-git-ui-list-entry-style",
                                             behind_upstream,
@@ -6700,7 +6700,7 @@ impl Component for PanelRepoFooter {
                                     .w(example_width)
                                     .overflow_hidden()
                                     .child(PanelRepoFooter::new_preview(
-                                        SharedString::from("zed"),
+                                        SharedString::from("momor"),
                                         Some(custom("update-README", behind_upstream)),
                                     ))
                                     .into_any_element(),
@@ -6903,7 +6903,7 @@ mod tests {
         fs.insert_tree(
             "/root",
             json!({
-                "zed": {
+                "momor": {
                     ".git": {},
                     "crates": {
                         "gpui": {
@@ -6919,7 +6919,7 @@ mod tests {
         .await;
 
         fs.set_status_for_repo(
-            Path::new(path!("/root/zed/.git")),
+            Path::new(path!("/root/momor/.git")),
             &[
                 ("crates/gpui/gpui.rs", StatusCode::Modified.worktree()),
                 ("crates/util/util.rs", StatusCode::Modified.worktree()),
@@ -6927,7 +6927,7 @@ mod tests {
         );
 
         let project =
-            Project::test(fs.clone(), [path!("/root/zed/crates/gpui").as_ref()], cx).await;
+            Project::test(fs.clone(), [path!("/root/momor/crates/gpui").as_ref()], cx).await;
         let window_handle =
             cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
         let workspace = window_handle

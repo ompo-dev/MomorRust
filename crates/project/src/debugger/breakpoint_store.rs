@@ -819,7 +819,7 @@ impl BreakpointStore {
             .collect()
     }
 
-    pub fn with_serialized_breakpoints(
+    pub fn with_serialimomor_breakpoints(
         &self,
         breakpoints: BTreeMap<Arc<Path>, Vec<SourceBreakpoint>>,
         cx: &mut Context<BreakpointStore>,

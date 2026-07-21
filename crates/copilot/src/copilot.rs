@@ -508,7 +508,7 @@ impl Copilot {
         if let Some(proxy_type) = http_or_https_proxy {
             env.insert(proxy_type.to_string(), proxy_url);
             if let Some(true) = no_verify {
-                env.insert("NODE_TLS_REJECT_UNAUTHORIZED".to_string(), "0".to_string());
+                env.insert("NODE_TLS_REJECT_UNAUTHORIMOMOR".to_string(), "0".to_string());
             };
         }
 
@@ -662,11 +662,11 @@ impl Copilot {
 
             let editor_info = request::SetEditorInfoParams {
                 editor_info: request::EditorInfo {
-                    name: "zed".into(),
+                    name: "momor".into(),
                     version: env!("CARGO_PKG_VERSION").into(),
                 },
                 editor_plugin_info: request::EditorPluginInfo {
-                    name: "zed-copilot".into(),
+                    name: "momor-copilot".into(),
                     version: "0.0.1".into(),
                 },
             };
@@ -713,9 +713,9 @@ impl Copilot {
         this.update(cx, |this, cx| {
             cx.notify();
 
-            if env::var("ZED_FORCE_COPILOT_ERROR").is_ok() {
+            if env::var("MOMOR_FORCE_COPILOT_ERROR").is_ok() {
                 this.server = CopilotServer::Error(
-                    "Forced error for testing (ZED_FORCE_COPILOT_ERROR)".into(),
+                    "Forced error for testing (MOMOR_FORCE_COPILOT_ERROR)".into(),
                 );
                 return;
             }

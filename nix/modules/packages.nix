@@ -3,13 +3,13 @@
   perSystem =
     { pkgs, ... }:
     let
-      mkZed = import ../toolchain.nix { inherit inputs; };
-      zed-editor = mkZed pkgs;
+      mkMomor = import ../toolchain.nix { inherit inputs; };
+      momor-editor = mkMomor pkgs;
     in
     {
       packages = {
-        default = zed-editor;
-        debug = zed-editor.override { profile = "dev"; };
+        default = momor-editor;
+        debug = momor-editor.override { profile = "dev"; };
       };
     };
 }

@@ -3,14 +3,10 @@
 const fs = require("fs");
 const { randomBytes } = require("crypto");
 const { execFileSync } = require("child_process");
-const {
-  minimizeTestPlan,
-  buildTests,
-  runTests,
-} = require("./randomized-test-minimize");
+const { minimizeTestPlan, buildTests, runTests } = require("./randomized-test-minimize");
 
-const { ZED_SERVER_URL } = process.env;
-if (!ZED_SERVER_URL) throw new Error("Missing env var `ZED_SERVER_URL`");
+const { MOMOR_SERVER_URL } = process.env;
+if (!MOMOR_SERVER_URL) throw new Error("Missing env var `MOMOR_SERVER_URL`");
 
 main();
 
@@ -45,7 +41,7 @@ async function main() {
 
   console.log("minimized plan:\n", minimizedPlan);
 
-  const url = `${ZED_SERVER_URL}/api/randomized_test_failure`;
+  const url = `${MOMOR_SERVER_URL}/api/randomimomor_test_failure`;
   const body = {
     seed: minimizedSeed,
     plan: JSON.parse(minimizedPlan),
@@ -62,9 +58,6 @@ async function main() {
 
 function randomU64() {
   const bytes = randomBytes(8);
-  const hexString = bytes.reduce(
-    (string, byte) => string + byte.toString(16),
-    "",
-  );
+  const hexString = bytes.reduce((string, byte) => string + byte.toString(16), "");
   return BigInt("0x" + hexString).toString(10);
 }

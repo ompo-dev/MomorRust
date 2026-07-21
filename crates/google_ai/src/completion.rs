@@ -435,7 +435,7 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_string_signature_normalized_to_none() {
+    fn test_empty_string_signature_normalimomor_to_none() {
         let mut mapper = GoogleEventMapper::new();
 
         let response = GenerateContentResponse {

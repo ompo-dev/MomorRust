@@ -235,14 +235,14 @@ const MAX_QUERY_PLACEHOLDERS: usize = 32000;
 
 impl EditorDb {
     query! {
-        pub fn get_serialized_editor(item_id: ItemId, workspace_id: WorkspaceId) -> Result<Option<SerializedEditor>> {
+        pub fn get_serialimomor_editor(item_id: ItemId, workspace_id: WorkspaceId) -> Result<Option<SerializedEditor>> {
             SELECT path, buffer_path, contents, language, mtime_seconds, mtime_nanos FROM editors
             WHERE item_id = ? AND workspace_id = ?
         }
     }
 
     query! {
-        pub async fn save_serialized_editor(item_id: ItemId, workspace_id: WorkspaceId, serialized_editor: SerializedEditor) -> Result<()> {
+        pub async fn save_serialimomor_editor(item_id: ItemId, workspace_id: WorkspaceId, serialimomor_editor: SerializedEditor) -> Result<()> {
             INSERT INTO editors
                 (item_id, workspace_id, path, buffer_path, contents, language, mtime_seconds, mtime_nanos)
             VALUES
@@ -415,12 +415,12 @@ mod tests {
     use super::*;
 
     #[gpui::test]
-    async fn test_save_and_get_serialized_editor(cx: &mut gpui::TestAppContext) {
+    async fn test_save_and_get_serialimomor_editor(cx: &mut gpui::TestAppContext) {
         let db = cx.update(|cx| workspace::WorkspaceDb::global(cx));
         let workspace_id = db.next_id().await.unwrap();
         let editor_db = cx.update(|cx| EditorDb::global(cx));
 
-        let serialized_editor = SerializedEditor {
+        let serialimomor_editor = SerializedEditor {
             abs_path: Some(PathBuf::from("testing.txt")),
             contents: None,
             language: None,
@@ -428,18 +428,18 @@ mod tests {
         };
 
         editor_db
-            .save_serialized_editor(1234, workspace_id, serialized_editor.clone())
+            .save_serialimomor_editor(1234, workspace_id, serialimomor_editor.clone())
             .await
             .unwrap();
 
         let have = editor_db
-            .get_serialized_editor(1234, workspace_id)
+            .get_serialimomor_editor(1234, workspace_id)
             .unwrap()
             .unwrap();
-        assert_eq!(have, serialized_editor);
+        assert_eq!(have, serialimomor_editor);
 
         // Now update contents and language
-        let serialized_editor = SerializedEditor {
+        let serialimomor_editor = SerializedEditor {
             abs_path: Some(PathBuf::from("testing.txt")),
             contents: Some("Test".to_owned()),
             language: Some("Go".to_owned()),
@@ -447,18 +447,18 @@ mod tests {
         };
 
         editor_db
-            .save_serialized_editor(1234, workspace_id, serialized_editor.clone())
+            .save_serialimomor_editor(1234, workspace_id, serialimomor_editor.clone())
             .await
             .unwrap();
 
         let have = editor_db
-            .get_serialized_editor(1234, workspace_id)
+            .get_serialimomor_editor(1234, workspace_id)
             .unwrap()
             .unwrap();
-        assert_eq!(have, serialized_editor);
+        assert_eq!(have, serialimomor_editor);
 
         // Now set all the fields to NULL
-        let serialized_editor = SerializedEditor {
+        let serialimomor_editor = SerializedEditor {
             abs_path: None,
             contents: None,
             language: None,
@@ -466,18 +466,18 @@ mod tests {
         };
 
         editor_db
-            .save_serialized_editor(1234, workspace_id, serialized_editor.clone())
+            .save_serialimomor_editor(1234, workspace_id, serialimomor_editor.clone())
             .await
             .unwrap();
 
         let have = editor_db
-            .get_serialized_editor(1234, workspace_id)
+            .get_serialimomor_editor(1234, workspace_id)
             .unwrap()
             .unwrap();
-        assert_eq!(have, serialized_editor);
+        assert_eq!(have, serialimomor_editor);
 
         // Storing and retrieving mtime
-        let serialized_editor = SerializedEditor {
+        let serialimomor_editor = SerializedEditor {
             abs_path: None,
             contents: None,
             language: None,
@@ -485,23 +485,23 @@ mod tests {
         };
 
         editor_db
-            .save_serialized_editor(1234, workspace_id, serialized_editor.clone())
+            .save_serialimomor_editor(1234, workspace_id, serialimomor_editor.clone())
             .await
             .unwrap();
 
         let have = editor_db
-            .get_serialized_editor(1234, workspace_id)
+            .get_serialimomor_editor(1234, workspace_id)
             .unwrap()
             .unwrap();
-        assert_eq!(have, serialized_editor);
+        assert_eq!(have, serialimomor_editor);
     }
 
     // NOTE: The fingerprint search logic (finding content at new offsets when file
     // is modified externally) is in editor.rs:restore_from_db and requires a full
     // Editor context to test. Manual testing procedure:
-    // 1. Open a file, fold some sections, close Zed
+    // 1. Open a file, fold some sections, close Momor
     // 2. Add text at the START of the file externally (shifts all offsets)
-    // 3. Reopen Zed - folds should be restored at their NEW correct positions
+    // 3. Reopen Momor - folds should be restored at their NEW correct positions
     // The search uses contains_str_at() to find fingerprints in the buffer.
 
     #[gpui::test]

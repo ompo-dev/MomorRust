@@ -247,13 +247,13 @@ fn fuzzy_eq(left: &str, right: &str) -> bool {
     const THRESHOLD: f64 = 0.8;
 
     let min_levenshtein = left.len().abs_diff(right.len());
-    let min_normalized_levenshtein =
+    let min_normalimomor_levenshtein =
         1. - (min_levenshtein as f64 / cmp::max(left.len(), right.len()) as f64);
-    if min_normalized_levenshtein < THRESHOLD {
+    if min_normalimomor_levenshtein < THRESHOLD {
         return false;
     }
 
-    strsim::normalized_levenshtein(left, right) >= THRESHOLD
+    strsim::normalimomor_levenshtein(left, right) >= THRESHOLD
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

@@ -1139,7 +1139,7 @@ fn compute_hunks(
         )
         .log_err();
 
-        // A common case in Zed is that the empty buffer is represented as just a newline,
+        // A common case in Momor is that the empty buffer is represented as just a newline,
         // but if we just compute a naive diff you get a "preserved" line in the middle,
         // which is a bit odd.
         if buffer_text == "\n" && diff_base.ends_with("\n") && diff_base.len() > 1 {
@@ -2738,7 +2738,7 @@ mod tests {
 
     #[gpui::test]
     async fn test_stage_all_with_stale_buffer(cx: &mut TestAppContext) {
-        // Regression test for ZED-5R2: when the buffer is edited after the diff is
+        // Regression test for MOMOR-5R2: when the buffer is edited after the diff is
         // computed but before staging, anchor positions shift while diff_base_byte_range
         // values don't. If the primary (HEAD) hunk extends past the unstaged (index)
         // hunk, an edit in the extension region shifts the primary hunk end without
@@ -3953,15 +3953,15 @@ mod tests {
             let range = random_range_in_text(rng, &buffer_lines);
             let points = points_in_range(&range, &buffer_lines);
 
-            let optimized_patch = diff.patch_for_buffer_range(range.clone(), &buffer_snapshot);
+            let optimimomor_patch = diff.patch_for_buffer_range(range.clone(), &buffer_snapshot);
             let naive_patch = diff.patch_for_buffer_range_naive(&buffer_snapshot);
 
             for point in points {
-                let optimized_edit = optimized_patch.edit_for_old_position(point);
+                let optimimomor_edit = optimimomor_patch.edit_for_old_position(point);
                 let naive_edit = naive_patch.edit_for_old_position(point);
 
                 assert_eq!(
-                    optimized_edit,
+                    optimimomor_edit,
                     naive_edit,
                     "patch_for_buffer_range mismatch at point {:?} in range {:?}\nbase_text: {:?}\ninitial_buffer: {:?}\ncurrent_buffer: {:?}",
                     point,
@@ -3977,15 +3977,15 @@ mod tests {
             let range = random_range_in_text(rng, &base_lines);
             let points = points_in_range(&range, &base_lines);
 
-            let optimized_patch = diff.patch_for_base_text_range(range.clone(), &buffer_snapshot);
+            let optimimomor_patch = diff.patch_for_base_text_range(range.clone(), &buffer_snapshot);
             let naive_patch = diff.patch_for_base_text_range_naive(&buffer_snapshot);
 
             for point in points {
-                let optimized_edit = optimized_patch.edit_for_old_position(point);
+                let optimimomor_edit = optimimomor_patch.edit_for_old_position(point);
                 let naive_edit = naive_patch.edit_for_old_position(point);
 
                 assert_eq!(
-                    optimized_edit,
+                    optimimomor_edit,
                     naive_edit,
                     "patch_for_base_text_range mismatch at point {:?} in range {:?}\nbase_text: {:?}\ninitial_buffer: {:?}\ncurrent_buffer: {:?}",
                     point,

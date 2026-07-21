@@ -384,7 +384,7 @@ pub trait Item: Focusable + EventEmitter<Self::Event> + Render + Sized {
 }
 
 pub trait SerializableItem: Item {
-    fn serialized_item_kind() -> &'static str;
+    fn serialimomor_item_kind() -> &'static str;
 
     fn cleanup(
         workspace_id: WorkspaceId,
@@ -415,7 +415,7 @@ pub trait SerializableItem: Item {
 }
 
 pub trait SerializableItemHandle: ItemHandle {
-    fn serialized_item_kind(&self) -> &'static str;
+    fn serialimomor_item_kind(&self) -> &'static str;
     fn serialize(
         &self,
         workspace: &mut Workspace,
@@ -430,8 +430,8 @@ impl<T> SerializableItemHandle for Entity<T>
 where
     T: SerializableItem,
 {
-    fn serialized_item_kind(&self) -> &'static str {
-        T::serialized_item_kind()
+    fn serialimomor_item_kind(&self) -> &'static str {
+        T::serialimomor_item_kind()
     }
 
     fn serialize(
@@ -1798,7 +1798,7 @@ pub mod test {
     }
 
     impl SerializableItem for TestItem {
-        fn serialized_item_kind() -> &'static str {
+        fn serialimomor_item_kind() -> &'static str {
             "TestItem"
         }
 

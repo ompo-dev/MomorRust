@@ -2,25 +2,25 @@
 
 const HELP = `
 USAGE
-  zed-local  [options]  [zed args]
+  momor-local  [options]  [momor args]
 
 SUMMARY
-  Runs 1-6 instances of Zed using a locally-running collaboration server.
-  Each instance of Zed will be signed in as a different user specified in
+  Runs 1-6 instances of Momor using a locally-running collaboration server.
+  Each instance of Momor will be signed in as a different user specified in
   either \`.admins.json\` or \`.admins.default.json\`.
 
   All arguments after the initial options will be passed through to the first
-  instance of Zed. This can be used to test SSH remoting along with collab, like
+  instance of Momor. This can be used to test SSH remoting along with collab, like
   so:
 
-  $ script/zed-local -2 ssh://your-ssh-uri-here
+  $ script/momor-local -2 ssh://your-ssh-uri-here
 
 OPTIONS
   --help            Print this help message
-  --release         Build Zed in release mode
-  -2, -3, -4, ...   Spawn multiple Zed instances, with their windows tiled.
-  --top             Arrange the Zed windows so they take up the top half of the screen.
-  --stable          Use stable Zed release installed on local machine for all instances (except for the first one).
+  --release         Build Momor in release mode
+  -2, -3, -4, ...   Spawn multiple Momor instances, with their windows tiled.
+  --top             Arrange the Momor windows so they take up the top half of the screen.
+  --stable          Use stable Momor release installed on local machine for all instances (except for the first one).
   --preview         Like --stable, but uses the locally-installed preview release instead.
 `.trim();
 
@@ -36,9 +36,7 @@ if (process.env.SEED_PATH) {
     const defaultUsers = users;
     const customUsers = require("../crates/collab/seed.json").admins;
     assert(customUsers.length > 0);
-    users = customUsers.concat(
-      defaultUsers.filter((user) => !customUsers.includes(user)),
-    );
+    users = customUsers.concat(defaultUsers.filter((user) => !customUsers.includes(user)));
   } catch (_) {}
 }
 
@@ -91,9 +89,7 @@ if (platform === "darwin") {
       encoding: "utf8",
     }),
   );
-  const mainDisplayResolution = displayInfo?.SPDisplaysDataType?.flatMap(
-    (display) => display?.spdisplays_ndrvs,
-  )
+  const mainDisplayResolution = displayInfo?.SPDisplaysDataType?.flatMap((display) => display?.spdisplays_ndrvs)
     ?.find((entry) => entry?.spdisplays_main === "spdisplays_yes")
     ?._spdisplays_resolution?.match(RESOLUTION_REGEX);
   if (!mainDisplayResolution) {
@@ -158,16 +154,16 @@ const instanceWidth = Math.floor(screenWidth / columns);
 const instanceHeight = Math.floor(screenHeight / rows);
 
 // If a user is specified, make sure it's first in the list
-const user = process.env.ZED_IMPERSONATE;
+const user = process.env.MOMOR_IMPERSONATE;
 if (user) {
   users = [user].concat(users.filter((u) => u !== user));
 }
 
 let buildArgs = ["build"];
-let zedBinary = "target/debug/zed";
+let zedBinary = "target/debug/momor";
 if (isReleaseMode) {
   buildArgs.push("--release");
-  zedBinary = "target/release/zed";
+  zedBinary = "target/release/momor";
 }
 
 try {
@@ -186,30 +182,27 @@ setTimeout(() => {
     if (platform == "win32") {
       position = [column * instanceWidth, row * instanceHeight].join(",");
     } else {
-      position = [
-        column * instanceWidth,
-        row * instanceHeight + titleBarHeight,
-      ].join(",");
+      position = [column * instanceWidth, row * instanceHeight + titleBarHeight].join(",");
     }
     const size = [instanceWidth, instanceHeight].join(",");
     let binaryPath = zedBinary;
     if (i != 0 && othersOnStable) {
-      binaryPath = "/Applications/Zed.app/Contents/MacOS/zed";
+      binaryPath = "/Applications/Momor.app/Contents/MacOS/momor";
     } else if (i != 0 && othersOnPreview) {
-      binaryPath = "/Applications/Zed Preview.app/Contents/MacOS/zed";
+      binaryPath = "/Applications/Momor Preview.app/Contents/MacOS/momor";
     }
     spawn(binaryPath, i == 0 ? args : [], {
       stdio: "inherit",
       env: Object.assign({}, process.env, {
-        ZED_IMPERSONATE: users[i],
-        ZED_WINDOW_POSITION: position,
-        ZED_STATELESS: isStateful && i == 0 ? "" : "1",
-        ZED_ALWAYS_ACTIVE: "1",
-        ZED_SERVER_URL: "http://localhost:3000",
-        ZED_RPC_URL: "http://localhost:8080/rpc",
-        ZED_ADMIN_API_TOKEN: "internal-api-key-secret",
-        ZED_WINDOW_SIZE: size,
-        ZED_CLIENT_CHECKSUM_SEED: "development-checksum-seed",
+        MOMOR_IMPERSONATE: users[i],
+        MOMOR_WINDOW_POSITION: position,
+        MOMOR_STATELESS: isStateful && i == 0 ? "" : "1",
+        MOMOR_ALWAYS_ACTIVE: "1",
+        MOMOR_SERVER_URL: "http://localhost:3000",
+        MOMOR_RPC_URL: "http://localhost:8080/rpc",
+        MOMOR_ADMIN_API_TOKEN: "internal-api-key-secret",
+        MOMOR_WINDOW_SIZE: size,
+        MOMOR_CLIENT_CHECKSUM_SEED: "development-checksum-seed",
         RUST_LOG: process.env.RUST_LOG || "info",
       }),
     });

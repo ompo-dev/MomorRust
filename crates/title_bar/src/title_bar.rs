@@ -23,7 +23,7 @@ use crate::application_menu::{
 
 use auto_update::AutoUpdateStatus;
 use call::ActiveCall;
-use client::{Client, UserStore, zed_urls};
+use client::{Client, UserStore, momor_urls};
 use cloud_api_types::Plan;
 
 use gpui::{
@@ -55,7 +55,7 @@ use workspace::{
     MultiWorkspace, ToggleWorktreeSecurity, Workspace, notifications::NotifyResultExt,
 };
 
-use zed_actions::OpenRemote;
+use momor_actions::OpenRemote;
 
 pub use onboarding_banner::restore_banner;
 
@@ -548,7 +548,7 @@ impl TitleBar {
         let platform_style = PlatformStyle::platform();
         let application_menu = match platform_style {
             PlatformStyle::Mac => {
-                if option_env!("ZED_USE_CROSS_PLATFORM_MENU").is_some() {
+                if option_env!("MOMOR_USE_CROSS_PLATFORM_MENU").is_some() {
                     Some(cx.new(|cx| ApplicationMenu::new(window, cx)))
                 } else {
                     None
@@ -1148,7 +1148,7 @@ impl TitleBar {
                 move |_window, cx| {
                     Tooltip::for_action(
                         "Recent Projects",
-                        &zed_actions::OpenRecent {
+                        &momor_actions::OpenRecent {
                             create_new_window: false,
                         },
                         cx,
@@ -1205,7 +1205,7 @@ impl TitleBar {
                 move |_window, cx| {
                     Tooltip::for_action(
                         "Recent Projects",
-                        &zed_actions::OpenRecent {
+                        &momor_actions::OpenRecent {
                             create_new_window: false,
                         },
                         cx,
@@ -1311,7 +1311,7 @@ impl TitleBar {
                     move |_window, cx| {
                         Tooltip::with_meta(
                             "Worktree",
-                            Some(&zed_actions::git::Worktree),
+                            Some(&momor_actions::git::Worktree),
                             format!("Currently In Use: {}", worktree_label),
                             cx,
                         )
@@ -1369,7 +1369,7 @@ impl TitleBar {
                         };
                         Tooltip::with_meta(
                             "Branch & Stash",
-                            Some(&zed_actions::git::Branch),
+                            Some(&momor_actions::git::Branch),
                             meta,
                             cx,
                         )
@@ -1466,13 +1466,13 @@ impl TitleBar {
             client::Status::UpgradeRequired => {
                 let auto_updater = auto_update::AutoUpdater::get(cx);
                 let label = match auto_updater.map(|auto_update| auto_update.read(cx).status()) {
-                    Some(AutoUpdateStatus::Updated { .. }) => "Please restart Zed to Collaborate",
+                    Some(AutoUpdateStatus::Updated { .. }) => "Please restart Momor to Collaborate",
                     Some(AutoUpdateStatus::Installing { .. })
                     | Some(AutoUpdateStatus::Downloading { .. })
                     | Some(AutoUpdateStatus::Checking) => "Updating...",
                     Some(AutoUpdateStatus::Idle)
                     | Some(AutoUpdateStatus::Errored { .. })
-                    | None => "Please update Zed to Collaborate",
+                    | None => "Please update Momor to Collaborate",
                 };
 
                 Some(
@@ -1603,12 +1603,12 @@ impl TitleBar {
                                     .justify_between()
                                     .child(Label::new(user_login))
                                     .when(!has_organization, |parent| {
-                                        parent.child(PlanChip::new(plan.unwrap_or(Plan::ZedFree)))
+                                        parent.child(PlanChip::new(plan.unwrap_or(Plan::MomorFree)))
                                     })
                                     .into_any_element()
                             },
                             move |_, cx| {
-                                cx.open_url(&zed_urls::account_url(cx));
+                                cx.open_url(&momor_urls::account_url(cx));
                             },
                         )
                         .separator()
@@ -1620,7 +1620,7 @@ impl TitleBar {
                                     .w_full()
                                     .gap_1()
                                     .justify_between()
-                                    .child(Label::new("Restart to update Zed").color(Color::Accent))
+                                    .child(Label::new("Restart to update Momor").color(Color::Accent))
                                     .child(
                                         Icon::new(IconName::Download)
                                             .size(IconSize::Small)
@@ -1686,19 +1686,19 @@ impl TitleBar {
 
                         this.separator()
                     })
-                    .action("Settings", zed_actions::OpenSettings.boxed_clone())
-                    .action("Keymap", Box::new(zed_actions::OpenKeymap))
+                    .action("Settings", momor_actions::OpenSettings.boxed_clone())
+                    .action("Keymap", Box::new(momor_actions::OpenKeymap))
                     .action(
                         "Themes…",
-                        zed_actions::theme_selector::Toggle::default().boxed_clone(),
+                        momor_actions::theme_selector::Toggle::default().boxed_clone(),
                     )
                     .action(
                         "Icon Themes…",
-                        zed_actions::icon_theme_selector::Toggle::default().boxed_clone(),
+                        momor_actions::icon_theme_selector::Toggle::default().boxed_clone(),
                     )
                     .action(
                         "Extensions",
-                        zed_actions::Extensions::default().boxed_clone(),
+                        momor_actions::Extensions::default().boxed_clone(),
                     )
                     .when(ai_enabled, |menu| {
                         let fs = fs.clone();

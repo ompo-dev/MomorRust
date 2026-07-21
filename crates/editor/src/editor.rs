@@ -1,6 +1,6 @@
 #![allow(rustdoc::private_intra_doc_links)]
 //! This is the place where everything editor-related is stored (data-wise) and displayed (ui-wise).
-//! The main point of interest in this crate is [`Editor`] type, which is used in every other Zed part as a user input element.
+//! The main point of interest in this crate is [`Editor`] type, which is used in every other Momor part as a user input element.
 //! It comes in different flavors: single line, multiline and a fixed height one.
 //!
 //! Editor contains of multiple large submodules:
@@ -99,7 +99,7 @@ use aho_corasick::{AhoCorasick, AhoCorasickBuilder, BuildError};
 use anyhow::{Context as _, Result, anyhow, bail};
 use blink_manager::BlinkManager;
 use buffer_diff::DiffHunkStatus;
-use client::{Collaborator, ParticipantIndex, parse_zed_link};
+use client::{Collaborator, ParticipantIndex, parse_momor_link};
 use clock::ReplicaId;
 use code_context_menus::{
     AvailableCodeAction, CodeActionContents, CodeActionsItem, CodeActionsMenu, CodeContextMenu,
@@ -234,8 +234,8 @@ use workspace::{
     notifications::{DetachAndPromptErr, NotificationId, NotifyResultExt, NotifyTaskExt},
     searchable::SearchEvent,
 };
-pub use zed_actions::editor::RevealInFileManager;
-use zed_actions::editor::{MoveDown, MoveUp};
+pub use momor_actions::editor::RevealInFileManager;
+use momor_actions::editor::{MoveDown, MoveUp};
 
 use crate::{
     code_context_menus::CompletionsMenuSource,
@@ -1099,7 +1099,7 @@ struct ActionFetchReady {
     actions: Rc<[AvailableCodeAction]>,
 }
 
-/// Zed's primary implementation of text input, allowing users to edit a [`MultiBuffer`].
+/// Momor's primary implementation of text input, allowing users to edit a [`MultiBuffer`].
 ///
 /// See the [module level documentation](self) for more information.
 pub struct Editor {
@@ -3135,7 +3135,7 @@ impl Editor {
             cx,
             |e, _, _| match e.error_code() {
                 ErrorCode::RemoteUpgradeRequired => Some(format!(
-                "The remote instance of Zed does not support this yet. It must be upgraded to {}",
+                "The remote instance of Momor does not support this yet. It must be upgraded to {}",
                 e.error_tag("required").unwrap_or("the latest version")
             )),
                 _ => None,
@@ -3215,7 +3215,7 @@ impl Editor {
         .detach_and_prompt_err("Failed to create buffer", window, cx, |e, _, _| {
             match e.error_code() {
                 ErrorCode::RemoteUpgradeRequired => Some(format!(
-                "The remote instance of Zed does not support this yet. It must be upgraded to {}",
+                "The remote instance of Momor does not support this yet. It must be upgraded to {}",
                 e.error_tag("required").unwrap_or("the latest version")
             )),
                 _ => None,
@@ -6016,7 +6016,7 @@ impl Editor {
             return None;
         }
 
-        // OnTypeFormatting returns a list of edits, no need to pass them between Zed instances,
+        // OnTypeFormatting returns a list of edits, no need to pass them between Momor instances,
         // hence we do LSP request & edit on host side only — add formats to host's history.
         let push_to_lsp_host_history = true;
         // If this is not the host, append its history with new edits.
@@ -10518,7 +10518,7 @@ impl Editor {
     ) -> edit_prediction_types::EditPredictionIconSet {
         match provider {
             Some(provider) => provider.provider.icons(cx),
-            None => edit_prediction_types::EditPredictionIconSet::new(IconName::ZedPredict),
+            None => edit_prediction_types::EditPredictionIconSet::new(IconName::MomorPredict),
         }
     }
 
@@ -14265,7 +14265,7 @@ impl Editor {
             .all::<MultiBufferOffset>(&self.display_snapshot(cx));
 
         if selections.is_empty() {
-            log::warn!("There should always be at least one selection in Zed. This is a bug.");
+            log::warn!("There should always be at least one selection in Momor. This is a bug.");
             return;
         };
 
@@ -14338,7 +14338,7 @@ impl Editor {
                     "No entry in selection_history found for undo. \
                      This may correspond to a bug where undo does not update the selection. \
                      If this is occurring, please add details to \
-                     https://github.com/zed-industries/zed/issues/22692"
+                     https://github.com/momor-industries/momor/issues/22692"
                 );
             }
             self.request_autoscroll(Autoscroll::fit(), cx);
@@ -14366,7 +14366,7 @@ impl Editor {
                     "No entry in selection_history found for redo. \
                      This may correspond to a bug where undo does not update the selection. \
                      If this is occurring, please add details to \
-                     https://github.com/zed-industries/zed/issues/22692"
+                     https://github.com/momor-industries/momor/issues/22692"
                 );
             }
             self.request_autoscroll(Autoscroll::fit(), cx);
@@ -18225,8 +18225,8 @@ impl Editor {
 
             if let Some(url) = url {
                 cx.update(|window, cx| {
-                    if parse_zed_link(&url, cx).is_some() {
-                        window.dispatch_action(Box::new(zed_actions::OpenZedUrl { url }), cx);
+                    if parse_momor_link(&url, cx).is_some() {
+                        window.dispatch_action(Box::new(momor_actions::OpenMomorUrl { url }), cx);
                     } else {
                         cx.open_url(&url);
                     }
@@ -18426,9 +18426,9 @@ impl Editor {
                 match first_url_or_file {
                     Some(Either::Left(url)) => {
                         cx.update(|window, cx| {
-                            if parse_zed_link(&url, cx).is_some() {
+                            if parse_momor_link(&url, cx).is_some() {
                                 window
-                                    .dispatch_action(Box::new(zed_actions::OpenZedUrl { url }), cx);
+                                    .dispatch_action(Box::new(momor_actions::OpenMomorUrl { url }), cx);
                             } else {
                                 cx.open_url(&url);
                             }
@@ -21164,7 +21164,7 @@ impl Editor {
         cx: &mut Context<Self>,
     ) -> Entity<Self> {
         const MINIMAP_FONT_WEIGHT: gpui::FontWeight = gpui::FontWeight::BLACK;
-        const MINIMAP_FONT_FAMILY: SharedString = SharedString::new_static(".ZedMono");
+        const MINIMAP_FONT_FAMILY: SharedString = SharedString::new_static(".MomorMono");
 
         let mut minimap = Editor::new_internal(
             EditorMode::Minimap {
@@ -22476,7 +22476,7 @@ impl Editor {
 
     pub fn copy_path(
         &mut self,
-        _: &zed_actions::workspace::CopyPath,
+        _: &momor_actions::workspace::CopyPath,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -22491,7 +22491,7 @@ impl Editor {
 
     pub fn copy_relative_path(
         &mut self,
-        _: &zed_actions::workspace::CopyRelativePath,
+        _: &momor_actions::workspace::CopyRelativePath,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -28558,10 +28558,10 @@ impl Render for MissingEditPredictionKeybindingTooltip {
                         .items_end()
                         .w_full()
                         .child(Button::new("open-keymap", "Assign Keybinding").size(ButtonSize::Compact).on_click(|_ev, window, cx| {
-                            window.dispatch_action(zed_actions::OpenKeymapFile.boxed_clone(), cx)
+                            window.dispatch_action(momor_actions::OpenKeymapFile.boxed_clone(), cx)
                         }))
                         .child(Button::new("see-docs", "See Docs").size(ButtonSize::Compact).on_click(|_ev, _window, cx| {
-                            cx.open_url("https://zed.dev/docs/completions#edit-predictions-missing-keybinding");
+                            cx.open_url("https://momor.dev/docs/completions#edit-predictions-missing-keybinding");
                         })),
                 )
         })

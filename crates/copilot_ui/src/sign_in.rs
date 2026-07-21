@@ -248,7 +248,7 @@ impl CopilotCodeVerification {
             .gap_2p5()
             .items_center()
             .text_center()
-            .child(Headline::new("Use GitHub Copilot in Zed").size(HeadlineSize::Large))
+            .child(Headline::new("Use GitHub Copilot in Momor").size(HeadlineSize::Large))
             .child(
                 Label::new("Using Copilot requires an active subscription on GitHub.")
                     .color(Color::Muted),
@@ -343,7 +343,7 @@ impl CopilotCodeVerification {
             )
     }
 
-    fn render_unauthorized_modal(&self, cx: &mut Context<Self>) -> impl Element {
+    fn render_unauthorimomor_modal(&self, cx: &mut Context<Self>) -> impl Element {
         let sign_up_url = self
             .sign_up_url
             .as_deref()
@@ -426,7 +426,7 @@ impl Render for CopilotCodeVerification {
             }
             Status::Unauthorized => {
                 self.connect_clicked = false;
-                self.render_unauthorized_modal(cx).into_any_element()
+                self.render_unauthorimomor_modal(cx).into_any_element()
             }
             Status::Authorized => {
                 self.connect_clicked = false;
@@ -455,7 +455,7 @@ impl Render for CopilotCodeVerification {
                 window.focus(&this.focus_handle, cx);
             }))
             .child(
-                Vector::new(VectorName::ZedXCopilot, rems(8.), rems(4.))
+                Vector::new(VectorName::MomorXCopilot, rems(8.), rems(4.))
                     .color(Color::Custom(cx.theme().colors().icon)),
             )
             .child(prompt)
@@ -664,7 +664,7 @@ impl ConfigurationView {
     }
 
     fn render_for_chat(&self) -> impl IntoElement {
-        let start_label = "To use Zed's agent with GitHub Copilot, you need to be logged in to GitHub. Note that your GitHub account must have an active Copilot Chat subscription.";
+        let start_label = "To use Momor's agent with GitHub Copilot, you need to be logged in to GitHub. Note that your GitHub account must have an active Copilot Chat subscription.";
         let no_status_label = "Copilot Chat requires an active GitHub Copilot subscription. Please ensure Copilot is configured and try again, or use a different LLM provider.";
 
         if let Some(msg) = self.loading_message() {

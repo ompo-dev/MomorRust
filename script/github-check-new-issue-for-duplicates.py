@@ -33,8 +33,8 @@ from datetime import datetime, timedelta
 import requests
 
 GITHUB_API = "https://api.github.com"
-REPO_OWNER = "zed-industries"
-REPO_NAME = "zed"
+REPO_OWNER = "momor-industries"
+REPO_NAME = "momor"
 TRACKING_ISSUE_NUMBER = 46355
 STAFF_TEAM_SLUG = "staff"
 
@@ -45,7 +45,7 @@ PREFIXES_TO_COLLAPSE = ["languages", "parity", "tooling"]
 STOPWORDS = {
     "after", "all", "also", "and", "any", "but", "can't", "does", "doesn't",
     "don't", "for", "from", "have", "just", "not", "only", "some", "that",
-    "the", "this", "when", "while", "with", "won't", "work", "working", "zed",
+    "the", "this", "when", "while", "with", "won't", "work", "working", "momor",
 }
 
 
@@ -268,7 +268,7 @@ def parse_duplicate_magnets():
 
     # parse the issue body
     # format: ## area_name
-    #         -   [N dupes] https://github.com/zed-industries/zed/issues/NUMBER
+    #         -   [N dupes] https://github.com/momor-industries/momor/issues/NUMBER
     magnets = {}  # number -> {number, areas, dupe_count}
     current_area = None
 
@@ -439,9 +439,9 @@ For each potential duplicate, assess confidence:
   at a surface level.
 
 Examples of things that are NOT duplicates:
-- Two issues about "Copilot models not showing" — one caused by a Zed update breaking the model list,
+- Two issues about "Copilot models not showing" — one caused by a Momor update breaking the model list,
   the other caused by the user's plan not including those models.
-- Two issues about "Zed hangs" — one triggered by network drives, the other by large projects.
+- Two issues about "Momor hangs" — one triggered by network drives, the other by large projects.
 - Two issues about "can't sign in" — one caused by a missing system package, the other by a server-side error.
 
 Output only valid JSON (no markdown code blocks) with this structure:

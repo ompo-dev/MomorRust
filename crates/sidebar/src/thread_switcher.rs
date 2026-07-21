@@ -7,7 +7,7 @@ use gpui::{
 };
 use ui::{AgentThreadStatus, ThreadItem, ThreadItemWorktreeInfo, WithScrollbar, prelude::*};
 use workspace::{ModalView, Workspace};
-use zed_actions::agents_sidebar::ToggleThreadSwitcher;
+use momor_actions::agents_sidebar::ToggleThreadSwitcher;
 
 pub(crate) struct ThreadSwitcherEntry {
     pub session_id: acp::SessionId,

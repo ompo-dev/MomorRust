@@ -224,7 +224,7 @@ impl LanguageModelCompletionError {
             .strip_prefix("http_")
             .and_then(|code| StatusCode::from_str(code).ok())
         {
-            Self::from_http_status(ZED_CLOUD_PROVIDER_NAME, status_code, message, retry_after)
+            Self::from_http_status(MOMOR_CLOUD_PROVIDER_NAME, status_code, message, retry_after)
         } else {
             anyhow!("completion request failed, code: {code}, message: {message}").into()
         }
@@ -238,7 +238,7 @@ impl LanguageModelCompletionError {
     ) -> Self {
         match status_code {
             StatusCode::BAD_REQUEST => Self::BadRequestFormat { provider, message },
-            StatusCode::UNAUTHORIZED => Self::AuthenticationError { provider, message },
+            StatusCode::UNAUTHORIMOMOR => Self::AuthenticationError { provider, message },
             StatusCode::FORBIDDEN => Self::PermissionError { provider, message },
             StatusCode::NOT_FOUND => Self::ApiEndpointNotFound { provider },
             StatusCode::PAYLOAD_TOO_LARGE => Self::PromptTooLarge {

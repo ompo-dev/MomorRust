@@ -31,7 +31,7 @@ actions!(
 
 pub fn open(
     workspace: &mut Workspace,
-    _: &zed_actions::git::ViewStash,
+    _: &momor_actions::git::ViewStash,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
@@ -275,7 +275,7 @@ impl StashListDelegate {
     fn format_timestamp(timestamp: i64, timezone: UtcOffset) -> String {
         let timestamp =
             OffsetDateTime::from_unix_timestamp(timestamp).unwrap_or(OffsetDateTime::now_utc());
-        time_format::format_localized_timestamp(
+        time_format::format_localimomor_timestamp(
             timestamp,
             OffsetDateTime::now_utc(),
             timezone,
@@ -286,7 +286,7 @@ impl StashListDelegate {
     fn format_absolute_timestamp(timestamp: i64, timezone: UtcOffset) -> String {
         let timestamp =
             OffsetDateTime::from_unix_timestamp(timestamp).unwrap_or(OffsetDateTime::now_utc());
-        time_format::format_localized_timestamp(
+        time_format::format_localimomor_timestamp(
             timestamp,
             OffsetDateTime::now_utc(),
             timezone,

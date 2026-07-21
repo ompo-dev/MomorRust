@@ -180,14 +180,14 @@ impl From<BedrockModelMode> for ModelMode {
 /// under in the keychain.
 const AMAZON_AWS_URL: &str = "https://amazonaws.com";
 
-// These environment variables all use a `ZED_` prefix because we don't want to overwrite the user's AWS credentials.
-static ZED_BEDROCK_ACCESS_KEY_ID_VAR: LazyLock<EnvVar> = env_var!("ZED_ACCESS_KEY_ID");
-static ZED_BEDROCK_SECRET_ACCESS_KEY_VAR: LazyLock<EnvVar> = env_var!("ZED_SECRET_ACCESS_KEY");
-static ZED_BEDROCK_SESSION_TOKEN_VAR: LazyLock<EnvVar> = env_var!("ZED_SESSION_TOKEN");
-static ZED_AWS_PROFILE_VAR: LazyLock<EnvVar> = env_var!("ZED_AWS_PROFILE");
-static ZED_BEDROCK_REGION_VAR: LazyLock<EnvVar> = env_var!("ZED_AWS_REGION");
-static ZED_AWS_ENDPOINT_VAR: LazyLock<EnvVar> = env_var!("ZED_AWS_ENDPOINT");
-static ZED_BEDROCK_BEARER_TOKEN_VAR: LazyLock<EnvVar> = env_var!("ZED_BEDROCK_BEARER_TOKEN");
+// These environment variables all use a `MOMOR_` prefix because we don't want to overwrite the user's AWS credentials.
+static MOMOR_BEDROCK_ACCESS_KEY_ID_VAR: LazyLock<EnvVar> = env_var!("MOMOR_ACCESS_KEY_ID");
+static MOMOR_BEDROCK_SECRET_ACCESS_KEY_VAR: LazyLock<EnvVar> = env_var!("MOMOR_SECRET_ACCESS_KEY");
+static MOMOR_BEDROCK_SESSION_TOKEN_VAR: LazyLock<EnvVar> = env_var!("MOMOR_SESSION_TOKEN");
+static MOMOR_AWS_PROFILE_VAR: LazyLock<EnvVar> = env_var!("MOMOR_AWS_PROFILE");
+static MOMOR_BEDROCK_REGION_VAR: LazyLock<EnvVar> = env_var!("MOMOR_AWS_REGION");
+static MOMOR_AWS_ENDPOINT_VAR: LazyLock<EnvVar> = env_var!("MOMOR_AWS_ENDPOINT");
+static MOMOR_BEDROCK_BEARER_TOKEN_VAR: LazyLock<EnvVar> = env_var!("MOMOR_BEDROCK_BEARER_TOKEN");
 
 pub struct State {
     /// The resolved authentication method. Settings take priority over UX credentials.
@@ -292,7 +292,7 @@ impl State {
         let credentials_provider = self.credentials_provider.clone();
         cx.spawn(async move |this, cx| {
             // Try environment variables first
-            let (auth, from_env) = if let Some(bearer_token) = &ZED_BEDROCK_BEARER_TOKEN_VAR.value {
+            let (auth, from_env) = if let Some(bearer_token) = &MOMOR_BEDROCK_BEARER_TOKEN_VAR.value {
                 if !bearer_token.is_empty() {
                     (
                         Some(BedrockAuth::ApiKey {
@@ -303,10 +303,10 @@ impl State {
                 } else {
                     (None, false)
                 }
-            } else if let Some(access_key_id) = &ZED_BEDROCK_ACCESS_KEY_ID_VAR.value {
-                if let Some(secret_access_key) = &ZED_BEDROCK_SECRET_ACCESS_KEY_VAR.value {
+            } else if let Some(access_key_id) = &MOMOR_BEDROCK_ACCESS_KEY_ID_VAR.value {
+                if let Some(secret_access_key) = &MOMOR_BEDROCK_SECRET_ACCESS_KEY_VAR.value {
                     if !access_key_id.is_empty() && !secret_access_key.is_empty() {
-                        let session_token = ZED_BEDROCK_SESSION_TOKEN_VAR
+                        let session_token = MOMOR_BEDROCK_SESSION_TOKEN_VAR
                             .value
                             .as_deref()
                             .filter(|s| !s.is_empty())
@@ -368,7 +368,7 @@ impl State {
     /// Get the resolved region. Checks env var, then settings, then defaults to us-east-1.
     fn get_region(&self) -> String {
         // Priority: env var > settings > default
-        if let Some(region) = ZED_BEDROCK_REGION_VAR.value.as_deref() {
+        if let Some(region) = MOMOR_BEDROCK_REGION_VAR.value.as_deref() {
             if !region.is_empty() {
                 return region.to_string();
             }
@@ -581,7 +581,7 @@ impl BedrockModel {
                             secret_access_key,
                             session_token,
                             None,
-                            "zed-bedrock-provider",
+                            "momor-bedrock-provider",
                         );
                         config_builder = config_builder.credentials_provider(aws_creds);
                     }
@@ -1505,14 +1505,14 @@ impl Render for ConfigurationView {
             Some(BedrockAuth::IamCredentials { .. }) if env_var_set => {
                 format!(
                     "Using IAM credentials from {} and {} environment variables",
-                    ZED_BEDROCK_ACCESS_KEY_ID_VAR.name, ZED_BEDROCK_SECRET_ACCESS_KEY_VAR.name
+                    MOMOR_BEDROCK_ACCESS_KEY_ID_VAR.name, MOMOR_BEDROCK_SECRET_ACCESS_KEY_VAR.name
                 )
             }
             Some(BedrockAuth::IamCredentials { .. }) => "Using IAM credentials".into(),
             Some(BedrockAuth::ApiKey { .. }) if env_var_set => {
                 format!(
                     "Using Bedrock API Key from {} environment variable",
-                    ZED_BEDROCK_BEARER_TOKEN_VAR.name
+                    MOMOR_BEDROCK_BEARER_TOKEN_VAR.name
                 )
             }
             Some(BedrockAuth::ApiKey { .. }) => "Using Bedrock API Key".into(),
@@ -1531,10 +1531,10 @@ impl Render for ConfigurationView {
         let tooltip_label = if env_var_set {
             Some(format!(
                 "To reset your credentials, unset the {}, {}, and {} or {} environment variables.",
-                ZED_BEDROCK_ACCESS_KEY_ID_VAR.name,
-                ZED_BEDROCK_SECRET_ACCESS_KEY_VAR.name,
-                ZED_BEDROCK_SESSION_TOKEN_VAR.name,
-                ZED_BEDROCK_BEARER_TOKEN_VAR.name
+                MOMOR_BEDROCK_ACCESS_KEY_ID_VAR.name,
+                MOMOR_BEDROCK_SECRET_ACCESS_KEY_VAR.name,
+                MOMOR_BEDROCK_SESSION_TOKEN_VAR.name,
+                MOMOR_BEDROCK_BEARER_TOKEN_VAR.name
             ))
         } else if is_settings_derived {
             Some(
@@ -1560,7 +1560,7 @@ impl Render for ConfigurationView {
             .on_action(cx.listener(Self::on_tab))
             .on_action(cx.listener(Self::on_tab_prev))
             .on_action(cx.listener(ConfigurationView::save_credentials))
-            .child(Label::new("To use Zed's agent with Bedrock, you can set a custom authentication strategy through your settings file or use static credentials."))
+            .child(Label::new("To use Momor's agent with Bedrock, you can set a custom authentication strategy through your settings file or use static credentials."))
             .child(Label::new("But first, to access models on AWS, you need to:").mt_1())
             .child(
                 List::new()
@@ -1642,11 +1642,11 @@ impl ConfigurationView {
             .child(self.session_token_editor.clone())
             .child(
                 Label::new(format!(
-                    "You can also set the {}, {} and {} environment variables (or {} for Bedrock API Key authentication) and restart Zed.",
-                    ZED_BEDROCK_ACCESS_KEY_ID_VAR.name,
-                    ZED_BEDROCK_SECRET_ACCESS_KEY_VAR.name,
-                    ZED_BEDROCK_REGION_VAR.name,
-                    ZED_BEDROCK_BEARER_TOKEN_VAR.name
+                    "You can also set the {}, {} and {} environment variables (or {} for Bedrock API Key authentication) and restart Momor.",
+                    MOMOR_BEDROCK_ACCESS_KEY_ID_VAR.name,
+                    MOMOR_BEDROCK_SECRET_ACCESS_KEY_VAR.name,
+                    MOMOR_BEDROCK_REGION_VAR.name,
+                    MOMOR_BEDROCK_BEARER_TOKEN_VAR.name
                 ))
                 .size(LabelSize::Small)
                 .color(Color::Muted),
@@ -1654,9 +1654,9 @@ impl ConfigurationView {
             .child(
                 Label::new(format!(
                     "Optionally, if your environment uses AWS CLI profiles, you can set {}; if it requires a custom endpoint, you can set {}; and if it requires a Session Token, you can set {}.",
-                    ZED_AWS_PROFILE_VAR.name,
-                    ZED_AWS_ENDPOINT_VAR.name,
-                    ZED_BEDROCK_SESSION_TOKEN_VAR.name
+                    MOMOR_AWS_PROFILE_VAR.name,
+                    MOMOR_AWS_ENDPOINT_VAR.name,
+                    MOMOR_BEDROCK_SESSION_TOKEN_VAR.name
                 ))
                 .size(LabelSize::Small)
                 .color(Color::Muted)
@@ -1668,7 +1668,7 @@ impl ConfigurationView {
             .child(
                 Label::new(format!(
                     "Region is configured via {} environment variable or settings.json (defaults to us-east-1).",
-                    ZED_BEDROCK_REGION_VAR.name
+                    MOMOR_BEDROCK_REGION_VAR.name
                 ))
                 .size(LabelSize::Small)
                 .color(Color::Muted)

@@ -19,7 +19,7 @@ use sqlez::{
 use std::sync::Arc;
 use ui::{App, SharedString};
 use util::path_list::PathList;
-use zed_env_vars::ZED_STATELESS;
+use momor_env_vars::MOMOR_STATELESS;
 
 pub type DbMessage = crate::Message;
 pub type DbSummary = crate::legacy_thread::DetailedSummaryState;
@@ -375,7 +375,7 @@ impl ThreadsDatabase {
     }
 
     pub fn new(executor: BackgroundExecutor) -> Result<Self> {
-        let connection = if *ZED_STATELESS {
+        let connection = if *MOMOR_STATELESS {
             Connection::open_memory(Some("THREAD_FALLBACK_DB"))
         } else if cfg!(any(feature = "test-support", test)) {
             // rust stores the name of the test on the current thread.
@@ -461,14 +461,14 @@ impl ThreadsDatabase {
             .subagent_context
             .as_ref()
             .map(|ctx| ctx.parent_thread_id.0.clone());
-        let serialized_folder_paths = folder_paths.serialize();
+        let serialimomor_folder_paths = folder_paths.serialize();
         let (folder_paths_str, folder_paths_order_str): (Option<String>, Option<String>) =
             if folder_paths.is_empty() {
                 (None, None)
             } else {
                 (
-                    Some(serialized_folder_paths.paths),
-                    Some(serialized_folder_paths.order),
+                    Some(serialimomor_folder_paths.paths),
+                    Some(serialimomor_folder_paths.order),
                 )
             };
         let json_data = serde_json::to_string(&SerializedThread {

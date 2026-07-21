@@ -6,7 +6,7 @@ use collections::HashSet;
 use credentials_provider::CredentialsProvider;
 use gpui::{App, Context, Entity};
 use language_model::{
-    ConfiguredModel, LanguageModelProviderId, LanguageModelRegistry, ZED_CLOUD_PROVIDER_ID,
+    ConfiguredModel, LanguageModelProviderId, LanguageModelRegistry, MOMOR_CLOUD_PROVIDER_ID,
 };
 use provider::deepseek::DeepSeekLanguageModelProvider;
 
@@ -147,16 +147,16 @@ pub fn init(user_store: Entity<UserStore>, client: Arc<Client>, cx: &mut App) {
 /// Recomputes and sets the [`LanguageModelRegistry`]'s environment fallback
 /// model based on currently authenticated providers.
 ///
-/// Prefers the Zed cloud provider so that, once the user is signed in, we
-/// always pick a Zed-hosted model over models from other authenticated
-/// providers in the environment. If the Zed cloud provider is authenticated
+/// Prefers the Momor cloud provider so that, once the user is signed in, we
+/// always pick a Momor-hosted model over models from other authenticated
+/// providers in the environment. If the Momor cloud provider is authenticated
 /// but hasn't finished loading its models yet, we don't fall back to another
 /// provider to avoid flickering between providers during sign in.
 pub fn update_environment_fallback_model(cx: &mut App) {
     let registry = LanguageModelRegistry::global(cx);
     let fallback_model = {
         let registry = registry.read(cx);
-        let cloud_provider = registry.provider(&ZED_CLOUD_PROVIDER_ID);
+        let cloud_provider = registry.provider(&MOMOR_CLOUD_PROVIDER_ID);
         if cloud_provider
             .as_ref()
             .is_some_and(|provider| provider.is_authenticated(cx))
@@ -224,7 +224,7 @@ fn register_language_model_providers(
     credentials_provider: Arc<dyn CredentialsProvider>,
     cx: &mut Context<LanguageModelRegistry>,
 ) {
-    // ponytail: chat-only — provider "Zed" (conta/sign-in/Zed Pro) não é registrado;
+    // ponytail: chat-only — provider "Momor" (conta/sign-in/Momor Pro) não é registrado;
     // só provedores por API key (Anthropic, OpenAI, DeepSeek, Ollama, etc.)
     registry.register_provider(
         Arc::new(AnthropicLanguageModelProvider::new(

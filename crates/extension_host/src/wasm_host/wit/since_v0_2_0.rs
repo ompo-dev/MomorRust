@@ -22,16 +22,16 @@ wasmtime::component::bindgen!({
          "worktree": ExtensionWorktree,
          "project": ExtensionProject,
          "key-value-store": ExtensionKeyValueStore,
-         "zed:extension/github": since_v0_6_0::zed::extension::github,
-         "zed:extension/http-client": latest::zed::extension::http_client,
-         "zed:extension/lsp": since_v0_6_0::zed::extension::lsp,
-         "zed:extension/nodejs": latest::zed::extension::nodejs,
-         "zed:extension/platform": latest::zed::extension::platform,
-         "zed:extension/slash-command": latest::zed::extension::slash_command,
+         "momor:extension/github": since_v0_6_0::momor::extension::github,
+         "momor:extension/http-client": latest::momor::extension::http_client,
+         "momor:extension/lsp": since_v0_6_0::momor::extension::lsp,
+         "momor:extension/nodejs": latest::momor::extension::nodejs,
+         "momor:extension/platform": latest::momor::extension::platform,
+         "momor:extension/slash-command": latest::momor::extension::slash_command,
     },
 });
 
-pub use self::zed::extension::*;
+pub use self::momor::extension::*;
 
 mod settings {
     #![allow(dead_code)]

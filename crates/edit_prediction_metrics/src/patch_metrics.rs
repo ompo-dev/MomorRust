@@ -881,7 +881,7 @@ mod test_optimization {
     }
 
     #[test]
-    fn test_optimized_matches_original_score() {
+    fn test_optimimomor_matches_original_score() {
         // Test that our optimized version produces the same results
         let test_cases = vec![
             ("hello world", "hello there", "hello world"),
@@ -914,7 +914,7 @@ mod test_optimization {
     }
 
     #[test]
-    fn test_optimized_equals_reference() {
+    fn test_optimimomor_equals_reference() {
         // Comprehensive test that optimized version matches reference implementation exactly
         let test_cases = vec![
             // Basic cases
@@ -969,32 +969,32 @@ mod test_optimization {
         ];
 
         for (original, expected, actual) in test_cases {
-            let optimized_metrics = delta_chr_f(original, expected, actual);
+            let optimimomor_metrics = delta_chr_f(original, expected, actual);
             let reference_metrics = delta_chr_f_reference(original, expected, actual);
 
             assert!(
-                (optimized_metrics.score - reference_metrics.score).abs() < 1e-10,
+                (optimimomor_metrics.score - reference_metrics.score).abs() < 1e-10,
                 "Score mismatch for ({:?}, {:?}, {:?}):\n  optimized: {}\n  reference: {}",
                 original,
                 expected,
                 actual,
-                optimized_metrics.score,
+                optimimomor_metrics.score,
                 reference_metrics.score
             );
             assert_eq!(
-                optimized_metrics.counts.true_positives,
+                optimimomor_metrics.counts.true_positives,
                 reference_metrics.counts.true_positives
             );
             assert_eq!(
-                optimized_metrics.counts.false_positives,
+                optimimomor_metrics.counts.false_positives,
                 reference_metrics.counts.false_positives
             );
             assert_eq!(
-                optimized_metrics.counts.false_negatives,
+                optimimomor_metrics.counts.false_negatives,
                 reference_metrics.counts.false_negatives
             );
-            assert!((optimized_metrics.precision - reference_metrics.precision).abs() < 1e-10);
-            assert!((optimized_metrics.recall - reference_metrics.recall).abs() < 1e-10);
+            assert!((optimimomor_metrics.precision - reference_metrics.precision).abs() < 1e-10);
+            assert!((optimimomor_metrics.recall - reference_metrics.recall).abs() < 1e-10);
         }
     }
 

@@ -19,7 +19,7 @@ struct VsCodeDebugTaskDefinition {
 }
 
 impl VsCodeDebugTaskDefinition {
-    fn try_to_zed(mut self, replacer: &EnvVariableReplacer) -> anyhow::Result<DebugScenario> {
+    fn try_to_momor(mut self, replacer: &EnvVariableReplacer) -> anyhow::Result<DebugScenario> {
         let label = replacer.replace(&self.name);
         let mut config = replacer.replace_value(self.other_attributes);
         let adapter = task_type_to_adapter_name(&self.r#type);
@@ -76,7 +76,7 @@ impl TryFrom<VsCodeDebugTaskFile> for DebugTaskFile {
         let templates = file
             .configurations
             .into_iter()
-            .filter_map(|config| config.try_to_zed(&replacer).log_err())
+            .filter_map(|config| config.try_to_momor(&replacer).log_err())
             .collect::<Vec<_>>();
         Ok(DebugTaskFile(templates))
     }
@@ -129,22 +129,22 @@ mod tests {
         "#;
         let parsed: VsCodeDebugTaskFile =
             serde_json_lenient::from_str(raw).expect("deserializing launch.json");
-        let zed = DebugTaskFile::try_from(parsed).expect("converting to Zed debug templates");
+        let momor = DebugTaskFile::try_from(parsed).expect("converting to Momor debug templates");
         pretty_assertions::assert_eq!(
-            zed,
+            momor,
             DebugTaskFile(vec![DebugScenario {
                 label: "Debug my JS app".into(),
                 adapter: "JavaScript".into(),
                 config: json!({
                     "request": "launch",
-                    "program": "${ZED_WORKTREE_ROOT}/xyz.js",
+                    "program": "${MOMOR_WORKTREE_ROOT}/xyz.js",
                     "showDevDebugOutput": false,
                     "stopOnEntry": true,
                     "args": [
                         "--foo",
-                        "${ZED_WORKTREE_ROOT}/thing",
+                        "${MOMOR_WORKTREE_ROOT}/thing",
                     ],
-                    "cwd": "${ZED_WORKTREE_ROOT}/${FOO}/sub",
+                    "cwd": "${MOMOR_WORKTREE_ROOT}/${FOO}/sub",
                     "env": {
                         "X": "Y",
                     },
@@ -174,11 +174,11 @@ mod tests {
         "#;
         let parsed: VsCodeDebugTaskFile =
             serde_json_lenient::from_str(raw).expect("deserializing launch.json");
-        let zed = DebugTaskFile::try_from(parsed).expect("converting to Zed debug templates");
+        let momor = DebugTaskFile::try_from(parsed).expect("converting to Momor debug templates");
 
         let expected_placeholder = format!("${{{}}}", VariableName::PickProcessId);
         pretty_assertions::assert_eq!(
-            zed,
+            momor,
             DebugTaskFile(vec![DebugScenario {
                 label: "Attach to Process".into(),
                 adapter: "CodeLLDB".into(),

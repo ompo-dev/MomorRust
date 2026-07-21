@@ -50,7 +50,7 @@ use workspace::{
     RecentWorkspace, SerializedWorkspaceLocation, Workspace, WorkspaceDb, WorkspaceId,
     notifications::DetachAndPromptErr, with_active_or_new_workspace,
 };
-use zed_actions::{OpenDevContainer, OpenRecent, OpenRemote};
+use momor_actions::{OpenDevContainer, OpenRecent, OpenRemote};
 
 actions!(
     recent_projects,
@@ -256,7 +256,7 @@ fn get_branch_for_worktree(
 
 pub fn init(cx: &mut App) {
     #[cfg(target_os = "windows")]
-    cx.on_action(|open_wsl: &zed_actions::wsl_actions::OpenFolderInWsl, cx| {
+    cx.on_action(|open_wsl: &momor_actions::wsl_actions::OpenFolderInWsl, cx| {
         let create_new_window = open_wsl.create_new_window;
         with_active_or_new_workspace(cx, move |workspace, window, cx| {
             use gpui::PathPromptOptions;
@@ -322,7 +322,7 @@ pub fn init(cx: &mut App) {
                     let message = indoc::indoc! { r#"
                         Invalid path specified when trying to open a folder inside WSL.
 
-                        Please note that Zed currently does not support opening network share folders inside wsl.
+                        Please note that Momor currently does not support opening network share folders inside wsl.
                     "#};
 
                     let _ = cx.prompt(gpui::PromptLevel::Critical, "Invalid path", Some(&message), &["Ok"]).await;
@@ -340,7 +340,7 @@ pub fn init(cx: &mut App) {
     });
 
     #[cfg(target_os = "windows")]
-    cx.on_action(|open_wsl: &zed_actions::wsl_actions::OpenWsl, cx| {
+    cx.on_action(|open_wsl: &momor_actions::wsl_actions::OpenWsl, cx| {
         let create_new_window = open_wsl.create_new_window;
         with_active_or_new_workspace(cx, move |workspace, window, cx| {
             let handle = cx.entity().downgrade();

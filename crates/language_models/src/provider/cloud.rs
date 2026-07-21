@@ -1,6 +1,6 @@
 use ai_onboarding::YoungAccountBanner;
 use anyhow::Result;
-use client::{Client, RefreshLlmTokenListener, UserStore, global_llm_token, zed_urls};
+use client::{Client, RefreshLlmTokenListener, UserStore, global_llm_token, momor_urls};
 use cloud_api_client::LlmApiToken;
 use cloud_api_types::OrganizationId;
 use cloud_api_types::Plan;
@@ -10,20 +10,20 @@ use futures::future::BoxFuture;
 use gpui::{AnyElement, AnyView, App, AppContext, Context, Entity, Subscription, Task, TaskExt};
 use language_model::{
     AuthenticateError, IconOrSvg, LanguageModel, LanguageModelProvider, LanguageModelProviderId,
-    LanguageModelProviderName, LanguageModelProviderState, ZED_CLOUD_PROVIDER_ID,
-    ZED_CLOUD_PROVIDER_NAME,
+    LanguageModelProviderName, LanguageModelProviderState, MOMOR_CLOUD_PROVIDER_ID,
+    MOMOR_CLOUD_PROVIDER_NAME,
 };
 use language_models_cloud::{CloudLlmTokenProvider, CloudModelProvider};
 use release_channel::AppVersion;
 
 use settings::SettingsStore;
-pub use settings::ZedDotDevAvailableModel as AvailableModel;
-pub use settings::ZedDotDevAvailableProvider as AvailableProvider;
+pub use settings::MomorDotDevAvailableModel as AvailableModel;
+pub use settings::MomorDotDevAvailableProvider as AvailableProvider;
 use std::sync::Arc;
 use ui::{TintColor, prelude::*};
 
-const PROVIDER_ID: LanguageModelProviderId = ZED_CLOUD_PROVIDER_ID;
-const PROVIDER_NAME: LanguageModelProviderName = ZED_CLOUD_PROVIDER_NAME;
+const PROVIDER_ID: LanguageModelProviderId = MOMOR_CLOUD_PROVIDER_ID;
+const PROVIDER_NAME: LanguageModelProviderName = MOMOR_CLOUD_PROVIDER_NAME;
 
 struct ClientTokenProvider {
     client: Arc<Client>,
@@ -70,7 +70,7 @@ impl CloudLlmTokenProvider for ClientTokenProvider {
 }
 
 #[derive(Default, Clone, Debug, PartialEq)]
-pub struct ZedDotDevSettings {
+pub struct MomorDotDevSettings {
     pub available_models: Vec<AvailableModel>,
 }
 
@@ -217,7 +217,7 @@ impl LanguageModelProvider for CloudLanguageModelProvider {
     }
 
     fn icon(&self) -> IconOrSvg {
-        IconOrSvg::Icon(IconName::AiZed)
+        IconOrSvg::Icon(IconName::AiMomor)
     }
 
     fn default_model(&self, cx: &App) -> Option<Arc<dyn LanguageModel>> {
@@ -309,43 +309,43 @@ impl LanguageModelProvider for CloudLanguageModelProvider {
 }
 
 #[derive(IntoElement, RegisterComponent)]
-struct ZedAiConfiguration {
+struct MomorAiConfiguration {
     is_connected: bool,
     plan: Option<Plan>,
-    is_zed_model_provider_enabled: bool,
+    is_momor_model_provider_enabled: bool,
     eligible_for_trial: bool,
     account_too_young: bool,
     sign_in_callback: Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>,
 }
 
-impl RenderOnce for ZedAiConfiguration {
+impl RenderOnce for MomorAiConfiguration {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let (subscription_text, has_paid_plan) = match self.plan {
-            Some(Plan::ZedPro) => (
-                "You have access to Zed's hosted models through your Pro subscription.",
+            Some(Plan::MomorPro) => (
+                "You have access to Momor's hosted models through your Pro subscription.",
                 true,
             ),
-            Some(Plan::ZedProTrial) => (
-                "You have access to Zed's hosted models through your Pro trial.",
+            Some(Plan::MomorProTrial) => (
+                "You have access to Momor's hosted models through your Pro trial.",
                 false,
             ),
-            Some(Plan::ZedStudent) => (
-                "You have access to Zed's hosted models through your Student subscription.",
+            Some(Plan::MomorStudent) => (
+                "You have access to Momor's hosted models through your Student subscription.",
                 true,
             ),
-            Some(Plan::ZedBusiness) => (
-                if self.is_zed_model_provider_enabled {
-                    "You have access to Zed's hosted models through your organization."
+            Some(Plan::MomorBusiness) => (
+                if self.is_momor_model_provider_enabled {
+                    "You have access to Momor's hosted models through your organization."
                 } else {
-                    "Zed's hosted models are disabled by your organization's configuration."
+                    "Momor's hosted models are disabled by your organization's configuration."
                 },
                 true,
             ),
-            Some(Plan::ZedFree) | None => (
+            Some(Plan::MomorFree) | None => (
                 if self.eligible_for_trial {
-                    "Subscribe for access to Zed's hosted models. Start with a 14 day free trial."
+                    "Subscribe for access to Momor's hosted models. Start with a 14 day free trial."
                 } else {
-                    "Subscribe for access to Zed's hosted models."
+                    "Subscribe for access to Momor's hosted models."
                 },
                 false,
             ),
@@ -356,28 +356,28 @@ impl RenderOnce for ZedAiConfiguration {
                 .full_width()
                 .label_size(LabelSize::Small)
                 .style(ButtonStyle::Tinted(TintColor::Accent))
-                .on_click(|_, _, cx| cx.open_url(&zed_urls::account_url(cx)))
+                .on_click(|_, _, cx| cx.open_url(&momor_urls::account_url(cx)))
                 .into_any_element()
         } else if self.plan.is_none() || self.eligible_for_trial {
             Button::new("start_trial", "Start 14-day Free Pro Trial")
                 .full_width()
                 .style(ui::ButtonStyle::Tinted(ui::TintColor::Accent))
-                .on_click(|_, _, cx| cx.open_url(&zed_urls::start_trial_url(cx)))
+                .on_click(|_, _, cx| cx.open_url(&momor_urls::start_trial_url(cx)))
                 .into_any_element()
         } else {
             Button::new("upgrade", "Upgrade to Pro")
                 .full_width()
                 .style(ui::ButtonStyle::Tinted(ui::TintColor::Accent))
-                .on_click(|_, _, cx| cx.open_url(&zed_urls::upgrade_to_zed_pro_url(cx)))
+                .on_click(|_, _, cx| cx.open_url(&momor_urls::upgrade_to_momor_pro_url(cx)))
                 .into_any_element()
         };
 
         if !self.is_connected {
             return v_flex()
                 .gap_2()
-                .child(Label::new("Sign in to have access to Zed's complete agentic experience with hosted models."))
+                .child(Label::new("Sign in to have access to Momor's complete agentic experience with hosted models."))
                 .child(
-                    Button::new("sign_in", "Sign In to use Zed AI")
+                    Button::new("sign_in", "Sign In to use Momor AI")
                         .start_icon(Icon::new(IconName::Github).size(IconSize::Small).color(Color::Muted))
                         .full_width()
                         .on_click({
@@ -393,7 +393,7 @@ impl RenderOnce for ZedAiConfiguration {
                     Button::new("upgrade", "Upgrade to Pro")
                         .style(ui::ButtonStyle::Tinted(ui::TintColor::Accent))
                         .full_width()
-                        .on_click(|_, _, cx| cx.open_url(&zed_urls::upgrade_to_zed_pro_url(cx))),
+                        .on_click(|_, _, cx| cx.open_url(&momor_urls::upgrade_to_momor_pro_url(cx))),
                 )
             } else {
                 this.text_sm()
@@ -432,14 +432,14 @@ impl Render for ConfigurationView {
         let state = self.state.read(cx);
         let user_store = state.user_store.read(cx);
 
-        let is_zed_model_provider_enabled = user_store
+        let is_momor_model_provider_enabled = user_store
             .current_organization_configuration()
-            .map_or(true, |config| config.is_zed_model_provider_enabled);
+            .map_or(true, |config| config.is_momor_model_provider_enabled);
 
-        ZedAiConfiguration {
+        MomorAiConfiguration {
             is_connected: !state.is_signed_out(cx),
             plan: user_store.plan(),
-            is_zed_model_provider_enabled,
+            is_momor_model_provider_enabled,
             eligible_for_trial: user_store.trial_started_at().is_none(),
             account_too_young: user_store.account_too_young(),
             sign_in_callback: self.sign_in_callback.clone(),
@@ -652,7 +652,7 @@ mod tests {
     }
 }
 
-impl Component for ZedAiConfiguration {
+impl Component for MomorAiConfiguration {
     fn name() -> &'static str {
         "AI Configuration Content"
     }
@@ -669,15 +669,15 @@ impl Component for ZedAiConfiguration {
         struct PreviewConfiguration {
             plan: Option<Plan>,
             is_connected: bool,
-            is_zed_model_provider_enabled: bool,
+            is_momor_model_provider_enabled: bool,
             eligible_for_trial: bool,
         }
 
         let configuration = |config: PreviewConfiguration| -> AnyElement {
-            ZedAiConfiguration {
+            MomorAiConfiguration {
                 is_connected: config.is_connected,
                 plan: config.plan,
-                is_zed_model_provider_enabled: config.is_zed_model_provider_enabled,
+                is_momor_model_provider_enabled: config.is_momor_model_provider_enabled,
                 eligible_for_trial: config.eligible_for_trial,
                 account_too_young: false,
                 sign_in_callback: Arc::new(|_, _| {}),
@@ -695,7 +695,7 @@ impl Component for ZedAiConfiguration {
                         configuration(PreviewConfiguration {
                             plan: None,
                             is_connected: false,
-                            is_zed_model_provider_enabled: true,
+                            is_momor_model_provider_enabled: true,
                             eligible_for_trial: false,
                         }),
                     ),
@@ -704,7 +704,7 @@ impl Component for ZedAiConfiguration {
                         configuration(PreviewConfiguration {
                             plan: None,
                             is_connected: true,
-                            is_zed_model_provider_enabled: true,
+                            is_momor_model_provider_enabled: true,
                             eligible_for_trial: true,
                         }),
                     ),
@@ -713,7 +713,7 @@ impl Component for ZedAiConfiguration {
                         configuration(PreviewConfiguration {
                             plan: None,
                             is_connected: true,
-                            is_zed_model_provider_enabled: true,
+                            is_momor_model_provider_enabled: true,
                             eligible_for_trial: false,
                         }),
                     ),
@@ -722,52 +722,52 @@ impl Component for ZedAiConfiguration {
                         configuration(PreviewConfiguration {
                             plan: None,
                             is_connected: true,
-                            is_zed_model_provider_enabled: true,
+                            is_momor_model_provider_enabled: true,
                             eligible_for_trial: true,
                         }),
                     ),
                     single_example(
                         "Free Plan",
                         configuration(PreviewConfiguration {
-                            plan: Some(Plan::ZedFree),
+                            plan: Some(Plan::MomorFree),
                             is_connected: true,
-                            is_zed_model_provider_enabled: true,
+                            is_momor_model_provider_enabled: true,
                             eligible_for_trial: true,
                         }),
                     ),
                     single_example(
-                        "Zed Pro Trial Plan",
+                        "Momor Pro Trial Plan",
                         configuration(PreviewConfiguration {
-                            plan: Some(Plan::ZedProTrial),
+                            plan: Some(Plan::MomorProTrial),
                             is_connected: true,
-                            is_zed_model_provider_enabled: true,
+                            is_momor_model_provider_enabled: true,
                             eligible_for_trial: true,
                         }),
                     ),
                     single_example(
-                        "Zed Pro Plan",
+                        "Momor Pro Plan",
                         configuration(PreviewConfiguration {
-                            plan: Some(Plan::ZedPro),
+                            plan: Some(Plan::MomorPro),
                             is_connected: true,
-                            is_zed_model_provider_enabled: true,
+                            is_momor_model_provider_enabled: true,
                             eligible_for_trial: true,
                         }),
                     ),
                     single_example(
-                        "Business Plan - Zed models enabled",
+                        "Business Plan - Momor models enabled",
                         configuration(PreviewConfiguration {
-                            plan: Some(Plan::ZedBusiness),
+                            plan: Some(Plan::MomorBusiness),
                             is_connected: true,
-                            is_zed_model_provider_enabled: true,
+                            is_momor_model_provider_enabled: true,
                             eligible_for_trial: false,
                         }),
                     ),
                     single_example(
-                        "Business Plan - Zed models disabled",
+                        "Business Plan - Momor models disabled",
                         configuration(PreviewConfiguration {
-                            plan: Some(Plan::ZedBusiness),
+                            plan: Some(Plan::MomorBusiness),
                             is_connected: true,
-                            is_zed_model_provider_enabled: false,
+                            is_momor_model_provider_enabled: false,
                             eligible_for_trial: false,
                         }),
                     ),

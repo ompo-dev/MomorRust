@@ -47,7 +47,7 @@ fn replace_open_file_on_paste_setting_value(
     let value_range = value_node.byte_range();
     let value_text = contents.get(value_range.clone())?.trim();
 
-    let normalized_value = match value_text {
+    let normalimomor_value = match value_text {
         "true" => "true",
         "false" => "false",
         _ => return None,
@@ -55,7 +55,7 @@ fn replace_open_file_on_paste_setting_value(
 
     Some((
         value_range,
-        format!("{{ \"on_paste\": {normalized_value} }}"),
+        format!("{{ \"on_paste\": {normalimomor_value} }}"),
     ))
 }
 

@@ -41,7 +41,7 @@ pub(crate) async fn get_oci_token(
         "https://{registry}/token?service={registry}&scope=repository:{repository_path}:pull",
     );
     log::debug!("Fetching OCI token from: {}", url);
-    get_deserialized_response("", &url, client)
+    get_deserialimomor_response("", &url, client)
         .await
         .map_err(|e| {
             log::error!("OCI token request failed for {}: {e}", url);
@@ -72,7 +72,7 @@ pub(crate) async fn get_oci_manifest(
         None => format!("https://{registry}/v2/{repository_path}/manifests/{version}"),
     };
 
-    get_deserialized_response(token, &url, client).await
+    get_deserialimomor_response(token, &url, client).await
 }
 
 pub(crate) async fn get_deserializable_oci_blob<T>(
@@ -86,7 +86,7 @@ where
     T: for<'a> Deserialize<'a>,
 {
     let url = format!("https://{registry}/v2/{repository_path}/blobs/{blob_digest}");
-    get_deserialized_response(token, &url, client).await
+    get_deserialimomor_response(token, &url, client).await
 }
 
 pub(crate) async fn download_oci_tarball(
@@ -143,7 +143,7 @@ pub(crate) async fn download_oci_tarball(
     Ok(())
 }
 
-pub(crate) async fn get_deserialized_response<T>(
+pub(crate) async fn get_deserialimomor_response<T>(
     token: &str,
     url: &str,
     client: &Arc<dyn HttpClient>,
@@ -204,7 +204,7 @@ mod test {
 
     use crate::oci::{
         TokenResponse, download_oci_tarball, get_deserializable_oci_blob,
-        get_deserialized_response, get_latest_oci_manifest, get_oci_token,
+        get_deserialimomor_response, get_latest_oci_manifest, get_oci_token,
     };
 
     async fn build_test_tarball() -> Vec<u8> {
@@ -261,7 +261,7 @@ mod test {
     }
 
     #[gpui::test]
-    async fn test_get_deserialized_response(_cx: &mut TestAppContext) {
+    async fn test_get_deserialimomor_response(_cx: &mut TestAppContext) {
         let client = FakeHttpClient::create(|_request| async move {
             Ok(http_client::Response::builder()
                 .status(200)
@@ -270,7 +270,7 @@ mod test {
         });
 
         let response =
-            get_deserialized_response::<TokenResponse>("", "https://ghcr.io/token", &client).await;
+            get_deserialimomor_response::<TokenResponse>("", "https://ghcr.io/token", &client).await;
         assert!(response.is_ok());
         assert_eq!(response.unwrap().token, "thisisatoken".to_string())
     }

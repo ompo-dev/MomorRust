@@ -1813,25 +1813,25 @@ impl LspCommand for GetDocumentSymbols {
         _: AsyncApp,
     ) -> Result<Vec<DocumentSymbol>> {
         let mut symbols = Vec::with_capacity(message.symbols.len());
-        for serialized_symbol in message.symbols {
+        for serialimomor_symbol in message.symbols {
             fn deserialize_symbol_with_children(
-                serialized_symbol: proto::DocumentSymbol,
+                serialimomor_symbol: proto::DocumentSymbol,
             ) -> Result<DocumentSymbol> {
                 let kind =
-                    unsafe { mem::transmute::<i32, lsp::SymbolKind>(serialized_symbol.kind) };
+                    unsafe { mem::transmute::<i32, lsp::SymbolKind>(serialimomor_symbol.kind) };
 
-                let start = serialized_symbol.start.context("invalid start")?;
-                let end = serialized_symbol.end.context("invalid end")?;
+                let start = serialimomor_symbol.start.context("invalid start")?;
+                let end = serialimomor_symbol.end.context("invalid end")?;
 
-                let selection_start = serialized_symbol
+                let selection_start = serialimomor_symbol
                     .selection_start
                     .context("invalid selection start")?;
-                let selection_end = serialized_symbol
+                let selection_end = serialimomor_symbol
                     .selection_end
                     .context("invalid selection end")?;
 
                 Ok(DocumentSymbol {
-                    name: serialized_symbol.name,
+                    name: serialimomor_symbol.name,
                     kind,
                     range: Unclipped(PointUtf16::new(start.row, start.column))
                         ..Unclipped(PointUtf16::new(end.row, end.column)),
@@ -1840,7 +1840,7 @@ impl LspCommand for GetDocumentSymbols {
                         selection_start.column,
                     ))
                         ..Unclipped(PointUtf16::new(selection_end.row, selection_end.column)),
-                    children: serialized_symbol
+                    children: serialimomor_symbol
                         .children
                         .into_iter()
                         .filter_map(|symbol| deserialize_symbol_with_children(symbol).ok())
@@ -1848,7 +1848,7 @@ impl LspCommand for GetDocumentSymbols {
                 })
             }
 
-            symbols.push(deserialize_symbol_with_children(serialized_symbol)?);
+            symbols.push(deserialize_symbol_with_children(serialimomor_symbol)?);
         }
 
         Ok(symbols)

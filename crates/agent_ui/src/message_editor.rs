@@ -46,7 +46,7 @@ use ui::{ContextMenu, prelude::*};
 use util::paths::PathStyle;
 use util::{ResultExt, debug_panic};
 use workspace::{CollaboratorId, Workspace};
-use zed_actions::agent::{Chat, PasteRaw};
+use momor_actions::agent::{Chat, PasteRaw};
 
 /// Skills do usuário (~/.claude/skills) como comandos `/` — universais, independem do
 /// provedor. `requires_argument: true` faz o menu inserir `/nome ` SEM auto-enviar, pra
@@ -1366,7 +1366,7 @@ impl MessageEditor {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        let Some(text) = self.serialized_copy_text(cx) else {
+        let Some(text) = self.serialimomor_copy_text(cx) else {
             cx.propagate();
             return;
         };
@@ -1952,7 +1952,7 @@ impl MessageEditor {
         });
     }
 
-    fn serialized_copy_text(&self, cx: &mut App) -> Option<String> {
+    fn serialimomor_copy_text(&self, cx: &mut App) -> Option<String> {
         let display_snapshot = self
             .editor
             .update(cx, |editor, cx| editor.display_snapshot(cx));
@@ -2222,7 +2222,7 @@ mod tests {
     #[test]
     fn test_parse_mention_links() {
         // Single file mention
-        let text = "[@bundle-mac](file:///Users/test/zed/script/bundle-mac)";
+        let text = "[@bundle-mac](file:///Users/test/momor/script/bundle-mac)";
         let mentions = parse_mention_links(text, PathStyle::local());
         assert_eq!(mentions.len(), 1);
         assert_eq!(mentions[0].0, 0..text.len());
@@ -2405,7 +2405,7 @@ mod tests {
         fs.insert_tree(
             "/test",
             json!({
-                ".zed": {
+                ".momor": {
                     "tasks.json": r#"[{"label": "test", "command": "echo"}]"#
                 },
                 "src": {
@@ -4224,7 +4224,7 @@ mod tests {
 
         let copied_text = source_message_editor.update(&mut cx, |message_editor, cx| {
             message_editor
-                .serialized_copy_text(cx)
+                .serialimomor_copy_text(cx)
                 .expect("selection mentions should serialize")
         });
         let expected_text = format!(
@@ -4383,7 +4383,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn test_serialized_copy_text_selection_covers_only_mention(cx: &mut TestAppContext) {
+    async fn test_serialimomor_copy_text_selection_covers_only_mention(cx: &mut TestAppContext) {
         init_test(cx);
 
         let (fixture, mut cx) = setup_selection_mention_fixture(cx).await;
@@ -4404,14 +4404,14 @@ mod tests {
         let copied = fixture
             .message_editor
             .update(&mut cx, |message_editor, cx| {
-                message_editor.serialized_copy_text(cx)
+                message_editor.serialimomor_copy_text(cx)
             });
 
         assert_eq!(copied, Some(fixture.first_uri.as_link().to_string()));
     }
 
     #[gpui::test]
-    async fn test_serialized_copy_text_returns_none_when_mentions_outside_selection(
+    async fn test_serialimomor_copy_text_returns_none_when_mentions_outside_selection(
         cx: &mut TestAppContext,
     ) {
         init_test(cx);
@@ -4436,7 +4436,7 @@ mod tests {
         let copied = fixture
             .message_editor
             .update(&mut cx, |message_editor, cx| {
-                message_editor.serialized_copy_text(cx)
+                message_editor.serialimomor_copy_text(cx)
             });
 
         assert_eq!(copied, None);
@@ -4800,8 +4800,8 @@ mod tests {
             .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
             .expect("decode png");
         let file_name = match extension {
-            Some(extension) => format!("zed-agent-ui-test-{}.{}", uuid::Uuid::new_v4(), extension),
-            None => format!("zed-agent-ui-test-{}", uuid::Uuid::new_v4()),
+            Some(extension) => format!("momor-agent-ui-test-{}.{}", uuid::Uuid::new_v4(), extension),
+            None => format!("momor-agent-ui-test-{}", uuid::Uuid::new_v4()),
         };
         let path = std::env::temp_dir().join(file_name);
         std::fs::write(&path, bytes).expect("write temp png");
