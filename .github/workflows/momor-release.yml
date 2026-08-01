@@ -1,0 +1,79 @@
+name: Release Momor
+
+# Builds the `momor` binary for Windows, macOS and Linux.
+# Push a tag like `v1.3.0` -> builds all three and attaches them to a GitHub Release.
+# Run manually (workflow_dispatch) -> just builds artifacts, no release.
+#
+# ponytail: raw binaries per-OS, no installers/signing. First cross-OS run may
+# need per-platform tweaks (this fork is Windows-patched); add them as they surface.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            artifact: momor-linux-x86_64.tar.gz
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact: momor-macos-arm64.tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: momor-windows-x86_64.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: bash script/linux
+
+      # Toolchain: rustup on the runner auto-installs the pinned version from
+      # rust-toolchain.toml on the first cargo call, so no extra setup needed.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build momor
+        run: cargo build --release --bin momor
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: tar -czf "${{ matrix.artifact }}" -C target/release momor
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path target/release/momor.exe -DestinationPath ${{ matrix.artifact }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  release:
+    name: publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
