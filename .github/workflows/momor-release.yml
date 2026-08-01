@@ -45,7 +45,33 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Build momor
+      - name: Linux C++ wrapper
+        if: runner.os == 'Linux'
+        run: |
+          cat > /tmp/c++-wrapper << 'WRAPPER'
+          #!/bin/bash
+          args=()
+          for a in "$@"; do
+            [[ "$a" != "-Wno-changes-meaning" ]] && args+=("$a")
+          done
+          exec /usr/bin/c++ -fpermissive "${args[@]}"
+          WRAPPER
+          chmod +x /tmp/c++-wrapper
+
+      - name: Build momor (Linux)
+        if: runner.os == 'Linux'
+        env:
+          CXX: /tmp/c++-wrapper
+        run: cargo build --release --bin momor
+
+      - name: Build momor (macOS)
+        if: runner.os == 'macOS'
+        run: cargo build --release --bin momor
+
+      - name: Build momor (Windows)
+        if: runner.os == 'Windows'
+        env:
+          CARGO_HOME: "C:\\c"
         run: cargo build --release --bin momor
 
       - name: Package (Unix)

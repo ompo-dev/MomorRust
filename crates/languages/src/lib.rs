@@ -1,6 +1,7 @@
 use gpui::{App, SharedString, UpdateGlobal};
 use node_runtime::NodeRuntime;
 use project::Fs;
+#[cfg(feature = "python")]
 use python::PyprojectTomlManifestProvider;
 use rust::CargoManifestProvider;
 use settings::{SemanticTokenRules, SettingsStore};
@@ -10,10 +11,9 @@ use util::ResultExt;
 
 pub use language::*;
 
-use crate::{
-    json::JsonTaskProvider,
-    python::{BasedPyrightLspAdapter, RuffLspAdapter},
-};
+#[cfg(feature = "python")]
+use crate::python::{BasedPyrightLspAdapter, RuffLspAdapter};
+use crate::json::JsonTaskProvider;
 
 mod bash;
 mod c;
@@ -23,6 +23,7 @@ mod eslint;
 mod go;
 mod json;
 mod package_json;
+#[cfg(feature = "python")]
 mod python;
 mod rust;
 mod tailwind;
@@ -66,12 +67,19 @@ pub fn init(languages: Arc<LanguageRegistry>, fs: Arc<dyn Fs>, node: NodeRuntime
     let json_context_provider = Arc::new(JsonTaskProvider);
     let json_lsp_adapter = Arc::new(json::JsonLspAdapter::new(languages.clone(), node.clone()));
     let node_version_lsp_adapter = Arc::new(json::NodeVersionAdapter);
+    #[cfg(feature = "python")]
     let py_lsp_adapter = Arc::new(python::PyLspAdapter::new());
+    #[cfg(feature = "python")]
     let ty_lsp_adapter = Arc::new(python::TyLspAdapter::new(fs.clone()));
+    #[cfg(feature = "python")]
     let python_context_provider = Arc::new(python::PythonContextProvider);
+    #[cfg(feature = "python")]
     let python_lsp_adapter = Arc::new(python::PyrightLspAdapter::new(node.clone()));
+    #[cfg(feature = "python")]
     let basedpyright_lsp_adapter = Arc::new(BasedPyrightLspAdapter::new(node.clone()));
+    #[cfg(feature = "python")]
     let ruff_lsp_adapter = Arc::new(RuffLspAdapter::new(fs.clone()));
+    #[cfg(feature = "python")]
     let python_toolchain_provider = Arc::new(python::PythonToolchainProvider::new(fs.clone()));
     let rust_context_provider = Arc::new(rust::RustContextProvider);
     let rust_lsp_adapter = Arc::new(rust::RustLspAdapter);
@@ -154,6 +162,7 @@ pub fn init(languages: Arc<LanguageRegistry>, fs: Arc<dyn Fs>, node: NodeRuntime
             adapters: vec![],
             ..Default::default()
         },
+        #[cfg(feature = "python")]
         LanguageInfo {
             name: "python",
             adapters: vec![
@@ -317,10 +326,11 @@ pub fn init(languages: Arc<LanguageRegistry>, fs: Arc<dyn Fs>, node: NodeRuntime
         anyhow::Ok(())
     })
     .detach();
-    let manifest_providers: [Arc<dyn ManifestProvider>; 2] = [
+    let mut manifest_providers: Vec<Arc<dyn ManifestProvider>> = vec![
         Arc::from(CargoManifestProvider),
-        Arc::from(PyprojectTomlManifestProvider),
     ];
+    #[cfg(feature = "python")]
+    manifest_providers.push(Arc::from(PyprojectTomlManifestProvider));
     for provider in manifest_providers {
         project::ManifestProvidersStore::global(cx).register(provider);
     }
