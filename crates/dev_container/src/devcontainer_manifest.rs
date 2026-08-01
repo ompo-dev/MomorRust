@@ -1153,12 +1153,12 @@ RUN sed -i -E 's/((^|\s)PATH=)([^\$]*)$/\1\${{PATH:-\3}}/g' /etc/profile || true
         let mut runtime_labels = HashMap::new();
 
         if let Some(metadata) = &resources.image.config.labels.metadata {
-            let serialimomor_metadata = serde_json_lenient::to_string(metadata).map_err(|e| {
+            let serialized_metadata = serde_json_lenient::to_string(metadata).map_err(|e| {
                 log::error!("Error serializing docker image metadata: {e}");
                 DevContainerError::ContainerNotValid(resources.image.id.clone())
             })?;
 
-            runtime_labels.insert("devcontainer.metadata".to_string(), serialimomor_metadata);
+            runtime_labels.insert("devcontainer.metadata".to_string(), serialized_metadata);
         }
 
         for (k, v) in self.identifying_labels() {
@@ -1893,14 +1893,14 @@ RUN sed -i -E 's/((^|\s)PATH=)([^\$]*)$/\1\${PATH:-\3}/g' /etc/profile || true
         }
 
         if let Some(metadata) = &build_resources.image.config.labels.metadata {
-            let serialimomor_metadata = serde_json_lenient::to_string(metadata).map_err(|e| {
+            let serialized_metadata = serde_json_lenient::to_string(metadata).map_err(|e| {
                 log::error!("Problem serializing image metadata: {e}");
                 DevContainerError::ContainerNotValid(build_resources.image.id.clone())
             })?;
             command.arg("-l");
             command.arg(format!(
                 "{}={}",
-                "devcontainer.metadata", serialimomor_metadata
+                "devcontainer.metadata", serialized_metadata
             ));
         }
 

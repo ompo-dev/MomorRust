@@ -461,14 +461,14 @@ impl ThreadsDatabase {
             .subagent_context
             .as_ref()
             .map(|ctx| ctx.parent_thread_id.0.clone());
-        let serialimomor_folder_paths = folder_paths.serialize();
+        let serialized_folder_paths = folder_paths.serialize();
         let (folder_paths_str, folder_paths_order_str): (Option<String>, Option<String>) =
             if folder_paths.is_empty() {
                 (None, None)
             } else {
                 (
-                    Some(serialimomor_folder_paths.paths),
-                    Some(serialimomor_folder_paths.order),
+                    Some(serialized_folder_paths.paths),
+                    Some(serialized_folder_paths.order),
                 )
             };
         let json_data = serde_json::to_string(&SerializedThread {

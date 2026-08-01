@@ -43,7 +43,7 @@ pub fn extract_terminal_command_prefix(command: &str) -> Option<TerminalCommandP
     let program = parser.parse_program().ok()?;
     let simple_command = first_simple_command(&program)?;
 
-    let mut normalimomor_tokens = Vec::new();
+    let mut normalized_tokens = Vec::new();
     let mut display_start = None;
     let mut display_end = None;
 
@@ -51,8 +51,8 @@ pub fn extract_terminal_command_prefix(command: &str) -> Option<TerminalCommandP
         for item in &prefix.0 {
             if let ast::CommandPrefixOrSuffixItem::AssignmentWord(assignment, word) = item {
                 match normalize_assignment_for_command_prefix(assignment, word)? {
-                    NormalizedAssignment::Included(normalimomor_assignment) => {
-                        normalimomor_tokens.push(normalimomor_assignment);
+                    NormalizedAssignment::Included(normalized_assignment) => {
+                        normalized_tokens.push(normalized_assignment);
                         update_display_bounds(&mut display_start, &mut display_end, word);
                     }
                     NormalizedAssignment::Skipped => {}
@@ -63,7 +63,7 @@ pub fn extract_terminal_command_prefix(command: &str) -> Option<TerminalCommandP
 
     let command_word = simple_command.word_or_name.as_ref()?;
     let command_name = normalize_word(command_word)?;
-    normalimomor_tokens.push(command_name.clone());
+    normalized_tokens.push(command_name.clone());
     update_display_bounds(&mut display_start, &mut display_end, command_word);
 
     let mut subcommand = None;
@@ -72,10 +72,10 @@ pub fn extract_terminal_command_prefix(command: &str) -> Option<TerminalCommandP
             match item {
                 ast::CommandPrefixOrSuffixItem::IoRedirect(_) => continue,
                 ast::CommandPrefixOrSuffixItem::Word(word) => {
-                    let normalimomor_word = normalize_word(word)?;
-                    if !normalimomor_word.starts_with('-') {
-                        subcommand = Some(normalimomor_word.clone());
-                        normalimomor_tokens.push(normalimomor_word);
+                    let normalized_word = normalize_word(word)?;
+                    if !normalized_word.starts_with('-') {
+                        subcommand = Some(normalized_word.clone());
+                        normalized_tokens.push(normalized_word);
                         update_display_bounds(&mut display_start, &mut display_end, word);
                     }
                     break;
@@ -90,9 +90,9 @@ pub fn extract_terminal_command_prefix(command: &str) -> Option<TerminalCommandP
     let display = command.get(start..end)?.to_string();
 
     Some(TerminalCommandPrefix {
-        normalized: normalimomor_tokens.join(" "),
+        normalized: normalized_tokens.join(" "),
         display,
-        tokens: normalimomor_tokens,
+        tokens: normalized_tokens,
         command: command_name,
         subcommand,
     })
@@ -157,12 +157,12 @@ fn normalize_assignment_for_command_prefix(
 
     match &assignment.value {
         ast::AssignmentValue::Scalar(value) => {
-            let normalimomor_value = normalize_word(value)?;
+            let normalized_value = normalize_word(value)?;
             let raw_value = word.value.strip_prefix(&assignment_prefix)?;
-            let rendered_value = if shell_value_requires_quoting(&normalimomor_value) {
+            let rendered_value = if shell_value_requires_quoting(&normalized_value) {
                 raw_value.to_string()
             } else {
-                normalimomor_value
+                normalized_value
             };
 
             Some(NormalizedAssignment::Included(format!(
@@ -523,18 +523,18 @@ fn extract_commands_from_command(command: &ast::Command, commands: &mut Vec<Stri
         ast::Command::Compound(compound_command, redirect_list) => {
             let body_start = extract_commands_from_compound_command(compound_command, commands)?;
             if let Some(redirect_list) = redirect_list {
-                let mut normalimomor_redirects = Vec::new();
+                let mut normalized_redirects = Vec::new();
                 for redirect in &redirect_list.0 {
                     match normalize_io_redirect(redirect)? {
-                        RedirectNormalization::Normalized(s) => normalimomor_redirects.push(s),
+                        RedirectNormalization::Normalized(s) => normalized_redirects.push(s),
                         RedirectNormalization::Skip => {}
                     }
                 }
-                if !normalimomor_redirects.is_empty() {
+                if !normalized_redirects.is_empty() {
                     if body_start >= commands.len() {
                         return None;
                     }
-                    commands.extend(normalimomor_redirects);
+                    commands.extend(normalized_redirects);
                 }
                 for redirect in &redirect_list.0 {
                     extract_commands_from_io_redirect(redirect, commands)?;
@@ -582,8 +582,8 @@ fn extract_commands_from_simple_command(
                 }
                 ast::CommandPrefixOrSuffixItem::AssignmentWord(assignment, word) => {
                     match normalize_assignment_for_command_prefix(assignment, word)? {
-                        NormalizedAssignment::Included(normalimomor_assignment) => {
-                            words.push(normalimomor_assignment);
+                        NormalizedAssignment::Included(normalized_assignment) => {
+                            words.push(normalized_assignment);
                         }
                         NormalizedAssignment::Skipped => {}
                     }
@@ -613,8 +613,8 @@ fn extract_commands_from_simple_command(
                 }
                 ast::CommandPrefixOrSuffixItem::AssignmentWord(assignment, word) => {
                     match normalize_assignment_for_command_prefix(assignment, word)? {
-                        NormalizedAssignment::Included(normalimomor_assignment) => {
-                            words.push(normalimomor_assignment);
+                        NormalizedAssignment::Included(normalized_assignment) => {
+                            words.push(normalized_assignment);
                         }
                         NormalizedAssignment::Skipped => {}
                     }
@@ -709,8 +709,8 @@ fn normalize_word_piece_into(
     Some(())
 }
 
-fn is_known_safe_redirect_target(normalimomor_target: &str) -> bool {
-    normalimomor_target == "/dev/null"
+fn is_known_safe_redirect_target(normalized_target: &str) -> bool {
+    normalized_target == "/dev/null"
 }
 
 fn normalize_io_redirect(redirect: &ast::IoRedirect) -> Option<RedirectNormalization> {
@@ -1052,18 +1052,18 @@ fn extract_commands_from_function_body(
 ) -> Option<()> {
     let body_start = extract_commands_from_compound_command(&func_body.0, commands)?;
     if let Some(redirect_list) = &func_body.1 {
-        let mut normalimomor_redirects = Vec::new();
+        let mut normalized_redirects = Vec::new();
         for redirect in &redirect_list.0 {
             match normalize_io_redirect(redirect)? {
-                RedirectNormalization::Normalized(s) => normalimomor_redirects.push(s),
+                RedirectNormalization::Normalized(s) => normalized_redirects.push(s),
                 RedirectNormalization::Skip => {}
             }
         }
-        if !normalimomor_redirects.is_empty() {
+        if !normalized_redirects.is_empty() {
             if body_start >= commands.len() {
                 return None;
             }
-            commands.extend(normalimomor_redirects);
+            commands.extend(normalized_redirects);
         }
         for redirect in &redirect_list.0 {
             extract_commands_from_io_redirect(redirect, commands)?;
@@ -1369,7 +1369,7 @@ mod tests {
     }
 
     #[test]
-    fn test_here_string_dropped_from_normalimomor_output() {
+    fn test_here_string_dropped_from_normalized_output() {
         let commands = extract_commands("cat <<< 'hello'").expect("parse failed");
         assert_eq!(commands, vec!["cat"]);
     }

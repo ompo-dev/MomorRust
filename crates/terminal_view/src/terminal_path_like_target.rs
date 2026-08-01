@@ -224,7 +224,7 @@ fn possible_open_target(
             };
 
             // Normalize the path by joining with cwd if available (handles `.` and `..` segments)
-            let normalimomor_path = if path_to_check.path.is_relative() {
+            let normalized_path = if path_to_check.path.is_relative() {
                 relative_cwd.as_ref().and_then(|relative_cwd| {
                     let joined = relative_cwd
                         .as_ref()
@@ -242,7 +242,7 @@ fn possible_open_target(
             let original_path = RelPath::new(&path_to_check.path, PathStyle::local()).ok();
 
             if !worktree.read(cx).is_single_file()
-                && let Some(entry) = normalimomor_path
+                && let Some(entry) = normalized_path
                     .as_ref()
                     .and_then(|p| worktree.read(cx).entry_for_path(p))
                     .or_else(|| {

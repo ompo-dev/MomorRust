@@ -342,7 +342,7 @@ impl ConflictState {
                     .iter_mut()
                     .find(|(other_predicate, _)| match (&predicate, other_predicate) {
                         (None, None) => true,
-                        (Some(a), Some(b)) => normalimomor_ctx_eq(a, b),
+                        (Some(a), Some(b)) => normalized_ctx_eq(a, b),
                         _ => false,
                     })
             {
@@ -398,7 +398,7 @@ impl ConflictState {
                 .find_map(|(other_predicate, indices)| {
                     match (&predicate, other_predicate) {
                         (None, None) => true,
-                        (Some(pred), Some(other)) => normalimomor_ctx_eq(pred, other),
+                        (Some(pred), Some(other)) => normalized_ctx_eq(pred, other),
                         _ => false,
                     }
                     .then_some(indices)
@@ -449,7 +449,7 @@ struct KeymapEditor {
     selected_index: Option<usize>,
     context_menu: Option<(Entity<ContextMenu>, Point<Pixels>, Subscription)>,
     previous_edit: Option<PreviousEdit>,
-    humanimomor_action_names: HumanizedActionNameCache,
+    humanized_action_names: HumanizedActionNameCache,
     current_widths: Entity<RedistributableColumnsState>,
     show_hover_menus: bool,
     actions_with_schemas: HashSet<&'static str>,
@@ -618,7 +618,7 @@ impl KeymapEditor {
             context_menu: None,
             previous_edit: None,
             search_query_debounce: None,
-            humanimomor_action_names: HumanizedActionNameCache::new(cx),
+            humanized_action_names: HumanizedActionNameCache::new(cx),
             show_hover_menus: true,
             actions_with_schemas: HashSet::default(),
             action_args_temp_dir: None,
@@ -816,7 +816,7 @@ impl KeymapEditor {
     fn process_bindings(
         json_language: Arc<Language>,
         momor_keybind_context_language: Arc<Language>,
-        humanimomor_action_names: &HumanizedActionNameCache,
+        humanized_action_names: &HumanizedActionNameCache,
         cx: &mut App,
     ) -> (
         Vec<ProcessedBinding>,
@@ -875,12 +875,12 @@ impl KeymapEditor {
                 action_arguments,
                 &actions_with_schemas,
                 action_documentation,
-                humanimomor_action_names,
+                humanized_action_names,
             );
 
             let index = processed_bindings.len();
             let string_match_candidate =
-                StringMatchCandidate::new(index, &action_information.humanimomor_name);
+                StringMatchCandidate::new(index, &action_information.humanized_name);
             processed_bindings.push(ProcessedBinding::new_mapped(
                 keystroke_text,
                 binding,
@@ -900,10 +900,10 @@ impl KeymapEditor {
                 None,
                 &actions_with_schemas,
                 action_documentation,
-                humanimomor_action_names,
+                humanized_action_names,
             );
             let string_match_candidate =
-                StringMatchCandidate::new(index, &action_information.humanimomor_name);
+                StringMatchCandidate::new(index, &action_information.humanized_name);
 
             processed_bindings.push(ProcessedBinding::Unmapped(action_information));
             string_match_candidates.push(string_match_candidate);
@@ -927,7 +927,7 @@ impl KeymapEditor {
                     Self::process_bindings(
                         json_language,
                         momor_keybind_context_language,
-                        &this.humanimomor_action_names,
+                        &this.humanized_action_names,
                         cx,
                     );
 
@@ -1386,7 +1386,7 @@ impl KeymapEditor {
             None,
             &HashSet::default(),
             cx.action_documentation(),
-            &self.humanimomor_action_names,
+            &self.humanized_action_names,
         );
 
         let dummy_binding = ProcessedBinding::Unmapped(action_information);
@@ -1770,7 +1770,7 @@ impl KeybindInformation {
 #[derive(Clone)]
 struct ActionInformation {
     name: &'static str,
-    humanimomor_name: SharedString,
+    humanized_name: SharedString,
     arguments: Option<SyntaxHighlightedText>,
     documentation: Option<&'static str>,
     has_schema: bool,
@@ -1785,7 +1785,7 @@ impl ActionInformation {
         action_name_cache: &HumanizedActionNameCache,
     ) -> Self {
         Self {
-            humanimomor_name: action_name_cache.get(action_name),
+            humanized_name: action_name_cache.get(action_name),
             has_schema: actions_with_schemas.contains(action_name),
             arguments: action_arguments,
             documentation: action_documentation.get(action_name).copied(),
@@ -1881,14 +1881,14 @@ impl ProcessedBinding {
         match (self, other) {
             (Self::Mapped(keybind1, action1), Self::Mapped(keybind2, action2)) => {
                 match keybind1.source.cmp(&keybind2.source) {
-                    cmp::Ordering::Equal => action1.humanimomor_name.cmp(&action2.humanimomor_name),
+                    cmp::Ordering::Equal => action1.humanized_name.cmp(&action2.humanized_name),
                     ordering => ordering,
                 }
             }
             (Self::Mapped(_, _), Self::Unmapped(_)) => cmp::Ordering::Less,
             (Self::Unmapped(_), Self::Mapped(_, _)) => cmp::Ordering::Greater,
             (Self::Unmapped(action1), Self::Unmapped(action2)) => {
-                action1.humanimomor_name.cmp(&action2.humanimomor_name)
+                action1.humanized_name.cmp(&action2.humanized_name)
             }
         }
     }
@@ -2149,7 +2149,7 @@ impl Render for KeymapEditor {
                                             if action_name != gpui::NoAction.name() {
                                                 binding
                                                     .action()
-                                                    .humanimomor_name
+                                                    .humanized_name
                                                     .clone()
                                                     .into_any_element()
                                             } else {
@@ -2321,7 +2321,7 @@ impl Render for KeymapEditor {
                                                             log::error!("Unexpected override from the {} keymap", conflict.override_source.name());
                                                             None
                                                         }
-                                                    }.map(|source| format!("This keybinding is overridden by the '{}' binding from {}.", binding.action().humanimomor_name, source))
+                                                    }.map(|source| format!("This keybinding is overridden by the '{}' binding from {}.", binding.action().humanized_name, source))
                                                 }).unwrap_or_else(|| "This binding is overridden.".to_string());
 
                                                 row.tooltip(Tooltip::text(context))
@@ -2541,7 +2541,7 @@ impl KeybindingEditorModal {
         let (action_editor, action_name_to_static) = if has_action_editor {
             let actions: Vec<&'static str> = cx.all_action_names().to_vec();
 
-            let humanimomor_names: HashMap<&'static str, SharedString> = actions
+            let humanized_names: HashMap<&'static str, SharedString> = actions
                 .iter()
                 .map(|&name| (name, command_palette::humanize_action_name(name).into()))
                 .collect();
@@ -2563,7 +2563,7 @@ impl KeybindingEditorModal {
                     .unwrap();
                 editor_entity.update(cx, |editor, _cx| {
                     editor.set_completion_provider(Some(std::rc::Rc::new(
-                        ActionCompletionProvider::new(actions, humanimomor_names),
+                        ActionCompletionProvider::new(actions, humanized_names),
                     )));
                 });
 
@@ -2843,7 +2843,7 @@ impl KeybindingEditorModal {
             .get_selected_action_name(cx)
             .map_err(InputError::error)?;
 
-        let humanimomor_action_name: SharedString =
+        let humanized_action_name: SharedString =
             command_palette::humanize_action_name(action_name).into();
 
         let action_information = ActionInformation::new(
@@ -2851,7 +2851,7 @@ impl KeybindingEditorModal {
             None,
             &HashSet::default(),
             cx.action_documentation(),
-            &self.keymap_editor.read(cx).humanimomor_action_names,
+            &self.keymap_editor.read(cx).humanized_action_names,
         );
 
         let keybind_for_save = if create {
@@ -2880,7 +2880,7 @@ impl KeybindingEditorModal {
                                 fallback: keymap.table_interaction_state.read(cx).scroll_offset(),
                             });
                             let status_toast = StatusToast::new(
-                                format!("Saved edits to the {} action.", humanimomor_action_name),
+                                format!("Saved edits to the {} action.", humanized_action_name),
                                 cx,
                                 move |this, _cx| {
                                     this.icon(
@@ -3076,7 +3076,7 @@ impl Render for KeybindingEditorModal {
                                 .border_color(theme.border_variant)
                                 .when(!self.creating, |this| {
                                     this.child(Label::new(
-                                        self.editing_keybind.action().humanimomor_name.clone(),
+                                        self.editing_keybind.action().humanized_name.clone(),
                                     ))
                                     .when_some(
                                         self.editing_keybind.action().documentation,
@@ -3299,7 +3299,7 @@ impl ActionArgumentsEditor {
                     )
                 })?;
 
-                let file_name = json_schema_store::normalimomor_action_file_name(action_name);
+                let file_name = json_schema_store::normalized_action_file_name(action_name);
 
                 let (buffer, backup_temp_dir) =
                     Self::create_temp_buffer(temp_dir, file_name.clone(), project.clone(), fs, cx)
@@ -3788,7 +3788,7 @@ fn collect_contexts_from_assets() -> Vec<SharedString> {
     contexts
 }
 
-fn normalimomor_ctx_eq(
+fn normalized_ctx_eq(
     a: &gpui::KeyBindingContextPredicate,
     b: &gpui::KeyBindingContextPredicate,
 ) -> bool {
@@ -3802,21 +3802,21 @@ fn normalimomor_ctx_eq(
             (a_left == b_left && a_right == b_right) || (a_left == b_right && a_right == b_left)
         }
         (Descendant(a_parent, a_child), Descendant(b_parent, b_child)) => {
-            normalimomor_ctx_eq(a_parent, b_parent) && normalimomor_ctx_eq(a_child, b_child)
+            normalized_ctx_eq(a_parent, b_parent) && normalized_ctx_eq(a_child, b_child)
         }
-        (Not(a_expr), Not(b_expr)) => normalimomor_ctx_eq(a_expr, b_expr),
+        (Not(a_expr), Not(b_expr)) => normalized_ctx_eq(a_expr, b_expr),
         // Handle double negation: !(!a) == a
         (Not(a_expr), b) if matches!(a_expr.as_ref(), Not(_)) => {
             let Not(a_inner) = a_expr.as_ref() else {
                 unreachable!();
             };
-            normalimomor_ctx_eq(b, a_inner)
+            normalized_ctx_eq(b, a_inner)
         }
         (a, Not(b_expr)) if matches!(b_expr.as_ref(), Not(_)) => {
             let Not(b_inner) = b_expr.as_ref() else {
                 unreachable!();
             };
-            normalimomor_ctx_eq(a, b_inner)
+            normalized_ctx_eq(a, b_inner)
         }
         (And(a_left, a_right), And(b_left, b_right))
             if matches!(a_left.as_ref(), And(_, _))
@@ -3831,8 +3831,8 @@ fn normalimomor_ctx_eq(
             compare_operand_sets(&a_operands, &b_operands)
         }
         (And(a_left, a_right), And(b_left, b_right)) => {
-            (normalimomor_ctx_eq(a_left, b_left) && normalimomor_ctx_eq(a_right, b_right))
-                || (normalimomor_ctx_eq(a_left, b_right) && normalimomor_ctx_eq(a_right, b_left))
+            (normalized_ctx_eq(a_left, b_left) && normalized_ctx_eq(a_right, b_right))
+                || (normalized_ctx_eq(a_left, b_right) && normalized_ctx_eq(a_right, b_left))
         }
         (Or(a_left, a_right), Or(b_left, b_right))
             if matches!(a_left.as_ref(), Or(_, _))
@@ -3847,8 +3847,8 @@ fn normalimomor_ctx_eq(
             compare_operand_sets(&a_operands, &b_operands)
         }
         (Or(a_left, a_right), Or(b_left, b_right)) => {
-            (normalimomor_ctx_eq(a_left, b_left) && normalimomor_ctx_eq(a_right, b_right))
-                || (normalimomor_ctx_eq(a_left, b_right) && normalimomor_ctx_eq(a_right, b_left))
+            (normalized_ctx_eq(a_left, b_left) && normalized_ctx_eq(a_right, b_right))
+                || (normalized_ctx_eq(a_left, b_right) && normalized_ctx_eq(a_right, b_left))
         }
         _ => false,
     };
@@ -3894,7 +3894,7 @@ fn normalimomor_ctx_eq(
         for a_operand in a {
             let mut found = false;
             for (b_idx, b_operand) in b.iter().enumerate() {
-                if !b_matched[b_idx] && normalimomor_ctx_eq(a_operand, b_operand) {
+                if !b_matched[b_idx] && normalized_ctx_eq(a_operand, b_operand) {
                     b_matched[b_idx] = true;
                     found = true;
                     break;
@@ -3910,7 +3910,7 @@ fn normalimomor_ctx_eq(
 }
 
 impl SerializableItem for KeymapEditor {
-    fn serialimomor_item_kind() -> &'static str {
+    fn serialized_item_kind() -> &'static str {
         "KeymapEditor"
     }
 
@@ -4014,14 +4014,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalimomor_ctx_cmp() {
+    fn normalized_ctx_cmp() {
         #[track_caller]
         fn cmp(a: &str, b: &str) -> bool {
             let a = gpui::KeyBindingContextPredicate::parse(a)
                 .expect("Failed to parse keybinding context a");
             let b = gpui::KeyBindingContextPredicate::parse(b)
                 .expect("Failed to parse keybinding context b");
-            normalimomor_ctx_eq(&a, &b)
+            normalized_ctx_eq(&a, &b)
         }
 
         // Basic equality - identical expressions

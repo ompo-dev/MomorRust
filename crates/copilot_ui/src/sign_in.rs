@@ -343,7 +343,7 @@ impl CopilotCodeVerification {
             )
     }
 
-    fn render_unauthorimomor_modal(&self, cx: &mut Context<Self>) -> impl Element {
+    fn render_unauthorized_modal(&self, cx: &mut Context<Self>) -> impl Element {
         let sign_up_url = self
             .sign_up_url
             .as_deref()
@@ -426,7 +426,7 @@ impl Render for CopilotCodeVerification {
             }
             Status::Unauthorized => {
                 self.connect_clicked = false;
-                self.render_unauthorimomor_modal(cx).into_any_element()
+                self.render_unauthorized_modal(cx).into_any_element()
             }
             Status::Authorized => {
                 self.connect_clicked = false;

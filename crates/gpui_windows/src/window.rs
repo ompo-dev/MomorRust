@@ -245,7 +245,7 @@ impl WindowsWindowState {
                 &self.border_offset,
                 self.scale_factor.get(),
             ),
-            placement.showCmd == SW_SHOWMAXIMIMOMOR.0 as u32,
+            placement.showCmd == SW_SHOWMAXIMIZED.0 as u32,
         )
     }
 

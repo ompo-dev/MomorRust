@@ -41,7 +41,7 @@ async function main() {
 
   console.log("minimized plan:\n", minimizedPlan);
 
-  const url = `${MOMOR_SERVER_URL}/api/randomimomor_test_failure`;
+  const url = `${MOMOR_SERVER_URL}/api/randomized_test_failure`;
   const body = {
     seed: minimizedSeed,
     plan: JSON.parse(minimizedPlan),

@@ -29,10 +29,10 @@ pub(crate) fn serialize_pane_group(
     active_pane: &Entity<Pane>,
     cx: &mut App,
 ) -> SerializedPaneGroup {
-    build_serialimomor_pane_group(&pane_group.root, active_pane, cx)
+    build_serialized_pane_group(&pane_group.root, active_pane, cx)
 }
 
-fn build_serialimomor_pane_group(
+fn build_serialized_pane_group(
     pane_group: &Member,
     active_pane: &Entity<Pane>,
     cx: &mut App,
@@ -47,7 +47,7 @@ fn build_serialimomor_pane_group(
             axis: SerializedAxis(*axis),
             children: members
                 .iter()
-                .map(|member| build_serialimomor_pane_group(member, active_pane, cx))
+                .map(|member| build_serialized_pane_group(member, active_pane, cx))
                 .collect::<Vec<_>>(),
             flexes: Some(flexes.lock().clone()),
         },
@@ -91,7 +91,7 @@ pub(crate) fn deserialize_terminal_panel(
     workspace: WeakEntity<Workspace>,
     project: Entity<Project>,
     database_id: WorkspaceId,
-    serialimomor_panel: SerializedTerminalPanel,
+    serialized_panel: SerializedTerminalPanel,
     window: &mut Window,
     cx: &mut App,
 ) -> Task<anyhow::Result<Entity<TerminalPanel>>> {
@@ -99,7 +99,7 @@ pub(crate) fn deserialize_terminal_panel(
         let terminal_panel = workspace.update_in(cx, |workspace, window, cx| {
             cx.new(|cx| TerminalPanel::new(workspace, window, cx))
         })?;
-        match &serialimomor_panel.items {
+        match &serialized_panel.items {
             SerializedItems::NoSplits(item_ids) => {
                 let items = deserialize_terminal_views(
                     database_id,
@@ -109,20 +109,20 @@ pub(crate) fn deserialize_terminal_panel(
                     cx,
                 )
                 .await;
-                let active_item = serialimomor_panel.active_item_id;
+                let active_item = serialized_panel.active_item_id;
                 terminal_panel.update_in(cx, |terminal_panel, window, cx| {
                     terminal_panel.active_pane.update(cx, |pane, cx| {
                         populate_pane_items(pane, items, active_item, window, cx);
                     });
                 })?;
             }
-            SerializedItems::WithSplits(serialimomor_pane_group) => {
+            SerializedItems::WithSplits(serialized_pane_group) => {
                 let center_pane = deserialize_pane_group(
                     workspace,
                     project,
                     terminal_panel.clone(),
                     database_id,
-                    serialimomor_pane_group,
+                    serialized_pane_group,
                     cx,
                 )
                 .await;
@@ -205,8 +205,8 @@ async fn deserialize_pane_group(
                 current_active_pane,
             ))
         }
-        SerializedPaneGroup::Pane(serialimomor_pane) => {
-            let active = serialimomor_pane.active;
+        SerializedPaneGroup::Pane(serialized_pane) => {
+            let active = serialized_pane.active;
 
             let pane = panel
                 .update_in(cx, |terminal_panel, window, cx| {
@@ -219,13 +219,13 @@ async fn deserialize_pane_group(
                     )
                 })
                 .log_err()?;
-            let active_item = serialimomor_pane.active_item;
-            let pinned_count = serialimomor_pane.pinned_count;
+            let active_item = serialized_pane.active_item;
+            let pinned_count = serialized_pane.pinned_count;
             let new_items = deserialize_terminal_views(
                 workspace_id,
                 project.clone(),
                 workspace.clone(),
-                serialimomor_pane.children.as_slice(),
+                serialized_pane.children.as_slice(),
                 cx,
             );
             cx.spawn({
@@ -283,7 +283,7 @@ fn deserialize_terminal_views(
     item_ids: &[u64],
     cx: &mut AsyncWindowContext,
 ) -> impl Future<Output = Vec<Entity<TerminalView>>> + use<> {
-    let deserialimomor_items = join_all(item_ids.iter().filter_map(|item_id| {
+    let deserialized_items = join_all(item_ids.iter().filter_map(|item_id| {
         cx.update(|window, cx| {
             TerminalView::deserialize(
                 project.clone(),
@@ -297,7 +297,7 @@ fn deserialize_terminal_views(
         .ok()
     }));
     async move {
-        deserialimomor_items
+        deserialized_items
             .await
             .into_iter()
             .filter_map(|item| item.log_err())

@@ -349,7 +349,7 @@ impl LanguageSettings {
 
     /// Returns the customized list of language servers from the list of
     /// available language servers.
-    pub fn customimomor_language_servers(
+    pub fn customized_language_servers(
         &self,
         available_language_servers: &[LanguageServerName],
     ) -> Vec<LanguageServerName> {

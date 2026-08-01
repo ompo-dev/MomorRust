@@ -28521,7 +28521,7 @@ impl BookmarkTestContext {
             project
                 .bookmark_store()
                 .read(cx)
-                .all_serialimomor_bookmarks(cx)
+                .all_serialized_bookmarks(cx)
         })
     }
 

@@ -872,7 +872,7 @@ fn test_random_concurrent_edits(mut rng: StdRng) {
 }
 
 #[test]
-fn test_new_normalimomor_splits_large_base_text() {
+fn test_new_normalized_splits_large_base_text() {
     // ASCII text that exceeds max_insertion_len
     let text = "abcdefghij".repeat(10); // 100 bytes
     let rope = Rope::from(text.as_str());
@@ -911,7 +911,7 @@ fn test_new_normalimomor_splits_large_base_text() {
 }
 
 #[test]
-fn test_new_normalimomor_splits_large_base_text_with_multibyte_chars() {
+fn test_new_normalized_splits_large_base_text_with_multibyte_chars() {
     // Use multi-byte chars (é is 2 bytes in UTF-8) so that a naive byte-level
     // split would land in the middle of a character.
     let unit = "ééééééééé"; // 9 chars × 2 bytes = 18 bytes
@@ -940,7 +940,7 @@ fn test_new_normalimomor_splits_large_base_text_with_multibyte_chars() {
 }
 
 #[test]
-fn test_new_normalimomor_small_text_unchanged() {
+fn test_new_normalized_small_text_unchanged() {
     // Text that fits in a single chunk should produce exactly one fragment,
     // matching the original single-fragment behaviour.
     let text = "hello world";

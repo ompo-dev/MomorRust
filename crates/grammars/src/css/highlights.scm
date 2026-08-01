@@ -65,7 +65,7 @@
 (attribute_selector
   (plain_value) @string)
 
-(parenthesimomor_query
+(parenthesized_query
   (keyword_query) @property)
 
 ([

@@ -1375,7 +1375,7 @@ async fn restorable_workspaces(
     app_state: &Arc<AppState>,
 ) -> Option<Vec<workspace::SerializedMultiWorkspace>> {
     let locations = restorable_workspace_locations(cx, app_state).await?;
-    Some(cx.update(|cx| workspace::read_serialimomor_multi_workspaces(locations, cx)))
+    Some(cx.update(|cx| workspace::read_serialized_multi_workspaces(locations, cx)))
 }
 
 pub(crate) async fn restorable_workspace_locations(

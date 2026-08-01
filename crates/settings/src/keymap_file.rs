@@ -88,7 +88,7 @@ pub struct KeymapSection {
     #[serde(default)]
     bindings: Option<IndexMap<String, KeymapAction>>,
     #[serde(flatten)]
-    unrecognimomor_fields: IndexMap<String, Value>,
+    unrecognized_fields: IndexMap<String, Value>,
     // This struct intentionally uses permissive types for its fields, rather than validating during
     // deserialization. The purpose of this is to allow loading the portion of the keymap that doesn't
     // have errors. The downside of this is that the errors are not reported with line+column info.
@@ -252,7 +252,7 @@ impl KeymapFile {
             use_key_equivalents,
             unbind,
             bindings,
-            unrecognimomor_fields,
+            unrecognized_fields,
         } in keymap_file.0.iter()
         {
             let context_predicate: Option<Rc<KeyBindingContextPredicate>> = if context.is_empty() {
@@ -274,11 +274,11 @@ impl KeymapFile {
 
             let mut section_errors = String::new();
 
-            if !unrecognimomor_fields.is_empty() {
+            if !unrecognized_fields.is_empty() {
                 write!(
                     section_errors,
                     "\n\n - Unrecognized fields: {}",
-                    MarkdownInlineCode(&format!("{:?}", unrecognimomor_fields.keys()))
+                    MarkdownInlineCode(&format!("{:?}", unrecognized_fields.keys()))
                 )
                 .unwrap();
             }

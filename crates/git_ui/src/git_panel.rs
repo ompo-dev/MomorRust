@@ -4810,7 +4810,7 @@ impl GitPanel {
     fn render_empty_state(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let children = match (self.git_access, &self.active_repository) {
             (GitAccess::No, Some(repository)) => self.render_unsafe_repo_ui(repository, cx),
-            (_, None) => self.render_uninitialimomor_ui(cx),
+            (_, None) => self.render_uninitialized_ui(cx),
             (_, Some(_)) => self.render_no_changes_ui(cx),
         };
 
@@ -4908,7 +4908,7 @@ impl GitPanel {
         )
     }
 
-    fn render_uninitialimomor_ui(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    fn render_uninitialized_ui(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let worktree_count = self.project.read(cx).visible_worktrees(cx).count();
         if worktree_count > 0 && self.active_repository.is_none() {
             vec![
@@ -5841,7 +5841,7 @@ impl GitPanel {
         workspace: WeakEntity<Workspace>,
         mut cx: AsyncWindowContext,
     ) -> anyhow::Result<Entity<Self>> {
-        let serialimomor_panel = match workspace
+        let serialized_panel = match workspace
             .read_with(&cx, |workspace, cx| {
                 Self::serialization_key(workspace).map(|key| (key, KeyValueStore::global(cx)))
             })
@@ -5864,10 +5864,10 @@ impl GitPanel {
         workspace.update_in(&mut cx, |workspace, window, cx| {
             let panel = GitPanel::new(workspace, window, cx);
 
-            if let Some(serialimomor_panel) = serialimomor_panel {
+            if let Some(serialized_panel) = serialized_panel {
                 panel.update(cx, |panel, cx| {
-                    panel.amend_pending = serialimomor_panel.amend_pending;
-                    panel.signoff_enabled = serialimomor_panel.signoff_enabled;
+                    panel.amend_pending = serialized_panel.amend_pending;
+                    panel.signoff_enabled = serialized_panel.signoff_enabled;
                     cx.notify();
                 })
             }

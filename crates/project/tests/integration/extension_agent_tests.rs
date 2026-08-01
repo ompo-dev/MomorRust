@@ -330,3 +330,35 @@ fn test_tilde_expansion_in_settings() {
         "Tilde should be expanded for custom agent path"
     );
 }
+
+#[test]
+fn default_registry_agents_are_injected_and_user_entries_win() {
+    let mut settings = AllAgentServersSettings::default();
+    settings.insert(
+        "codex-acp".into(),
+        CustomAgentServerSettings::Registry {
+            env: HashMap::from_iter([("MINE".to_string(), "1".to_string())]),
+            default_mode: None,
+            default_model: None,
+            favorite_models: vec![],
+            default_config_options: Default::default(),
+            favorite_config_option_values: Default::default(),
+        },
+    );
+
+    settings.add_default_registry_agents();
+
+    for id in DEFAULT_REGISTRY_AGENTS {
+        assert!(settings.contains_key(id), "{id} should be registered");
+    }
+    assert!(settings.has_registry_agents());
+
+    let CustomAgentServerSettings::Registry { env, .. } = &settings["codex-acp"] else {
+        panic!("Expected Registry variant");
+    };
+    assert_eq!(
+        env.get("MINE").map(String::as_str),
+        Some("1"),
+        "explicit user entry must not be overwritten"
+    );
+}

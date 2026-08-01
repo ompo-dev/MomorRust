@@ -238,7 +238,7 @@ impl LanguageModelCompletionError {
     ) -> Self {
         match status_code {
             StatusCode::BAD_REQUEST => Self::BadRequestFormat { provider, message },
-            StatusCode::UNAUTHORIMOMOR => Self::AuthenticationError { provider, message },
+            StatusCode::UNAUTHORIZED => Self::AuthenticationError { provider, message },
             StatusCode::FORBIDDEN => Self::PermissionError { provider, message },
             StatusCode::NOT_FOUND => Self::ApiEndpointNotFound { provider },
             StatusCode::PAYLOAD_TOO_LARGE => Self::PromptTooLarge {

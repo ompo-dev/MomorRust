@@ -1680,10 +1680,10 @@ fn get_font_names_from_collection(
             let Some(font_family) = collection.GetFontFamily(index).log_err() else {
                 continue;
             };
-            let Some(localimomor_family_name) = font_family.GetFamilyNames().log_err() else {
+            let Some(localized_family_name) = font_family.GetFamilyNames().log_err() else {
                 continue;
             };
-            let Some(family_name) = get_name(localimomor_family_name, locale).log_err() else {
+            let Some(family_name) = get_name(localized_family_name, locale).log_err() else {
                 continue;
             };
             result.push(family_name);
@@ -1694,8 +1694,8 @@ fn get_font_names_from_collection(
 }
 
 fn font_face_to_font(font_face: &IDWriteFontFace3, locale: &HSTRING) -> Option<Font> {
-    let localimomor_family_name = unsafe { font_face.GetFamilyNames().log_err() }?;
-    let family_name = get_name(localimomor_family_name, locale).log_err()?;
+    let localized_family_name = unsafe { font_face.GetFamilyNames().log_err() }?;
+    let family_name = get_name(localized_family_name, locale).log_err()?;
     let weight = unsafe { font_face.GetWeight() };
     let style = unsafe { font_face.GetStyle() };
     Some(Font {

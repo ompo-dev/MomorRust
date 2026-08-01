@@ -423,14 +423,14 @@ impl PickerDelegate for WorktreePickerDelegate {
     ) -> Task<()> {
         let repo_worktrees = self.all_repo_worktrees().to_vec();
 
-        let normalimomor_query = query.replace(' ', "-");
+        let normalized_query = query.replace(' ', "-");
         let main_worktree_path = self
             .all_worktrees
             .iter()
             .find(|wt| wt.is_main)
             .map(|wt| wt.path.clone());
         let has_named_worktree = self.all_worktrees.iter().any(|worktree| {
-            worktree.directory_name(main_worktree_path.as_deref()) == normalimomor_query
+            worktree.directory_name(main_worktree_path.as_deref()) == normalized_query
         });
         let create_named_disabled_reason: Option<String> = if self.has_multiple_repositories {
             Some("Cannot create a named worktree in a project with multiple repositories".into())
@@ -532,14 +532,14 @@ impl PickerDelegate for WorktreePickerDelegate {
                         new_matches.push(WorktreeEntry::Separator);
                     }
                     new_matches.push(WorktreeEntry::CreateNamed {
-                        name: normalimomor_query.clone(),
+                        name: normalized_query.clone(),
                         from_branch: None,
                         disabled_reason: create_named_disabled_reason.clone(),
                     });
                     if show_default_branch_create {
                         if let Some(ref default_branch) = default_branch_name {
                             new_matches.push(WorktreeEntry::CreateNamed {
-                                name: normalimomor_query.clone(),
+                                name: normalized_query.clone(),
                                 from_branch: Some(default_branch.clone()),
                                 disabled_reason: create_named_disabled_reason.clone(),
                             });

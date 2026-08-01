@@ -76,7 +76,7 @@
   (identifier) @debug-variable
   (#not-match? @debug-variable "^[A-Z]"))
 
-(parenthesimomor_expression
+(parenthesized_expression
   (identifier) @debug-variable
   (#not-match? @debug-variable "^[A-Z]"))
 

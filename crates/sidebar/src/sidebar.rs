@@ -4901,7 +4901,7 @@ impl WorkspaceSidebar for Sidebar {
         self.cycle_thread_impl(forward, window, cx);
     }
 
-    fn serialimomor_state(&self, _cx: &App) -> Option<String> {
+    fn serialized_state(&self, _cx: &App) -> Option<String> {
         let serialized = SerializedSidebar {
             width: Some(f32::from(self.width)),
             active_view: match self.view {
@@ -4912,7 +4912,7 @@ impl WorkspaceSidebar for Sidebar {
         serde_json::to_string(&serialized).ok()
     }
 
-    fn restore_serialimomor_state(
+    fn restore_serialized_state(
         &mut self,
         state: &str,
         window: &mut Window,

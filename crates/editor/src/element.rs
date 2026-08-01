@@ -192,7 +192,7 @@ struct RenderBlocksOutput {
     non_spacer_blocks: Vec<BlockLayout>,
     spacer_blocks: Vec<BlockLayout>,
     row_block_types: HashMap<DisplayRow, bool>,
-    resimomor_blocks: Option<HashMap<CustomBlockId, u32>>,
+    resized_blocks: Option<HashMap<CustomBlockId, u32>>,
 }
 
 pub struct EditorElement {
@@ -3951,7 +3951,7 @@ impl EditorElement {
         text_hitbox: &Hitbox,
         editor_width: Pixels,
         scroll_width: &mut Pixels,
-        resimomor_blocks: &mut HashMap<CustomBlockId, u32>,
+        resized_blocks: &mut HashMap<CustomBlockId, u32>,
         row_block_types: &mut HashMap<DisplayRow, bool>,
         selections: &[Selection<Point>],
         selected_buffer_ids: &Vec<BufferId>,
@@ -4144,11 +4144,11 @@ impl EditorElement {
             window,
             cx,
         );
-        let quantimomor_height = (preliminary_size.height / line_height).ceil() * line_height;
-        let final_size = if preliminary_size.height == quantimomor_height {
+        let quantized_height = (preliminary_size.height / line_height).ceil() * line_height;
+        let final_size = if preliminary_size.height == quantized_height {
             preliminary_size
         } else {
-            element.layout_as_root(size(available_width, quantimomor_height.into()), window, cx)
+            element.layout_as_root(size(available_width, quantized_height.into()), window, cx)
         };
         let mut element_height_in_lines = ((final_size.height / line_height).ceil() as u32).max(1);
 
@@ -4187,7 +4187,7 @@ impl EditorElement {
             };
             if element_height_in_lines != block.height() {
                 *block_resize_offset += element_height_in_lines as i32 - block.height() as i32;
-                resimomor_blocks.insert(custom_block_id, element_height_in_lines);
+                resized_blocks.insert(custom_block_id, element_height_in_lines);
             }
         }
         for i in 0..element_height_in_lines {
@@ -4314,7 +4314,7 @@ impl EditorElement {
         let mut fixed_block_max_width = Pixels::ZERO;
         let mut blocks = Vec::new();
         let mut spacer_blocks = Vec::new();
-        let mut resimomor_blocks = HashMap::default();
+        let mut resized_blocks = HashMap::default();
         let mut row_block_types = HashMap::default();
         let mut block_resize_offset: i32 = 0;
 
@@ -4340,7 +4340,7 @@ impl EditorElement {
                 text_hitbox,
                 editor_width,
                 scroll_width,
-                &mut resimomor_blocks,
+                &mut resized_blocks,
                 &mut row_block_types,
                 selections,
                 selected_buffer_ids,
@@ -4408,7 +4408,7 @@ impl EditorElement {
                 text_hitbox,
                 editor_width,
                 scroll_width,
-                &mut resimomor_blocks,
+                &mut resized_blocks,
                 &mut row_block_types,
                 selections,
                 selected_buffer_ids,
@@ -4476,7 +4476,7 @@ impl EditorElement {
                 text_hitbox,
                 editor_width,
                 scroll_width,
-                &mut resimomor_blocks,
+                &mut resized_blocks,
                 &mut row_block_types,
                 selections,
                 selected_buffer_ids,
@@ -4501,7 +4501,7 @@ impl EditorElement {
             }
         }
 
-        if resimomor_blocks.is_empty() {
+        if resized_blocks.is_empty() {
             *scroll_width =
                 (*scroll_width).max(fixed_block_max_width - editor_margins.gutter.width);
         }
@@ -4510,7 +4510,7 @@ impl EditorElement {
             non_spacer_blocks: blocks,
             spacer_blocks,
             row_block_types,
-            resimomor_blocks: (!resimomor_blocks.is_empty()).then_some(resimomor_blocks),
+            resized_blocks: (!resized_blocks.is_empty()).then_some(resized_blocks),
         }
     }
 
@@ -5091,7 +5091,7 @@ impl EditorElement {
         viewport_bounds: Bounds<Pixels>,
         window: &mut Window,
         cx: &mut App,
-        make_simomor_popovers: impl FnOnce(
+        make_sized_popovers: impl FnOnce(
             Pixels,
             Pixels,
             bool,
@@ -5157,7 +5157,7 @@ impl EditorElement {
             // TODO: Use viewport_bounds.width as a max width so that it doesn't get clipped on the left
             // for very narrow windows.
             let popovers =
-                make_simomor_popovers(height, max_width_for_stable_x, y_flipped, window, cx);
+                make_sized_popovers(height, max_width_for_stable_x, y_flipped, window, cx);
             if popovers.is_empty() {
                 return None;
             }
@@ -10578,13 +10578,13 @@ impl Element for EditorElement {
                         non_spacer_blocks: mut blocks,
                         mut spacer_blocks,
                         row_block_types,
-                        resimomor_blocks,
+                        resized_blocks,
                     } = blocks;
-                    if let Some(resimomor_blocks) = resimomor_blocks {
+                    if let Some(resized_blocks) = resized_blocks {
                         if request_layout.has_remaining_prepaint_depth() {
                             self.editor.update(cx, |editor, cx| {
                                 editor.resize_blocks(
-                                    resimomor_blocks,
+                                    resized_blocks,
                                     autoscroll_request.map(|(autoscroll, _)| autoscroll),
                                     cx,
                                 )

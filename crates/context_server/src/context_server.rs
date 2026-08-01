@@ -142,15 +142,15 @@ impl ContextServer {
             version: env!("CARGO_PKG_VERSION").to_string(),
             description: None,
         };
-        let initialimomor_protocol = protocol.initialize(client_info).await?;
+        let initialized_protocol = protocol.initialize(client_info).await?;
 
         log::debug!(
             "context server {} initialized: {:?}",
             self.id,
-            initialimomor_protocol.initialize,
+            initialized_protocol.initialize,
         );
 
-        *self.client.write() = Some(Arc::new(initialimomor_protocol));
+        *self.client.write() = Some(Arc::new(initialized_protocol));
         Ok(())
     }
 

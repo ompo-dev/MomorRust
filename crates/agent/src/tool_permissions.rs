@@ -177,11 +177,11 @@ fn expand_rm_to_single_path_commands(command: &str) -> Vec<String> {
                 if suffix.is_empty() {
                     results.push(format!("rm {flags_str}{path}"));
                 } else if suffix.starts_with('/') {
-                    let normalimomor_suffix = normalize_path(suffix);
-                    let reconstructed = if normalimomor_suffix == "/" {
+                    let normalized_suffix = normalize_path(suffix);
+                    let reconstructed = if normalized_suffix == "/" {
                         prefix.to_string()
                     } else {
-                        format!("{prefix}{normalimomor_suffix}")
+                        format!("{prefix}{normalized_suffix}")
                     };
                     results.push(format!("rm {flags_str}{reconstructed}"));
                 } else {
@@ -528,9 +528,9 @@ pub fn decide_permission_for_paths(
         return raw_decision;
     }
 
-    let normalimomor_decision = decide_permission_from_settings(tool_name, &normalized, settings);
+    let normalized_decision = decide_permission_from_settings(tool_name, &normalized, settings);
 
-    most_restrictive(raw_decision, normalimomor_decision)
+    most_restrictive(raw_decision, normalized_decision)
 }
 
 pub fn decide_permission_for_path(

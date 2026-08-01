@@ -16,8 +16,6 @@ use theme_settings::{
 use ui::{ListItem, ListItemSpacing, prelude::*, v_flex};
 use util::ResultExt;
 use workspace::{ModalView, Workspace, ui::HighlightedLabel, with_active_or_new_workspace};
-use momor_actions::{ExtensionCategoryFilter, Extensions};
-
 use crate::icon_theme_selector::{IconThemeSelector, IconThemeSelectorDelegate};
 
 actions!(
@@ -500,46 +498,8 @@ impl PickerDelegate for ThemeSelectorDelegate {
         )
     }
 
-    fn render_footer(
-        &self,
-        _: &mut Window,
-        cx: &mut Context<Picker<Self>>,
-    ) -> Option<gpui::AnyElement> {
-        Some(
-            h_flex()
-                .p_2()
-                .w_full()
-                .justify_between()
-                .gap_2()
-                .border_t_1()
-                .border_color(cx.theme().colors().border_variant)
-                .child(
-                    Button::new("docs", "View Theme Docs")
-                        .end_icon(
-                            Icon::new(IconName::ArrowUpRight)
-                                .size(IconSize::Small)
-                                .color(Color::Muted),
-                        )
-                        .on_click(cx.listener(|_, _, _, cx| {
-                            cx.open_url("https://momor.dev/docs/themes");
-                        })),
-                )
-                .child(
-                    Button::new("more-themes", "Install Themes").on_click(cx.listener({
-                        move |_, _, window, cx| {
-                            window.dispatch_action(
-                                Box::new(Extensions {
-                                    category_filter: Some(ExtensionCategoryFilter::Themes),
-                                    id: None,
-                                }),
-                                cx,
-                            );
-                        }
-                    })),
-                )
-                .into_any_element(),
-        )
-    }
+    // ponytail: sem footer — "View Theme Docs"/"Install Themes" removidos a pedido.
+    // PickerDelegate::render_footer já retorna None por padrão.
 }
 
 #[cfg(test)]

@@ -145,7 +145,7 @@ impl<T> Outline<T> {
             .iter()
             .enumerate()
             .map(|(index, candidate)| {
-                let similarity = strsim::normalimomor_levenshtein(&candidate.string, query);
+                let similarity = strsim::normalized_levenshtein(&candidate.string, query);
                 (index, similarity)
             })
             .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())?;

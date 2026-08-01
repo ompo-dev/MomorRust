@@ -3144,7 +3144,7 @@ impl Thread {
             // Retrying these errors definitely shouldn't help.
             HttpResponseError {
                 status_code:
-                    StatusCode::PAYLOAD_TOO_LARGE | StatusCode::FORBIDDEN | StatusCode::UNAUTHORIMOMOR,
+                    StatusCode::PAYLOAD_TOO_LARGE | StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED,
                 ..
             }
             | AuthenticationError { .. }

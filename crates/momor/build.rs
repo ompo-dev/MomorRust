@@ -244,7 +244,7 @@ fn prepare_app_icon_x11() {
 
     let out_dir = env::var("OUT_DIR").unwrap();
 
-    let resimomor_image = ImageReader::open(icon_path())
+    let resized_image = ImageReader::open(icon_path())
         .unwrap()
         .decode()
         .unwrap()
@@ -252,7 +252,7 @@ fn prepare_app_icon_x11() {
 
     // name should match include_bytes! call in src/momor.rs
     let icon_out_path = Path::new(&out_dir).join("app_icon.png");
-    resimomor_image.save(&icon_out_path).expect("saving app icon");
+    resized_image.save(&icon_out_path).expect("saving app icon");
 
     println!("cargo:rerun-if-env-changed=RELEASE_CHANNEL");
     println!("cargo:rerun-if-changed={}", icon_path().to_string_lossy());

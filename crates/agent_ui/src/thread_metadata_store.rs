@@ -2210,7 +2210,7 @@ mod tests {
 
         let workspace_db = cx.update(|cx| WorkspaceDb::global(cx));
         let workspace_id = workspace_db.next_id().await.unwrap();
-        let serialimomor_paths = folder_paths.serialize();
+        let serialized_paths = folder_paths.serialize();
         let remote_connection_id = 1_i64;
         workspace_db
             .write(move |conn| {
@@ -2229,8 +2229,8 @@ mod tests {
                     "UPDATE workspaces SET paths = ?2, paths_order = ?3, remote_connection_id = ?4, timestamp = CURRENT_TIMESTAMP WHERE workspace_id = ?1",
                 )?;
                 let mut next_index = stmt.bind(&workspace_id, 1)?;
-                next_index = stmt.bind(&serialimomor_paths.paths, next_index)?;
-                next_index = stmt.bind(&serialimomor_paths.order, next_index)?;
+                next_index = stmt.bind(&serialized_paths.paths, next_index)?;
+                next_index = stmt.bind(&serialized_paths.order, next_index)?;
                 stmt.bind(&Some(remote_connection_id as i32), next_index)?;
                 stmt.exec()
             })

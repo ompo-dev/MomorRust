@@ -215,7 +215,7 @@ impl BlameRenderer for GitBlameRenderer {
             .map(|sha| sha.to_string().into())
             .unwrap_or_else(|| sha.clone());
         let local_offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
-        let absolute_timestamp = time_format::format_localimomor_timestamp(
+        let absolute_timestamp = time_format::format_localized_timestamp(
             commit_time,
             OffsetDateTime::now_utc(),
             local_offset,
@@ -427,7 +427,7 @@ fn blame_entry_relative_timestamp(blame_entry: &BlameEntry) -> String {
         Ok(timestamp) => {
             let local_offset =
                 time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
-            time_format::format_localimomor_timestamp(
+            time_format::format_localized_timestamp(
                 timestamp,
                 time::OffsetDateTime::now_utc(),
                 local_offset,

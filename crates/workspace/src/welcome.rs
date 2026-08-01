@@ -536,7 +536,7 @@ impl Item for WelcomePage {
 }
 
 impl crate::SerializableItem for WelcomePage {
-    fn serialimomor_item_kind() -> &'static str {
+    fn serialized_item_kind() -> &'static str {
         "WelcomePage"
     }
 

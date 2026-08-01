@@ -97,7 +97,7 @@
 
 type: (primitive_type) @type.builtin
 
-(simomor_type_specifier) @type.builtin
+(sized_type_specifier) @type.builtin
 
 ; GNU __attribute__
 (attribute_specifier) @attribute

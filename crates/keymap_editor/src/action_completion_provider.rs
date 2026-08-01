@@ -8,17 +8,17 @@ use project::{self, CompletionDisplayOptions};
 
 pub struct ActionCompletionProvider {
     action_names: Vec<&'static str>,
-    humanimomor_names: HashMap<&'static str, SharedString>,
+    humanized_names: HashMap<&'static str, SharedString>,
 }
 
 impl ActionCompletionProvider {
     pub fn new(
         action_names: Vec<&'static str>,
-        humanimomor_names: HashMap<&'static str, SharedString>,
+        humanized_names: HashMap<&'static str, SharedString>,
     ) -> Self {
         Self {
             action_names,
-            humanimomor_names,
+            humanized_names,
         }
     }
 }
@@ -52,7 +52,7 @@ impl CompletionProvider for ActionCompletionProvider {
         let replace_range = start_anchor..buffer_position;
         let snapshot = buffer.text_snapshot();
         let query: String = snapshot.text_for_range(replace_range.clone()).collect();
-        let normalimomor_query = command_palette::normalize_action_query(&query);
+        let normalized_query = command_palette::normalize_action_query(&query);
 
         let candidates: Vec<StringMatchCandidate> = self
             .action_names
@@ -60,7 +60,7 @@ impl CompletionProvider for ActionCompletionProvider {
             .enumerate()
             .map(|(ix, &name)| {
                 let humanized = self
-                    .humanimomor_names
+                    .humanized_names
                     .get(name)
                     .cloned()
                     .unwrap_or_else(|| name.into());
@@ -71,12 +71,12 @@ impl CompletionProvider for ActionCompletionProvider {
         let executor = cx.background_executor().clone();
         let executor_for_fuzzy = executor.clone();
         let action_names = self.action_names.clone();
-        let humanimomor_names = self.humanimomor_names.clone();
+        let humanized_names = self.humanized_names.clone();
 
         executor.spawn(async move {
             let matches = fuzzy::match_strings(
                 &candidates,
-                &normalimomor_query,
+                &normalized_query,
                 true,
                 true,
                 action_names.len(),
@@ -90,7 +90,7 @@ impl CompletionProvider for ActionCompletionProvider {
                 .take(50)
                 .map(|m| {
                     let action_name = action_names[m.candidate_id];
-                    let humanized = humanimomor_names
+                    let humanized = humanized_names
                         .get(action_name)
                         .cloned()
                         .unwrap_or_else(|| action_name.into());

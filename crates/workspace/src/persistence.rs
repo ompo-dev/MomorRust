@@ -324,7 +324,7 @@ pub async fn write_multi_workspace_state(
     }
 }
 
-pub fn read_serialimomor_multi_workspaces(
+pub fn read_serialized_multi_workspaces(
     session_workspaces: Vec<model::SessionWorkspace>,
     cx: &App,
 ) -> Vec<model::SerializedMultiWorkspace> {
@@ -4555,7 +4555,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn test_read_serialimomor_multi_workspaces_with_state(cx: &mut gpui::TestAppContext) {
+    async fn test_read_serialized_multi_workspaces_with_state(cx: &mut gpui::TestAppContext) {
         use crate::persistence::model::MultiWorkspaceState;
 
         // Write multi-workspace state for two windows via the scoped KVP.
@@ -4616,7 +4616,7 @@ mod tests {
             },
         ];
 
-        let results = cx.update(|cx| read_serialimomor_multi_workspaces(session_workspaces, cx));
+        let results = cx.update(|cx| read_serialized_multi_workspaces(session_workspaces, cx));
 
         // Should produce 3 results: window 10, window 20, and the orphan.
         assert_eq!(results.len(), 3);
@@ -5675,7 +5675,7 @@ mod tests {
         );
 
         let multi_workspaces =
-            cx.update(|_, cx| read_serialimomor_multi_workspaces(session_workspaces, cx));
+            cx.update(|_, cx| read_serialized_multi_workspaces(session_workspaces, cx));
         assert_eq!(
             multi_workspaces.len(),
             1,
@@ -5712,11 +5712,11 @@ mod tests {
         let app_state =
             multi_workspace.read_with(cx, |mw, cx| mw.workspace().read(cx).app_state().clone());
 
-        let serialimomor_mw = multi_workspaces.into_iter().next().unwrap();
+        let serialized_mw = multi_workspaces.into_iter().next().unwrap();
         let restored_handle: gpui::WindowHandle<MultiWorkspace> = cx
             .update(|_, cx| {
                 cx.spawn(async move |mut cx| {
-                    crate::restore_multiworkspace(serialimomor_mw, app_state, &mut cx).await
+                    crate::restore_multiworkspace(serialized_mw, app_state, &mut cx).await
                 })
             })
             .await

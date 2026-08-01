@@ -3953,15 +3953,15 @@ mod tests {
             let range = random_range_in_text(rng, &buffer_lines);
             let points = points_in_range(&range, &buffer_lines);
 
-            let optimimomor_patch = diff.patch_for_buffer_range(range.clone(), &buffer_snapshot);
+            let optimized_patch = diff.patch_for_buffer_range(range.clone(), &buffer_snapshot);
             let naive_patch = diff.patch_for_buffer_range_naive(&buffer_snapshot);
 
             for point in points {
-                let optimimomor_edit = optimimomor_patch.edit_for_old_position(point);
+                let optimized_edit = optimized_patch.edit_for_old_position(point);
                 let naive_edit = naive_patch.edit_for_old_position(point);
 
                 assert_eq!(
-                    optimimomor_edit,
+                    optimized_edit,
                     naive_edit,
                     "patch_for_buffer_range mismatch at point {:?} in range {:?}\nbase_text: {:?}\ninitial_buffer: {:?}\ncurrent_buffer: {:?}",
                     point,
@@ -3977,15 +3977,15 @@ mod tests {
             let range = random_range_in_text(rng, &base_lines);
             let points = points_in_range(&range, &base_lines);
 
-            let optimimomor_patch = diff.patch_for_base_text_range(range.clone(), &buffer_snapshot);
+            let optimized_patch = diff.patch_for_base_text_range(range.clone(), &buffer_snapshot);
             let naive_patch = diff.patch_for_base_text_range_naive(&buffer_snapshot);
 
             for point in points {
-                let optimimomor_edit = optimimomor_patch.edit_for_old_position(point);
+                let optimized_edit = optimized_patch.edit_for_old_position(point);
                 let naive_edit = naive_patch.edit_for_old_position(point);
 
                 assert_eq!(
-                    optimimomor_edit,
+                    optimized_edit,
                     naive_edit,
                     "patch_for_base_text_range mismatch at point {:?} in range {:?}\nbase_text: {:?}\ninitial_buffer: {:?}\ncurrent_buffer: {:?}",
                     point,

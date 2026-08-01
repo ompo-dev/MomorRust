@@ -1635,7 +1635,7 @@ impl LocalWorktree {
                 // but supporting streaming writes for arbitrary encodings would require a significant
                 // refactor of the `fs` crate to expose a Writer interface.
                 let text_string = text.to_string();
-                let normalimomor_text = match line_ending {
+                let normalized_text = match line_ending {
                     LineEnding::Unix => text_string,
                     LineEnding::Windows => text_string.replace('\n', "\r\n"),
                 };
@@ -1643,21 +1643,21 @@ impl LocalWorktree {
                 // Create the byte vector manually for UTF-16 encodings because encoding_rs encodes to UTF-8 by default (per WHATWG standards),
                 //  which is not what we want for saving files.
                 let bytes = if encoding == encoding_rs::UTF_16BE {
-                    let mut data = Vec::with_capacity(normalimomor_text.len() * 2 + 2);
+                    let mut data = Vec::with_capacity(normalized_text.len() * 2 + 2);
                     if has_bom {
                         data.extend_from_slice(&[0xFE, 0xFF]); // BOM
                     }
                     let utf16be_bytes =
-                        normalimomor_text.encode_utf16().flat_map(|u| u.to_be_bytes());
+                        normalized_text.encode_utf16().flat_map(|u| u.to_be_bytes());
                     data.extend(utf16be_bytes);
                     data.into()
                 } else if encoding == encoding_rs::UTF_16LE {
-                    let mut data = Vec::with_capacity(normalimomor_text.len() * 2 + 2);
+                    let mut data = Vec::with_capacity(normalized_text.len() * 2 + 2);
                     if has_bom {
                         data.extend_from_slice(&[0xFF, 0xFE]); // BOM
                     }
                     let utf16le_bytes =
-                        normalimomor_text.encode_utf16().flat_map(|u| u.to_le_bytes());
+                        normalized_text.encode_utf16().flat_map(|u| u.to_le_bytes());
                     data.extend(utf16le_bytes);
                     data.into()
                 } else {
@@ -1671,7 +1671,7 @@ impl LocalWorktree {
                     } else {
                         vec![]
                     };
-                    let (cow, _, _) = encoding.encode(&normalimomor_text);
+                    let (cow, _, _) = encoding.encode(&normalized_text);
                     if !bom_bytes.is_empty() {
                         let mut bytes = bom_bytes;
                         bytes.extend_from_slice(&cow);
@@ -4214,7 +4214,7 @@ impl BackgroundScanner {
         self.send_status_update(scanning, request.done, &[]).await
     }
 
-    fn normalimomor_events_for_worktree(
+    fn normalized_events_for_worktree(
         state: &BackgroundScannerState,
         root_canonical_path: &SanitizedPath,
         mut events: Vec<PathEvent>,
@@ -4328,7 +4328,7 @@ impl BackgroundScanner {
 
         {
             let state = self.state.lock().await;
-            events = Self::normalimomor_events_for_worktree(&state, &root_canonical_path, events);
+            events = Self::normalized_events_for_worktree(&state, &root_canonical_path, events);
         }
 
         fn skip_ix(ranges: &mut SmallVec<[Range<usize>; 4]>, ix: usize) {

@@ -271,14 +271,14 @@ jobs:
                 section = "Release Notes:\n\n" + "\n".join(bullets)
                 body_without_release_notes = (body[: match.start()] + body[match.end() :]).rstrip()
                 if body_without_release_notes:
-                    normalimomor_body = f"{body_without_release_notes}\n\n{section}\n"
+                    normalized_body = f"{body_without_release_notes}\n\n{section}\n"
                 else:
-                    normalimomor_body = f"{section}\n"
+                    normalized_body = f"{section}\n"
             else:
-                normalimomor_body = body.rstrip() + "\n\nRelease Notes:\n\n- N/A\n"
+                normalized_body = body.rstrip() + "\n\nRelease Notes:\n\n- N/A\n"
 
             with open(path, "w", encoding="utf-8") as file:
-                file.write(normalimomor_body)
+                file.write(normalized_body)
             ' "$BODY_FILE"
 
             EXISTING_PR="$(gh pr list --head "$BRANCH" --json number --jq '.[0].number')"

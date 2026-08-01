@@ -194,11 +194,11 @@ fn resolve_static_schema(path: &str) -> Option<String> {
         }
 
         "action" => {
-            let normalimomor_action_name = match rest {
+            let normalized_action_name = match rest {
                 Some(name) => name,
                 None => return None,
             };
-            let action_name = denormalize_action_name(normalimomor_action_name);
+            let action_name = denormalize_action_name(normalized_action_name);
 
             if let Some(cached) = ACTION_SCHEMA_CACHE.read().get(&action_name).cloned() {
                 return Some(cached);
@@ -412,8 +412,8 @@ async fn resolve_dynamic_schema(
         }
         "keymap" => cx.update(settings::KeymapFile::generate_json_schema_for_registered_actions),
         "action" => {
-            let normalimomor_action_name = rest.context("No Action name provided")?;
-            let action_name = denormalize_action_name(normalimomor_action_name);
+            let normalized_action_name = rest.context("No Action name provided")?;
+            let action_name = denormalize_action_name(normalized_action_name);
             let mut generator = settings::KeymapFile::action_schema_generator();
             let schema = cx
                 .update(|cx| cx.action_schema_by_name(&action_name, &mut generator))
@@ -521,11 +521,11 @@ pub fn all_schema_file_associations(
         .as_array_mut()
         .unwrap()
         .extend(cx.all_action_names().into_iter().map(|&name| {
-            let normalimomor_name = normalize_action_name(name);
-            let file_name = normalimomor_action_name_to_file_name(normalimomor_name.clone());
+            let normalized_name = normalize_action_name(name);
+            let file_name = normalized_action_name_to_file_name(normalized_name.clone());
             serde_json::json!({
                 "fileMatch": [file_name],
-                "url": format!("{SCHEMA_URI_PREFIX}action/{normalimomor_name}")
+                "url": format!("{SCHEMA_URI_PREFIX}action/{normalized_name}")
             })
         }));
 
@@ -585,13 +585,13 @@ pub fn denormalize_action_name(action_name: &str) -> String {
     action_name.replace("__", "::")
 }
 
-pub fn normalimomor_action_file_name(action_name: &str) -> String {
-    normalimomor_action_name_to_file_name(normalize_action_name(action_name))
+pub fn normalized_action_file_name(action_name: &str) -> String {
+    normalized_action_name_to_file_name(normalize_action_name(action_name))
 }
 
-pub fn normalimomor_action_name_to_file_name(mut normalimomor_action_name: String) -> String {
-    normalimomor_action_name.push_str(".json");
-    normalimomor_action_name
+pub fn normalized_action_name_to_file_name(mut normalized_action_name: String) -> String {
+    normalized_action_name.push_str(".json");
+    normalized_action_name
 }
 
 fn root_schema_from_action_schema(

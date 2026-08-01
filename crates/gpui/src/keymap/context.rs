@@ -654,7 +654,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_parenthesimomor_expressions() {
+    fn test_parse_parenthesized_expressions() {
         assert_eq!(
             KeyBindingContextPredicate::parse("a && (b == c || d != e)").unwrap(),
             And(

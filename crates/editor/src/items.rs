@@ -1182,7 +1182,7 @@ impl Item for Editor {
 }
 
 impl SerializableItem for Editor {
-    fn serialimomor_item_kind() -> &'static str {
+    fn serialized_item_kind() -> &'static str {
         "Editor"
     }
 
@@ -1209,19 +1209,19 @@ impl SerializableItem for Editor {
         window: &mut Window,
         cx: &mut App,
     ) -> Task<Result<Entity<Self>>> {
-        let serialimomor_editor = match EditorDb::global(cx)
-            .get_serialimomor_editor(item_id, workspace_id)
+        let serialized_editor = match EditorDb::global(cx)
+            .get_serialized_editor(item_id, workspace_id)
             .context("Failed to query editor state")
         {
-            Ok(Some(serialimomor_editor)) => {
+            Ok(Some(serialized_editor)) => {
                 if ProjectSettings::get_global(cx)
                     .session
                     .restore_unsaved_buffers
                 {
-                    serialimomor_editor
+                    serialized_editor
                 } else {
                     SerializedEditor {
-                        abs_path: serialimomor_editor.abs_path,
+                        abs_path: serialized_editor.abs_path,
                         contents: None,
                         language: None,
                         mtime: None,
@@ -1238,10 +1238,10 @@ impl SerializableItem for Editor {
             }
         };
         log::debug!(
-            "Deserialized editor {item_id:?} in workspace {workspace_id:?}, {serialimomor_editor:?}"
+            "Deserialized editor {item_id:?} in workspace {workspace_id:?}, {serialized_editor:?}"
         );
 
-        match serialimomor_editor {
+        match serialized_editor {
             SerializedEditor {
                 abs_path: None,
                 contents: Some(contents),
@@ -1312,7 +1312,7 @@ impl SerializableItem for Editor {
 
                         if let Some(contents) = contents {
                             buffer.update(cx, |buffer, cx| {
-                                restore_serialimomor_buffer_contents(buffer, contents, mtime, cx);
+                                restore_serialized_buffer_contents(buffer, contents, mtime, cx);
                             });
                         }
 
@@ -1342,7 +1342,7 @@ impl SerializableItem for Editor {
 
                             if let Some(contents) = contents {
                                 buffer.update(cx, |buffer, cx| {
-                                    restore_serialimomor_buffer_contents(buffer, contents, mtime, cx);
+                                    restore_serialized_buffer_contents(buffer, contents, mtime, cx);
                                 });
                             }
 
@@ -1442,7 +1442,7 @@ impl SerializableItem for Editor {
                     mtime,
                 };
                 log::debug!("Serializing editor {item_id:?} in workspace {workspace_id:?}");
-                db.save_serialimomor_editor(item_id, workspace_id, editor)
+                db.save_serialized_editor(item_id, workspace_id, editor)
                     .await
                     .context("failed to save serialized editor")
             })
@@ -2148,7 +2148,7 @@ fn path_for_file<'a>(
 /// This is somewhat wasteful since we load the whole buffer from disk then overwrite it,
 /// but keeps implementation simple as we don't need to persist all metadata from loading
 /// (git diff base, etc.).
-fn restore_serialimomor_buffer_contents(
+fn restore_serialized_buffer_contents(
     buffer: &mut Buffer,
     contents: String,
     mtime: Option<MTime>,
@@ -2405,7 +2405,7 @@ mod tests {
                 .unwrap()
                 .mtime;
 
-            let serialimomor_editor = SerializedEditor {
+            let serialized_editor = SerializedEditor {
                 abs_path: Some(PathBuf::from(path!("/file.rs"))),
                 contents: Some("fn main() {}".to_string()),
                 language: Some("Rust".to_string()),
@@ -2413,7 +2413,7 @@ mod tests {
             };
 
             editor_db
-                .save_serialimomor_editor(item_id, workspace_id, serialimomor_editor.clone())
+                .save_serialized_editor(item_id, workspace_id, serialized_editor.clone())
                 .await
                 .unwrap();
 
@@ -2442,7 +2442,7 @@ mod tests {
             let workspace_id = db.next_id().await.unwrap();
 
             let item_id = 5678 as ItemId;
-            let serialimomor_editor = SerializedEditor {
+            let serialized_editor = SerializedEditor {
                 abs_path: Some(PathBuf::from(path!("/file.rs"))),
                 contents: None,
                 language: None,
@@ -2450,7 +2450,7 @@ mod tests {
             };
 
             editor_db
-                .save_serialimomor_editor(item_id, workspace_id, serialimomor_editor)
+                .save_serialized_editor(item_id, workspace_id, serialized_editor)
                 .await
                 .unwrap();
 
@@ -2485,7 +2485,7 @@ mod tests {
             let workspace_id = db.next_id().await.unwrap();
 
             let item_id = 9012 as ItemId;
-            let serialimomor_editor = SerializedEditor {
+            let serialized_editor = SerializedEditor {
                 abs_path: None,
                 contents: Some("hello".to_string()),
                 language: Some("Rust".to_string()),
@@ -2493,7 +2493,7 @@ mod tests {
             };
 
             editor_db
-                .save_serialimomor_editor(item_id, workspace_id, serialimomor_editor)
+                .save_serialized_editor(item_id, workspace_id, serialized_editor)
                 .await
                 .unwrap();
 
@@ -2527,7 +2527,7 @@ mod tests {
 
             let item_id = 9345 as ItemId;
             let old_mtime = MTime::from_seconds_and_nanos(0, 50);
-            let serialimomor_editor = SerializedEditor {
+            let serialized_editor = SerializedEditor {
                 abs_path: Some(PathBuf::from(path!("/file.rs"))),
                 contents: Some("fn main() {}".to_string()),
                 language: Some("Rust".to_string()),
@@ -2535,7 +2535,7 @@ mod tests {
             };
 
             editor_db
-                .save_serialimomor_editor(item_id, workspace_id, serialimomor_editor)
+                .save_serialized_editor(item_id, workspace_id, serialized_editor)
                 .await
                 .unwrap();
 
@@ -2561,7 +2561,7 @@ mod tests {
             let workspace_id = db.next_id().await.unwrap();
 
             let item_id = 10000 as ItemId;
-            let serialimomor_editor = SerializedEditor {
+            let serialized_editor = SerializedEditor {
                 abs_path: None,
                 contents: None,
                 language: None,
@@ -2569,7 +2569,7 @@ mod tests {
             };
 
             editor_db
-                .save_serialimomor_editor(item_id, workspace_id, serialimomor_editor)
+                .save_serialized_editor(item_id, workspace_id, serialized_editor)
                 .await
                 .unwrap();
 
@@ -2614,7 +2614,7 @@ mod tests {
                 .mtime;
 
             // Simulate serialized state: file with unsaved changes
-            let serialimomor_editor = SerializedEditor {
+            let serialized_editor = SerializedEditor {
                 abs_path: Some(PathBuf::from(path!("/standalone.rs"))),
                 contents: Some("modified content".to_string()),
                 language: Some("Rust".to_string()),
@@ -2622,7 +2622,7 @@ mod tests {
             };
 
             editor_db
-                .save_serialimomor_editor(item_id, workspace_id, serialimomor_editor)
+                .save_serialized_editor(item_id, workspace_id, serialized_editor)
                 .await
                 .unwrap();
 
@@ -2740,7 +2740,7 @@ mod tests {
         let workspace_id = db.next_id().await.unwrap();
         let item_id = 99999 as ItemId;
 
-        let serialimomor_editor = SerializedEditor {
+        let serialized_editor = SerializedEditor {
             abs_path: Some(PathBuf::from(path!("/outside/settings.json"))),
             contents: None,
             language: None,
@@ -2748,7 +2748,7 @@ mod tests {
         };
 
         editor_db
-            .save_serialimomor_editor(item_id, workspace_id, serialimomor_editor)
+            .save_serialized_editor(item_id, workspace_id, serialized_editor)
             .await
             .unwrap();
 

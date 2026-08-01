@@ -90,7 +90,7 @@ pub use persistence::{
         DockData, DockStructure, ItemId, MultiWorkspaceState, SerializedMultiWorkspace,
         SerializedProjectGroup, SerializedWorkspaceLocation, SessionWorkspace,
     },
-    read_serialimomor_multi_workspaces,
+    read_serialized_multi_workspaces,
 };
 use persistence::{SerializedWindowBounds, model::SerializedWorkspace};
 use postage::stream::Stream;
@@ -1073,7 +1073,7 @@ impl SerializableItemRegistry {
 }
 
 pub fn register_serializable_item<I: SerializableItem>(cx: &mut App) {
-    let serialimomor_item_kind = I::serialimomor_item_kind();
+    let serialized_item_kind = I::serialized_item_kind();
 
     let registry = cx.default_global::<SerializableItemRegistry>();
     let descriptor = SerializableItemDescriptor {
@@ -1089,7 +1089,7 @@ pub fn register_serializable_item<I: SerializableItem>(cx: &mut App) {
     };
     registry
         .descriptors_by_kind
-        .insert(Arc::from(serialimomor_item_kind), descriptor);
+        .insert(Arc::from(serialized_item_kind), descriptor);
     registry
         .descriptors_by_type
         .insert(TypeId::of::<I>(), descriptor);
@@ -1880,9 +1880,9 @@ impl Workspace {
                 }
             }
 
-            let serialimomor_workspace = db.workspace_for_roots(paths_to_open.as_slice());
+            let serialized_workspace = db.workspace_for_roots(paths_to_open.as_slice());
 
-            if let Some(paths) = serialimomor_workspace.as_ref().map(|ws| &ws.paths) {
+            if let Some(paths) = serialized_workspace.as_ref().map(|ws| &ws.paths) {
                 paths_to_open = paths.ordered_paths().cloned().collect();
             }
 
@@ -1904,8 +1904,8 @@ impl Workspace {
                 }
             }
 
-            let workspace_id = if let Some(serialimomor_workspace) = serialimomor_workspace.as_ref() {
-                serialimomor_workspace.id
+            let workspace_id = if let Some(serialized_workspace) = serialized_workspace.as_ref() {
+                serialized_workspace.id
             } else {
                 db.next_id().await.unwrap_or_else(|_| Default::default())
             };
@@ -1937,7 +1937,7 @@ impl Workspace {
                     })
                     .await;
             }
-            if let Some(workspace) = serialimomor_workspace.as_ref() {
+            if let Some(workspace) = serialized_workspace.as_ref() {
                 project_handle.update(cx, |this, cx| {
                     for (scope, toolchains) in &workspace.user_toolchains {
                         for toolchain in toolchains {
@@ -1954,7 +1954,7 @@ impl Workspace {
 
             let (window, workspace): (WindowHandle<MultiWorkspace>, Entity<Workspace>) =
                 if let Some(window) = window_to_replace {
-                    let centered_layout = serialimomor_workspace
+                    let centered_layout = serialized_workspace
                         .as_ref()
                         .map(|w| w.centered_layout)
                         .unwrap_or(false);
@@ -1997,7 +1997,7 @@ impl Workspace {
 
                     let (window_bounds, display) = if let Some(bounds) = window_bounds_override {
                         (Some(WindowBounds::Windowed(bounds)), None)
-                    } else if let Some(workspace) = serialimomor_workspace.as_ref()
+                    } else if let Some(workspace) = serialized_workspace.as_ref()
                         && let Some(display) = workspace.display
                         && let Some(bounds) = workspace.window_bounds.as_ref()
                     {
@@ -2016,7 +2016,7 @@ impl Workspace {
                     // Use the serialized workspace to construct the new window
                     let mut options = cx.update(|cx| (app_state.build_window_options)(display, cx));
                     options.window_bounds = window_bounds;
-                    let centered_layout = serialimomor_workspace
+                    let centered_layout = serialized_workspace
                         .as_ref()
                         .map(|w| w.centered_layout)
                         .unwrap_or(false);
@@ -2056,7 +2056,7 @@ impl Workspace {
             // An empty workspace is one where project_paths is empty
             let is_empty_workspace = project_paths.is_empty();
             // Check if serialized workspace has paths before it's moved
-            let serialimomor_workspace_has_paths = serialimomor_workspace
+            let serialized_workspace_has_paths = serialized_workspace
                 .as_ref()
                 .map(|ws| !ws.paths.is_empty())
                 .unwrap_or(false);
@@ -2064,7 +2064,7 @@ impl Workspace {
             let opened_items = window
                 .update(cx, |_, window, cx| {
                     workspace.update(cx, |_workspace: &mut Workspace, cx| {
-                        open_items(serialimomor_workspace, project_paths, window, cx)
+                        open_items(serialized_workspace, project_paths, window, cx)
                     })
                 })?
                 .await
@@ -2074,18 +2074,18 @@ impl Workspace {
             // Only restore if:
             // 1. This is an empty workspace (no paths), AND
             // 2. The serialized workspace either doesn't exist or has no paths
-            if is_empty_workspace && !serialimomor_workspace_has_paths {
+            if is_empty_workspace && !serialized_workspace_has_paths {
                 if let Some(default_docks) = persistence::read_default_dock_state(&kvp) {
                     window
                         .update(cx, |_, window, cx| {
                             workspace.update(cx, |workspace, cx| {
-                                for (dock, serialimomor_dock) in [
+                                for (dock, serialized_dock) in [
                                     (&workspace.right_dock, &default_docks.right),
                                     (&workspace.left_dock, &default_docks.left),
                                     (&workspace.bottom_dock, &default_docks.bottom),
                                 ] {
                                     dock.update(cx, |dock, cx| {
-                                        dock.serialimomor_dock = Some(serialimomor_dock.clone());
+                                        dock.serialized_dock = Some(serialized_dock.clone());
                                         dock.restore_state(window, cx);
                                     });
                                 }
@@ -2214,7 +2214,7 @@ impl Workspace {
             (&self.right_dock, docks.right),
         ] {
             dock.update(cx, |dock, cx| {
-                dock.serialimomor_dock = Some(data);
+                dock.serialized_dock = Some(data);
                 dock.restore_state(window, cx);
             });
         }
@@ -6812,7 +6812,7 @@ impl Workspace {
                             let handle = handle.to_serializable_item_handle(cx)?;
 
                             Some(SerializedItem {
-                                kind: Arc::from(handle.serialimomor_item_kind()),
+                                kind: Arc::from(handle.serialized_item_kind()),
                                 item_id: handle.item_id().as_u64(),
                                 active: Some(handle.item_id()) == active_item_id,
                                 preview: pane.is_active_preview_item(handle.item_id()),
@@ -6827,7 +6827,7 @@ impl Workspace {
             SerializedPane::new(items, active, pinned_count)
         }
 
-        fn build_serialimomor_pane_group(
+        fn build_serialized_pane_group(
             pane_group: &Member,
             window: &mut Window,
             cx: &mut App,
@@ -6842,7 +6842,7 @@ impl Workspace {
                     axis: SerializedAxis(*axis),
                     children: members
                         .iter()
-                        .map(|member| build_serialimomor_pane_group(member, window, cx))
+                        .map(|member| build_serialized_pane_group(member, window, cx))
                         .collect::<Vec<_>>(),
                     flexes: Some(flexes.lock().clone()),
                 },
@@ -6852,7 +6852,7 @@ impl Workspace {
             }
         }
 
-        fn build_serialimomor_docks(
+        fn build_serialized_docks(
             this: &Workspace,
             window: &mut Window,
             cx: &mut App,
@@ -6866,7 +6866,7 @@ impl Workspace {
                     project
                         .bookmark_store()
                         .read(cx)
-                        .all_serialimomor_bookmarks(cx)
+                        .all_serialized_bookmarks(cx)
                 });
 
                 let breakpoints = self.project.update(cx, |project, cx| {
@@ -6881,12 +6881,12 @@ impl Workspace {
                     .user_toolchains(cx)
                     .unwrap_or_default();
 
-                let center_group = build_serialimomor_pane_group(&self.center.root, window, cx);
-                let docks = build_serialimomor_docks(self, window, cx);
+                let center_group = build_serialized_pane_group(&self.center.root, window, cx);
+                let docks = build_serialized_docks(self, window, cx);
                 let window_bounds = Some(SerializedWindowBounds(window.window_bounds()));
                 let identity_paths_hint = self.project_group_key(cx).path_list().clone();
 
-                let serialimomor_workspace = SerializedWorkspace {
+                let serialized_workspace = SerializedWorkspace {
                     id: database_id,
                     location,
                     paths,
@@ -6905,14 +6905,14 @@ impl Workspace {
 
                 let db = WorkspaceDb::global(cx);
                 window.spawn(cx, async move |_| {
-                    db.save_workspace(serialimomor_workspace).await;
+                    db.save_workspace(serialized_workspace).await;
                 })
             }
             WorkspaceLocation::DetachFromSession => {
                 let window_bounds = SerializedWindowBounds(window.window_bounds());
                 let display = window.display(cx).and_then(|d| d.uuid().ok());
                 // Save dock state for empty local workspaces
-                let docks = build_serialimomor_docks(self, window, cx);
+                let docks = build_serialized_docks(self, window, cx);
                 let db = WorkspaceDb::global(cx);
                 let kvp = db::kvp::KeyValueStore::global(cx);
                 window.spawn(cx, async move |_| {
@@ -6931,7 +6931,7 @@ impl Workspace {
             }
             WorkspaceLocation::None => {
                 // Save dock state for empty non-local workspaces
-                let docks = build_serialimomor_docks(self, window, cx);
+                let docks = build_serialized_docks(self, window, cx);
                 let kvp = db::kvp::KeyValueStore::global(cx);
                 window.spawn(cx, async move |_| {
                     persistence::write_default_dock_state(&kvp, docks)
@@ -7023,7 +7023,7 @@ impl Workspace {
     }
 
     pub(crate) fn load_workspace(
-        serialimomor_workspace: SerializedWorkspace,
+        serialized_workspace: SerializedWorkspace,
         paths_to_open: Vec<Option<ProjectPath>>,
         window: &mut Window,
         cx: &mut Context<Workspace>,
@@ -7035,9 +7035,9 @@ impl Workspace {
             let mut center_items = None;
 
             // Traverse the splits tree and add to things
-            if let Some((group, active_pane, items)) = serialimomor_workspace
+            if let Some((group, active_pane, items)) = serialized_workspace
                 .center_group
-                .deserialize(&project, serialimomor_workspace.id, workspace.clone(), cx)
+                .deserialize(&project, serialized_workspace.id, workspace.clone(), cx)
                 .await
             {
                 center_items = Some(items);
@@ -7046,12 +7046,12 @@ impl Workspace {
 
             let mut items_by_project_path = HashMap::default();
             let mut item_ids_by_kind = HashMap::default();
-            let mut all_deserialimomor_items = Vec::default();
+            let mut all_deserialized_items = Vec::default();
             cx.update(|_, cx| {
                 for item in center_items.unwrap_or_default().into_iter().flatten() {
                     if let Some(serializable_item_handle) = item.to_serializable_item_handle(cx) {
                         item_ids_by_kind
-                            .entry(serializable_item_handle.serialimomor_item_kind())
+                            .entry(serializable_item_handle.serialized_item_kind())
                             .or_insert(Vec::new())
                             .push(item.item_id().as_u64() as ItemId);
                     }
@@ -7059,7 +7059,7 @@ impl Workspace {
                     if let Some(project_path) = item.project_path(cx) {
                         items_by_project_path.insert(project_path, item.clone());
                     }
-                    all_deserialimomor_items.push(item);
+                    all_deserialized_items.push(item);
                 }
             })?;
 
@@ -7089,9 +7089,9 @@ impl Workspace {
                     }
                 }
 
-                let docks = serialimomor_workspace.docks;
+                let docks = serialized_workspace.docks;
 
-                for (dock, serialimomor_dock) in [
+                for (dock, serialized_dock) in [
                     (&mut workspace.right_dock, docks.right),
                     (&mut workspace.left_dock, docks.left),
                     (&mut workspace.bottom_dock, docks.bottom),
@@ -7099,7 +7099,7 @@ impl Workspace {
                 .iter_mut()
                 {
                     dock.update(cx, |dock, cx| {
-                        dock.serialimomor_dock = Some(serialimomor_dock.clone());
+                        dock.serialized_dock = Some(serialized_dock.clone());
                         dock.restore_state(window, cx);
                     });
                 }
@@ -7110,7 +7110,7 @@ impl Workspace {
             project
                 .update(cx, |project, cx| {
                     project.bookmark_store().update(cx, |bookmark_store, cx| {
-                        bookmark_store.load_serialimomor_bookmarks(serialimomor_workspace.bookmarks, cx)
+                        bookmark_store.load_serialized_bookmarks(serialized_workspace.bookmarks, cx)
                     })
                 })
                 .await
@@ -7122,7 +7122,7 @@ impl Workspace {
                         .breakpoint_store()
                         .update(cx, |breakpoint_store, cx| {
                             breakpoint_store
-                                .with_serialimomor_breakpoints(serialimomor_workspace.breakpoints, cx)
+                                .with_serialized_breakpoints(serialized_workspace.breakpoints, cx)
                         })
                 })
                 .await;
@@ -7138,7 +7138,7 @@ impl Workspace {
                     .map(|(item_kind, loaded_items)| {
                         SerializableItemRegistry::cleanup(
                             item_kind,
-                            serialimomor_workspace.id,
+                            serialized_workspace.id,
                             loaded_items,
                             window,
                             cx,
@@ -8159,14 +8159,14 @@ fn window_bounds_env_override() -> Option<Bounds<Pixels>> {
 }
 
 fn open_items(
-    serialimomor_workspace: Option<SerializedWorkspace>,
+    serialized_workspace: Option<SerializedWorkspace>,
     mut project_paths_to_open: Vec<(PathBuf, Option<ProjectPath>)>,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> impl 'static + Future<Output = Result<Vec<Option<Result<Box<dyn ItemHandle>>>>>> + use<> {
-    let restored_items = serialimomor_workspace.map(|serialimomor_workspace| {
+    let restored_items = serialized_workspace.map(|serialized_workspace| {
         Workspace::load_workspace(
-            serialimomor_workspace,
+            serialized_workspace,
             project_paths_to_open
                 .iter()
                 .map(|(_, project_path)| project_path)
@@ -9375,7 +9375,7 @@ pub async fn apply_restored_multiworkspace_state(
         window_handle
             .update(cx, |multi_workspace, window, cx| {
                 if let Some(sidebar) = multi_workspace.sidebar() {
-                    sidebar.restore_serialimomor_state(sidebar_state, window, cx);
+                    sidebar.restore_serialized_state(sidebar_state, window, cx);
                 }
                 multi_workspace.serialize(cx);
             })
@@ -9723,7 +9723,7 @@ pub fn local_workspace_windows(cx: &App) -> Vec<WindowHandle<MultiWorkspace>> {
 }
 
 pub fn workspace_windows_for_location(
-    serialimomor_location: &SerializedWorkspaceLocation,
+    serialized_location: &SerializedWorkspaceLocation,
     cx: &App,
 ) -> Vec<WindowHandle<MultiWorkspace>> {
     cx.windows()
@@ -9752,7 +9752,7 @@ pub fn workspace_windows_for_location(
                 multi_workspace.workspaces().any(|workspace| {
                     match workspace.read(cx).workspace_location(cx) {
                         WorkspaceLocation::Location(location, _) => {
-                            match (&location, serialimomor_location) {
+                            match (&location, serialized_location) {
                                 (
                                     SerializedWorkspaceLocation::Local,
                                     SerializedWorkspaceLocation::Local,
@@ -9940,11 +9940,11 @@ pub fn open_workspace_by_id(
     let db = WorkspaceDb::global(cx);
     let kvp = db::kvp::KeyValueStore::global(cx);
     cx.spawn(async move |cx| {
-        let serialimomor_workspace = db
+        let serialized_workspace = db
             .workspace_for_id(workspace_id)
             .with_context(|| format!("Workspace {workspace_id:?} not found"))?;
 
-        let centered_layout = serialimomor_workspace.centered_layout;
+        let centered_layout = serialized_workspace.centered_layout;
 
         let (window, workspace) = if let Some(window) = requesting_window {
             let workspace = window.update(cx, |multi_workspace, window, cx| {
@@ -9968,8 +9968,8 @@ pub fn open_workspace_by_id(
 
             let (window_bounds, display) = if let Some(bounds) = window_bounds_override {
                 (Some(WindowBounds::Windowed(bounds)), None)
-            } else if let Some(display) = serialimomor_workspace.display
-                && let Some(bounds) = serialimomor_workspace.window_bounds.as_ref()
+            } else if let Some(display) = serialized_workspace.display
+                && let Some(bounds) = serialized_workspace.window_bounds.as_ref()
             {
                 (Some(bounds.0), Some(display))
             } else if let Some((display, bounds)) = persistence::read_default_window_bounds(&kvp) {
@@ -10016,7 +10016,7 @@ pub fn open_workspace_by_id(
         window
             .update(cx, |_, window, cx| {
                 workspace.update(cx, |_workspace, cx| {
-                    open_items(Some(serialimomor_workspace), vec![], window, cx)
+                    open_items(Some(serialized_workspace), vec![], window, cx)
                 })
             })?
             .await?;
@@ -10317,7 +10317,7 @@ pub fn open_remote_project_with_new_connection(
     cx: &mut App,
 ) -> Task<Result<Vec<Option<Box<dyn ItemHandle>>>>> {
     cx.spawn(async move |cx| {
-        let (workspace_id, serialimomor_workspace) =
+        let (workspace_id, serialized_workspace) =
             deserialize_remote_project(remote_connection.connection_options(), paths.clone(), cx)
                 .await?;
 
@@ -10354,7 +10354,7 @@ pub fn open_remote_project_with_new_connection(
             project,
             paths,
             workspace_id,
-            serialimomor_workspace,
+            serialized_workspace,
             app_state,
             window,
             None,
@@ -10376,14 +10376,14 @@ pub fn open_remote_project_with_existing_connection(
     cx: &mut AsyncApp,
 ) -> Task<Result<Vec<Option<Box<dyn ItemHandle>>>>> {
     cx.spawn(async move |cx| {
-        let (workspace_id, serialimomor_workspace) =
+        let (workspace_id, serialized_workspace) =
             deserialize_remote_project(connection_options.clone(), paths.clone(), cx).await?;
 
         open_remote_project_inner(
             project,
             paths,
             workspace_id,
-            serialimomor_workspace,
+            serialized_workspace,
             app_state,
             window,
             provisional_project_group_key,
@@ -10398,7 +10398,7 @@ async fn open_remote_project_inner(
     project: Entity<Project>,
     paths: Vec<PathBuf>,
     workspace_id: WorkspaceId,
-    serialimomor_workspace: Option<SerializedWorkspace>,
+    serialized_workspace: Option<SerializedWorkspace>,
     app_state: Arc<AppState>,
     window: WindowHandle<MultiWorkspace>,
     provisional_project_group_key: Option<ProjectGroupKey>,
@@ -10458,7 +10458,7 @@ async fn open_remote_project_inner(
                 Workspace::new(Some(workspace_id), project, app_state.clone(), window, cx);
             workspace.update_history(cx);
 
-            if let Some(ref serialized) = serialimomor_workspace {
+            if let Some(ref serialized) = serialized_workspace {
                 workspace.centered_layout = serialized.centered_layout;
             }
 
@@ -10482,7 +10482,7 @@ async fn open_remote_project_inner(
         .update(cx, |_, window, cx| {
             window.activate_window();
             workspace.update(cx, |_workspace, cx| {
-                open_items(serialimomor_workspace, project_paths_to_open, window, cx)
+                open_items(serialized_workspace, project_paths_to_open, window, cx)
             })
         })?
         .await?;
@@ -10513,17 +10513,17 @@ fn deserialize_remote_project(
             .get_or_create_remote_connection(connection_options)
             .await?;
 
-        let serialimomor_workspace = db.remote_workspace_for_roots(&paths, remote_connection_id);
+        let serialized_workspace = db.remote_workspace_for_roots(&paths, remote_connection_id);
 
         let workspace_id = if let Some(workspace_id) =
-            serialimomor_workspace.as_ref().map(|workspace| workspace.id)
+            serialized_workspace.as_ref().map(|workspace| workspace.id)
         {
             workspace_id
         } else {
             db.next_id().await?
         };
 
-        Ok((workspace_id, serialimomor_workspace))
+        Ok((workspace_id, serialized_workspace))
     })
 }
 
@@ -11146,26 +11146,26 @@ pub fn remote_workspace_position_from_db(
             .get_or_create_remote_connection(connection_options)
             .await
             .context("fetching serialized ssh project")?;
-        let serialimomor_workspace = db.remote_workspace_for_roots(&paths, remote_connection_id);
+        let serialized_workspace = db.remote_workspace_for_roots(&paths, remote_connection_id);
 
         let (window_bounds, display) = if let Some(bounds) = window_bounds_env_override() {
             (Some(WindowBounds::Windowed(bounds)), None)
         } else {
-            let restorable_bounds = serialimomor_workspace
+            let restorable_bounds = serialized_workspace
                 .as_ref()
                 .and_then(|workspace| {
                     Some((workspace.display?, workspace.window_bounds.map(|b| b.0)?))
                 })
                 .or_else(|| persistence::read_default_window_bounds(&kvp));
 
-            if let Some((serialimomor_display, serialimomor_bounds)) = restorable_bounds {
-                (Some(serialimomor_bounds), Some(serialimomor_display))
+            if let Some((serialized_display, serialized_bounds)) = restorable_bounds {
+                (Some(serialized_bounds), Some(serialized_display))
             } else {
                 (None, None)
             }
         };
 
-        let centered_layout = serialimomor_workspace
+        let centered_layout = serialized_workspace
             .as_ref()
             .map(|w| w.centered_layout)
             .unwrap_or(false);

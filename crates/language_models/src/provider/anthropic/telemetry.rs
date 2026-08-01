@@ -106,7 +106,7 @@ async fn send_anthropic_event(
         .header("X-Api-Key", api_key)
         .header("Content-Type", "application/json");
 
-    let serialimomor_event = serde_json::json!({
+    let serialized_event = serde_json::json!({
         "completion_type": event.completion_type.as_str(),
         "event": event.event.as_str(),
         "metadata": {
@@ -117,7 +117,7 @@ async fn send_anthropic_event(
     });
 
     let request = request_builder
-        .body(AsyncBody::from(serialimomor_event.to_string()))
+        .body(AsyncBody::from(serialized_event.to_string()))
         .context("Failed to construct Anthropic telemetry HTTP request body")?;
 
     let response = client

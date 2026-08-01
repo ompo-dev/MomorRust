@@ -1698,21 +1698,21 @@ impl BufferStore {
         peer_id: proto::PeerId,
         cx: &mut Context<Self>,
     ) -> proto::ProjectTransaction {
-        let mut serialimomor_transaction = proto::ProjectTransaction {
+        let mut serialized_transaction = proto::ProjectTransaction {
             buffer_ids: Default::default(),
             transactions: Default::default(),
         };
         for (buffer, transaction) in project_transaction.0 {
             self.create_buffer_for_peer(&buffer, peer_id, cx)
                 .detach_and_log_err(cx);
-            serialimomor_transaction
+            serialized_transaction
                 .buffer_ids
                 .push(buffer.read(cx).remote_id().into());
-            serialimomor_transaction
+            serialized_transaction
                 .transactions
                 .push(language::proto::serialize_transaction(&transaction));
         }
-        serialimomor_transaction
+        serialized_transaction
     }
 
     pub(crate) fn register_project_search_result_handle(

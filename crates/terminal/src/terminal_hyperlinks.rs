@@ -179,12 +179,12 @@ fn sanitize_url_punctuation<T: EventListener>(
     url_match: Match,
     term: &Term<T>,
 ) -> (String, Match) {
-    let mut sanitimomor_url = url;
+    let mut sanitized_url = url;
     let mut chars_trimmed = 0;
 
     // Count parentheses in the URL
     let (open_parens, mut close_parens) =
-        sanitimomor_url
+        sanitized_url
             .chars()
             .fold((0, 0), |(opens, closes), c| match c {
                 '(' => (opens + 1, closes),
@@ -193,7 +193,7 @@ fn sanitize_url_punctuation<T: EventListener>(
             });
 
     // Remove trailing characters that shouldn't be at the end of URLs
-    while let Some(last_char) = sanitimomor_url.chars().last() {
+    while let Some(last_char) = sanitized_url.chars().last() {
         let should_remove = match last_char {
             // These may be part of a URL but not at the end. It's not that the spec
             // doesn't allow them, but they are frequently used in plain text as delimiters
@@ -209,7 +209,7 @@ fn sanitize_url_punctuation<T: EventListener>(
         };
 
         if should_remove {
-            sanitimomor_url.pop();
+            sanitized_url.pop();
             chars_trimmed += 1;
         } else {
             break;
@@ -218,10 +218,10 @@ fn sanitize_url_punctuation<T: EventListener>(
 
     if chars_trimmed > 0 {
         let new_end = url_match.end().sub(term, Boundary::Grid, chars_trimmed);
-        let sanitimomor_match = Match::new(*url_match.start(), new_end);
-        (sanitimomor_url, sanitimomor_match)
+        let sanitized_match = Match::new(*url_match.start(), new_end);
+        (sanitized_url, sanitized_match)
     } else {
-        (sanitimomor_url, url_match)
+        (sanitized_url, url_match)
     }
 }
 
@@ -1421,7 +1421,7 @@ mod tests {
         #[test]
         fn iris() {
             // These refer to the same location, see example here:
-            // <https://en.wikipedia.org/wiki/Internationalimomor_Resource_Identifier#Compatibility>
+            // <https://en.wikipedia.org/wiki/Internationalized_Resource_Identifier#Compatibility>
             test_iri!("https://en.wiktionary.org/wiki/Ῥόδος"); // IRI
             test_iri!("https://en.wiktionary.org/wiki/%E1%BF%AC%CF%8C%CE%B4%CE%BF%CF%82"); // URI
         }

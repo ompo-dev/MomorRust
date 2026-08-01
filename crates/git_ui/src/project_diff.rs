@@ -1177,7 +1177,7 @@ impl Render for ProjectDiff {
 }
 
 impl SerializableItem for ProjectDiff {
-    fn serialimomor_item_kind() -> &'static str {
+    fn serialized_item_kind() -> &'static str {
         "ProjectDiff"
     }
 

@@ -104,9 +104,9 @@ impl ApplicationMenu {
         ContextMenu::build(window, cx, |menu, window, cx| {
             // Grab current focus handle so menu can shown items in context with the focused element
             let menu = menu.when_some(window.focused(cx), |menu, focused| menu.context(focused));
-            let sanitimomor_items = Self::sanitize_menu_items(entry.menu.items);
+            let sanitized_items = Self::sanitize_menu_items(entry.menu.items);
 
-            sanitimomor_items
+            sanitized_items
                 .into_iter()
                 .fold(menu, |menu, item| match item {
                     OwnedMenuItem::Separator => menu.separator(),

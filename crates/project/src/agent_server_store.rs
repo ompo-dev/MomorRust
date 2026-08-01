@@ -424,10 +424,12 @@ impl AgentServerStore {
             return;
         };
 
-        let new_settings = cx
+        let mut new_settings = cx
             .global::<SettingsStore>()
             .get::<AllAgentServersSettings>(None)
             .clone();
+
+        new_settings.add_default_registry_agents();
 
         // If we don't have agents from the registry loaded yet, trigger a
         // refresh, which will cause this function to be called again
@@ -1109,7 +1111,7 @@ fn versioned_archive_cache_dir(
     archive_url: &str,
 ) -> PathBuf {
     let version = version.unwrap_or_default();
-    let sanitimomor_version = sanitize_path_component(version);
+    let sanitized_version = sanitize_path_component(version);
 
     let mut version_hasher = Sha256::new();
     version_hasher.update(version.as_bytes());
@@ -1120,7 +1122,7 @@ fn versioned_archive_cache_dir(
     let url_hash = format!("{:x}", url_hasher.finalize());
 
     base_dir.join(format!(
-        "v_{sanitimomor_version}_{}_{}",
+        "v_{sanitized_version}_{}_{}",
         &version_hash[..16],
         &url_hash[..16],
     ))
@@ -1679,10 +1681,36 @@ impl std::ops::DerefMut for AllAgentServersSettings {
     }
 }
 
+/// Agentes ACP oficiais sempre disponíveis, sem exigir entrada em `agent_servers`
+/// no settings.json. Ids do registry do ACP
+/// (<https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json>).
+///
+/// ponytail: lista fixa em vez de auto-registrar os ~38 do registry, que entupiria
+/// o seletor. Para expor todos, itere `AgentRegistryStore::agents()`.
+pub const DEFAULT_REGISTRY_AGENTS: [&str; 4] = ["claude-acp", "codex-acp", "cursor", "gemini"];
+
 impl AllAgentServersSettings {
     pub fn has_registry_agents(&self) -> bool {
         self.values()
             .any(|s| matches!(s, CustomAgentServerSettings::Registry { .. }))
+    }
+
+    /// Insere os agentes de [`DEFAULT_REGISTRY_AGENTS`] como se estivessem no
+    /// settings.json, para reusar o caminho de registry de `reregister_agents`
+    /// (guard de plataforma, guard de "não está no registry"). Entrada explícita
+    /// do usuário sempre vence.
+    pub fn add_default_registry_agents(&mut self) {
+        for id in DEFAULT_REGISTRY_AGENTS {
+            self.entry(id.to_string())
+                .or_insert_with(|| CustomAgentServerSettings::Registry {
+                    env: HashMap::default(),
+                    default_mode: None,
+                    default_model: None,
+                    favorite_models: Vec::new(),
+                    default_config_options: HashMap::default(),
+                    favorite_config_option_values: HashMap::default(),
+                });
+        }
     }
 }
 

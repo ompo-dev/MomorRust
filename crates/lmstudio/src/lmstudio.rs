@@ -367,8 +367,8 @@ pub async fn complete(
         request_builder = request_builder.header("Authorization", format!("Bearer {}", api_key));
     }
 
-    let serialimomor_request = serde_json::to_string(&request)?;
-    let request = request_builder.body(AsyncBody::from(serialimomor_request))?;
+    let serialized_request = serde_json::to_string(&request)?;
+    let request = request_builder.body(AsyncBody::from(serialized_request))?;
 
     let mut response = client.send(request).await?;
     if response.status().is_success() {

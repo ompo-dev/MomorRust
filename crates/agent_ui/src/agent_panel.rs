@@ -119,22 +119,22 @@ async fn write_global_last_used_agent(kvp: KeyValueStore, agent: Agent) {
     }
 }
 
-fn read_serialimomor_panel(
+fn read_serialized_panel(
     workspace_id: workspace::WorkspaceId,
     kvp: &KeyValueStore,
-) -> Option<SerialimomorAgentPanel> {
+) -> Option<SerializedAgentPanel> {
     let scope = kvp.scoped(AGENT_PANEL_KEY);
     let key = i64::from(workspace_id).to_string();
     scope
         .read(&key)
         .log_err()
         .flatten()
-        .and_then(|json| serde_json::from_str::<SerialimomorAgentPanel>(&json).log_err())
+        .and_then(|json| serde_json::from_str::<SerializedAgentPanel>(&json).log_err())
 }
 
-async fn save_serialimomor_panel(
+async fn save_serialized_panel(
     workspace_id: workspace::WorkspaceId,
-    panel: SerialimomorAgentPanel,
+    panel: SerializedAgentPanel,
     kvp: KeyValueStore,
 ) -> Result<()> {
     let scope = kvp.scoped(AGENT_PANEL_KEY);
@@ -145,15 +145,15 @@ async fn save_serialimomor_panel(
 
 /// Migration: reads the original single-panel format stored under the
 /// `"agent_panel"` KVP key before per-workspace keying was introduced.
-fn read_legacy_serialimomor_panel(kvp: &KeyValueStore) -> Option<SerialimomorAgentPanel> {
+fn read_legacy_serialized_panel(kvp: &KeyValueStore) -> Option<SerializedAgentPanel> {
     kvp.read_kvp(AGENT_PANEL_KEY)
         .log_err()
         .flatten()
-        .and_then(|json| serde_json::from_str::<SerialimomorAgentPanel>(&json).log_err())
+        .and_then(|json| serde_json::from_str::<SerializedAgentPanel>(&json).log_err())
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-struct SerialimomorAgentPanel {
+struct SerializedAgentPanel {
     selected_agent: Option<Agent>,
     #[serde(default)]
     last_active_thread: Option<SerializedActiveThread>,
@@ -755,7 +755,7 @@ impl AgentPanel {
             )
         });
         self.pending_serialization = Some(cx.background_spawn(async move {
-            let panel = SerialimomorAgentPanel {
+            let panel = SerializedAgentPanel {
                 selected_agent: Some(selected_agent),
                 last_active_thread,
                 draft_thread_prompt,
@@ -766,7 +766,7 @@ impl AgentPanel {
                 kvp.write_kvp(AGENT_PANEL_KEY.to_string(), json).await.log_err();
             }
             if let Some(workspace_id) = workspace_id {
-                save_serialimomor_panel(workspace_id, panel, kvp).await?;
+                save_serialized_panel(workspace_id, panel, kvp).await?;
             }
             anyhow::Ok(())
         }));
@@ -788,13 +788,13 @@ impl AgentPanel {
                 .ok()
                 .flatten();
 
-            let (serialimomor_panel, global_last_used_agent) = cx
+            let (serialized_panel, global_last_used_agent) = cx
                 .background_spawn(async move {
                     match kvp {
                         Some(kvp) => {
                             let panel = workspace_id
-                                .and_then(|id| read_serialimomor_panel(id, &kvp))
-                                .or_else(|| read_legacy_serialimomor_panel(&kvp));
+                                .and_then(|id| read_serialized_panel(id, &kvp))
+                                .or_else(|| read_legacy_serialized_panel(&kvp));
                             let global_agent = read_global_last_used_agent(&kvp);
                             (panel, global_agent)
                         }
@@ -803,12 +803,12 @@ impl AgentPanel {
                 })
                 .await;
 
-            let was_draft_active = serialimomor_panel
+            let was_draft_active = serialized_panel
                 .as_ref()
                 .and_then(|p| p.last_active_thread.as_ref())
                 .is_some_and(|t| t.session_id.is_none());
 
-            let last_active_thread = if let Some(thread_info) = serialimomor_panel
+            let last_active_thread = if let Some(thread_info) = serialized_panel
                 .as_ref()
                 .and_then(|p| p.last_active_thread.as_ref())
             {
@@ -853,8 +853,8 @@ impl AgentPanel {
                     let global_fallback =
                         global_last_used_agent.filter(|agent| !is_via_collab || agent.is_native());
 
-                    if let Some(serialimomor_panel) = &serialimomor_panel {
-                        if let Some(selected_agent) = serialimomor_panel.selected_agent.clone() {
+                    if let Some(serialized_panel) = &serialized_panel {
+                        if let Some(selected_agent) = serialized_panel.selected_agent.clone() {
                             panel.selected_agent = selected_agent;
                         } else if let Some(agent) = global_fallback {
                             panel.selected_agent = agent;
@@ -885,7 +885,7 @@ impl AgentPanel {
                     }
                 }
 
-                let draft_prompt = serialimomor_panel
+                let draft_prompt = serialized_panel
                     .as_ref()
                     .and_then(|p| p.draft_thread_prompt.clone());
 
@@ -2866,6 +2866,10 @@ impl AgentPanel {
                             .separator()
                             .action("Rules", Box::new(OpenRulesLibrary::default()))
                             .action("Profiles", Box::new(ManageProfiles::default()))
+                            .action(
+                                "Themes",
+                                Box::new(momor_actions::theme_selector::Toggle::default()),
+                            )
                             .action("Settings", Box::new(OpenSettings))
                             .separator()
                             .action("Toggle Threads Sidebar", Box::new(ToggleWorkspaceSidebar));
@@ -4043,15 +4047,15 @@ mod tests {
         cx.run_until_parked();
 
         let kvp = cx.update(|_window, cx| KeyValueStore::global(cx));
-        let serialized: Option<SerialimomorAgentPanel> = cx
-            .background_spawn(async move { read_serialimomor_panel(workspace_id, &kvp) })
+        let serialized: Option<SerializedAgentPanel> = cx
+            .background_spawn(async move { read_serialized_panel(workspace_id, &kvp) })
             .await;
-        let serialimomor_session_id = serialized
+        let serialized_session_id = serialized
             .as_ref()
             .and_then(|p| p.last_active_thread.as_ref())
             .and_then(|t| t.session_id.clone());
         assert_eq!(
-            serialimomor_session_id,
+            serialized_session_id,
             Some(resume_session_id.0.to_string()),
             "serialize() must preserve the restored session id even while the \
              ConversationView is in LoadError; otherwise the bug survives a \

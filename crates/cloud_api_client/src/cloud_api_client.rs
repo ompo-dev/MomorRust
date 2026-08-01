@@ -92,7 +92,7 @@ impl CloudApiClient {
         let mut response = self.http_client.send(request).await?;
 
         if !response.status().is_success() {
-            if response.status() == StatusCode::UNAUTHORIMOMOR {
+            if response.status() == StatusCode::UNAUTHORIZED {
                 return Err(ClientApiError::Unauthorized);
             }
 
@@ -172,7 +172,7 @@ impl CloudApiClient {
         let mut response = self.http_client.send(request).await?;
 
         if !response.status().is_success() {
-            if response.status() == StatusCode::UNAUTHORIMOMOR {
+            if response.status() == StatusCode::UNAUTHORIZED {
                 return Err(ClientApiError::Unauthorized);
             }
 
@@ -220,7 +220,7 @@ impl CloudApiClient {
         } else {
             let mut body = String::new();
             response.body_mut().read_to_string(&mut body).await?;
-            if response.status() == StatusCode::UNAUTHORIMOMOR {
+            if response.status() == StatusCode::UNAUTHORIZED {
                 Ok(false)
             } else {
                 Err(anyhow!(

@@ -39,7 +39,7 @@ static RENDERED_BLOCKS: std::sync::atomic::AtomicUsize = std::sync::atomic::Atom
 #[cfg(test)]
 static CREATED_MARKDOWNS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 #[cfg(test)]
-static SERIALIMOMOR_NOTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static SERIALIZED_NOTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// Cache de imagens de blocos ricos (```plot), por hash(lang+fonte). Rasterizar SVG é
 /// caro → só re-renderiza quando a fonte muda. Thread-local (o render é single-thread).
@@ -1725,7 +1725,7 @@ impl NoteDoc {
 
     fn markdown(&self, cx: &App) -> String {
         #[cfg(test)]
-        SERIALIMOMOR_NOTES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        SERIALIZED_NOTES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         self.blocks
             .iter()
@@ -4189,14 +4189,14 @@ scene.function({ expression: x => Math.sin(x) });
             body_list.logical_scroll_top()
         );
 
-        SERIALIMOMOR_NOTES.store(0, Ordering::Relaxed);
+        SERIALIZED_NOTES.store(0, Ordering::Relaxed);
         let editor = doc.read_with(cx, |doc, _| doc.blocks[0].editor.clone());
         for index in 0..5 {
             editor.update_in(cx, |editor, window, cx| {
                 editor.set_text(format!("Edicao {index}"), window, cx);
             });
         }
-        let serializations = SERIALIMOMOR_NOTES.load(Ordering::Relaxed);
+        let serializations = SERIALIZED_NOTES.load(Ordering::Relaxed);
         assert!(
             rendered < 200 && markdowns < 100 && serializations == 0,
             "um frame materializou {rendered} blocos, criou {markdowns} parsers Markdown de 1.000 e cinco edits serializaram {serializations} vezes; esperado apenas o viewport e zero serializacoes antes do debounce"
@@ -4205,7 +4205,7 @@ scene.function({ expression: x => Math.sin(x) });
         cx.executor().advance_clock(SAVE_DEBOUNCE);
         cx.run_until_parked();
         assert_eq!(
-            SERIALIMOMOR_NOTES.load(Ordering::Relaxed),
+            SERIALIZED_NOTES.load(Ordering::Relaxed),
             1,
             "a ultima edicao deve gerar exatamente um snapshot apos o debounce"
         );

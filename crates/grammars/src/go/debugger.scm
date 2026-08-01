@@ -35,7 +35,7 @@
   (expression_list
     (identifier) @debug-variable))
 
-(parenthesimomor_expression
+(parenthesized_expression
   (identifier) @debug-variable
   (#not-match? @debug-variable "^[A-Z]"))
 

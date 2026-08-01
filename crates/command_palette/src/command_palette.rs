@@ -50,17 +50,17 @@ pub fn normalize_action_query(input: &str) -> String {
     let mut last_char = None;
 
     for char in input.trim().chars() {
-        let normalimomor_char = if char == '_' { ' ' } else { char };
-        match (last_char, normalimomor_char) {
+        let normalized_char = if char == '_' { ' ' } else { char };
+        match (last_char, normalized_char) {
             (Some(':'), ':') => continue,
             (Some(last_char), c) if last_char.is_whitespace() && c.is_whitespace() => {
                 continue;
             }
             _ => {
-                last_char = Some(normalimomor_char);
+                last_char = Some(normalized_char);
             }
         }
-        result.push(normalimomor_char);
+        result.push(normalized_char);
     }
 
     result
@@ -893,7 +893,7 @@ mod tests {
         });
     }
     #[gpui::test]
-    async fn test_normalimomor_matches(cx: &mut TestAppContext) {
+    async fn test_normalized_matches(cx: &mut TestAppContext) {
         let app_state = init_test(cx);
         let project = Project::test(app_state.fs.clone(), [], cx).await;
         let (multi_workspace, cx) =

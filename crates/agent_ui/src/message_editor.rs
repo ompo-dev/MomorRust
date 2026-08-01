@@ -1366,7 +1366,7 @@ impl MessageEditor {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        let Some(text) = self.serialimomor_copy_text(cx) else {
+        let Some(text) = self.serialized_copy_text(cx) else {
             cx.propagate();
             return;
         };
@@ -1952,7 +1952,7 @@ impl MessageEditor {
         });
     }
 
-    fn serialimomor_copy_text(&self, cx: &mut App) -> Option<String> {
+    fn serialized_copy_text(&self, cx: &mut App) -> Option<String> {
         let display_snapshot = self
             .editor
             .update(cx, |editor, cx| editor.display_snapshot(cx));
@@ -4224,7 +4224,7 @@ mod tests {
 
         let copied_text = source_message_editor.update(&mut cx, |message_editor, cx| {
             message_editor
-                .serialimomor_copy_text(cx)
+                .serialized_copy_text(cx)
                 .expect("selection mentions should serialize")
         });
         let expected_text = format!(
@@ -4383,7 +4383,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn test_serialimomor_copy_text_selection_covers_only_mention(cx: &mut TestAppContext) {
+    async fn test_serialized_copy_text_selection_covers_only_mention(cx: &mut TestAppContext) {
         init_test(cx);
 
         let (fixture, mut cx) = setup_selection_mention_fixture(cx).await;
@@ -4404,14 +4404,14 @@ mod tests {
         let copied = fixture
             .message_editor
             .update(&mut cx, |message_editor, cx| {
-                message_editor.serialimomor_copy_text(cx)
+                message_editor.serialized_copy_text(cx)
             });
 
         assert_eq!(copied, Some(fixture.first_uri.as_link().to_string()));
     }
 
     #[gpui::test]
-    async fn test_serialimomor_copy_text_returns_none_when_mentions_outside_selection(
+    async fn test_serialized_copy_text_returns_none_when_mentions_outside_selection(
         cx: &mut TestAppContext,
     ) {
         init_test(cx);
@@ -4436,7 +4436,7 @@ mod tests {
         let copied = fixture
             .message_editor
             .update(&mut cx, |message_editor, cx| {
-                message_editor.serialimomor_copy_text(cx)
+                message_editor.serialized_copy_text(cx)
             });
 
         assert_eq!(copied, None);

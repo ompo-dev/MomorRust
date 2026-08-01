@@ -171,17 +171,17 @@ fn test_randomize_order() {
     );
 
     // Test randomized mode: different seeds can produce different execution orders
-    let mut randomimomor_results = HashSet::new();
+    let mut randomized_results = HashSet::new();
     for seed in 0..20 {
         let config = TestSchedulerConfig::with_seed(seed);
         let order = block_on(capture_execution_order(config));
         assert_eq!(order.len(), 6);
-        randomimomor_results.insert(order);
+        randomized_results.insert(order);
     }
 
     // Randomized mode should produce multiple different execution orders
     assert!(
-        randomimomor_results.len() > 1,
+        randomized_results.len() > 1,
         "Randomized mode should produce multiple different orders"
     );
 }

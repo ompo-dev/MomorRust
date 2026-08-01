@@ -542,8 +542,8 @@ async fn test_serialization_round_trip(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     // Capture the serialized state from the first sidebar.
-    let serialized = sidebar.read_with(cx, |sidebar, cx| sidebar.serialimomor_state(cx));
-    let serialized = serialized.expect("serialimomor_state should return Some");
+    let serialized = sidebar.read_with(cx, |sidebar, cx| sidebar.serialized_state(cx));
+    let serialized = serialized.expect("serialized_state should return Some");
 
     // Create a fresh sidebar and restore into it.
     let sidebar2 =
@@ -551,7 +551,7 @@ async fn test_serialization_round_trip(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     sidebar2.update_in(cx, |sidebar, window, cx| {
-        sidebar.restore_serialimomor_state(&serialized, window, cx);
+        sidebar.restore_serialized_state(&serialized, window, cx);
     });
     cx.run_until_parked();
 
@@ -564,7 +564,7 @@ async fn test_serialization_round_trip(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-async fn test_restore_serialimomor_archive_view_does_not_panic(cx: &mut TestAppContext) {
+async fn test_restore_serialized_archive_view_does_not_panic(cx: &mut TestAppContext) {
     // A regression test to ensure that restoring a serialized archive view does not panic.
     let project = init_test_project_with_agent_panel("/my-project", cx).await;
     let (multi_workspace, cx) =
@@ -582,7 +582,7 @@ async fn test_restore_serialimomor_archive_view_does_not_panic(cx: &mut TestAppC
 
     multi_workspace.update_in(cx, |multi_workspace, window, cx| {
         if let Some(sidebar) = multi_workspace.sidebar() {
-            sidebar.restore_serialimomor_state(&serialized, window, cx);
+            sidebar.restore_serialized_state(&serialized, window, cx);
         }
     });
     cx.run_until_parked();

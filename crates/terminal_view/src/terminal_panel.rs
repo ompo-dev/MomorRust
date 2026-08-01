@@ -255,7 +255,7 @@ impl TerminalPanel {
             })
             .ok()
             .flatten()
-            && let Some(serialimomor_panel) = cx
+            && let Some(serialized_panel) = cx
                 .background_spawn(async move { kvp.read_kvp(&serialization_key) })
                 .await
                 .log_err()
@@ -270,7 +270,7 @@ impl TerminalPanel {
                         workspace.weak_handle(),
                         workspace.project().clone(),
                         database_id,
-                        serialimomor_panel,
+                        serialized_panel,
                         window,
                         cx,
                     )

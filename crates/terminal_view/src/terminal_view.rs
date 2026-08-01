@@ -1731,7 +1731,7 @@ impl Item for TerminalView {
 }
 
 impl SerializableItem for TerminalView {
-    fn serialimomor_item_kind() -> &'static str {
+    fn serialized_item_kind() -> &'static str {
         "Terminal"
     }
 
