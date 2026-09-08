@@ -1,10 +1,5 @@
-//! Editor de blocos estilo Notion (WYSIWYG) pras notas. Cada bloco é um `Editor`
-//! auto-height estilizado pelo tipo (título grande, lista, tarefa com checkbox, etc.) —
-//! o markdown NÃO aparece cru. Enter cria bloco; `/` abre um menu custom com seções
-//! (Títulos / Blocos básicos / Mídia). Persiste como markdown (round-trip) pra a IA/tool.
-//!
-//! ponytail: v1 — Enter não divide o texto no cursor, sem drag pra reordenar, sem toolbar
-//! de negrito inline, sem Tabela (grid de células editáveis é a próxima feature grande).
+//! Documento WYSIWYG das notas, reuniões e skills. A estrutura interna e a persistência
+//! Markdown são compartilhadas com as ferramentas do Momor; a apresentação é contínua.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -25,7 +20,7 @@ use std::sync::Arc;
 
 use language::LanguageRegistry;
 use language::language_settings::SoftWrap;
-use markdown::{Markdown, MarkdownElement, MarkdownFont, MarkdownStyle};
+use markdown::{HeadingLevelStyles, Markdown, MarkdownElement, MarkdownFont, MarkdownStyle};
 use rope::Point;
 use settings::Settings as _;
 use ui::prelude::*;
@@ -50,15 +45,6 @@ thread_local! {
 
 const RICH_CACHE_MAX: usize = 64;
 const MATH_DRAG_INTERVAL: Duration = Duration::from_millis(16);
-
-/// Payload arrastado pra reordenar blocos.
-#[derive(Clone)]
-struct DraggedBlock(usize);
-impl Render for DraggedBlock {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        gpui::Empty
-    }
-}
 
 /// Payload da alça de redimensionar imagem (block_id).
 #[derive(Clone)]
@@ -183,6 +169,16 @@ const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 const MATH_ANIMATION_INTERVAL: Duration = Duration::from_millis(66);
 const BLOCK_HEIGHT_HINT: f32 = 28.;
 const FOOTER_HEIGHT_HINT: f32 = 200.;
+const DOCUMENT_WIDTH: f32 = 960.;
+const DOCUMENT_PADDING: f32 = 24.;
+
+fn document_column() -> gpui::Div {
+    v_flex()
+        .w_full()
+        .min_w_0()
+        .max_w(px(DOCUMENT_WIDTH))
+        .px(px(DOCUMENT_PADDING))
+}
 
 const COVERS: &[(&str, u32)] = &[
     ("1", 0x6366f1),
@@ -454,6 +450,8 @@ pub struct NoteDoc {
     pending_reparse: Option<(usize, String)>,
     /// Bloco de código com o menu de linguagem aberto.
     lang_menu: Option<usize>,
+    context_menu: Option<(Entity<ui::ContextMenu>, gpui::Point<gpui::Pixels>)>,
+    _context_menu_subscription: Option<Subscription>,
     /// Resize de imagem em andamento: (block_id, última posição x do mouse).
     img_resize: Option<(usize, f32)>,
     math_previews: HashMap<usize, MathPreviewState>,
@@ -594,6 +592,8 @@ impl NoteDoc {
             pending_convert: None,
             pending_reparse: None,
             lang_menu: None,
+            context_menu: None,
+            _context_menu_subscription: None,
             img_resize: None,
             math_previews: HashMap::new(),
             math_animation_tasks: HashMap::new(),
@@ -1339,7 +1339,7 @@ impl NoteDoc {
         self.schedule_save(cx);
     }
 
-    /// Move um bloco (arrastado) pra logo antes de `target_id`.
+    /// Move o conteúdo pra logo antes de `target_id`, preservando os editores vivos.
     fn move_block(&mut self, from_id: usize, target_id: usize, cx: &mut Context<Self>) {
         if from_id == target_id {
             return;
@@ -1357,31 +1357,6 @@ impl NoteDoc {
         self.blocks_reordered(from.min(target)..from.max(target) + 1, cx);
         cx.notify();
         self.schedule_save(cx);
-    }
-
-    /// `+` no gutter: abre o menu de tipo pra a PRÓPRIA linha (transforma ela, mantendo
-    /// o texto). Ex.: parágrafo "oi" → escolher Título → vira Título "oi". Não cria linha.
-    fn open_type_menu(&mut self, block_id: usize, cx: &mut Context<Self>) {
-        // Pré-seleciona o item do tipo ATUAL do bloco (discriminant p/ casar Todo(bool) etc.).
-        let selected = self
-            .blocks
-            .iter()
-            .find(|b| b.id == block_id)
-            .map(|b| b.kind)
-            .and_then(|kind| {
-                filtered_menu("").iter().position(|item| {
-                    std::mem::discriminant(&item.4) == std::mem::discriminant(&kind)
-                })
-            })
-            .unwrap_or(0);
-        self.slash = Some(SlashState {
-            block_id,
-            query: String::new(),
-            selected,
-        });
-        // Rola o menu até o item pré-selecionado (senão fica escondido lá embaixo).
-        self.scroll_to_selected(cx);
-        cx.notify();
     }
 
     /// Garante um parágrafo vazio no fim (sempre há onde continuar escrevendo).
@@ -1538,13 +1513,14 @@ impl NoteDoc {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.slash = None;
+        let slash = self.slash.take().filter(|state| state.block_id == block_id);
         if let Some(block) = self.blocks.iter().find(|b| b.id == block_id) {
             let editor = block.editor.clone();
             editor.update(cx, |e, cx| {
                 let text = e.text(cx);
-                if let Some(pos) = text.rfind('/') {
-                    e.set_text(text[..pos].to_string(), window, cx);
+                let without_query = text_without_slash_query(&text, slash.as_ref());
+                if without_query.len() != text.len() {
+                    e.set_text(without_query.to_string(), window, cx);
                 }
                 apply_editor_style(e, kind, cx);
             });
@@ -1861,17 +1837,27 @@ impl NoteDoc {
             v_flex()
                 .flex_none()
                 .w_full()
-                .px_12()
-                .pt_1()
-                .gap_1()
-                .child(Label::new(date).size(LabelSize::Small).color(Color::Muted))
+                .min_w_0()
+                .items_center()
                 .child(
-                    h_flex()
-                        .gap_2()
-                        .child(self.meeting_tab_btn("Notas", MeetingTab::Notas, cx))
-                        .child(self.meeting_tab_btn("Transcrição", MeetingTab::Transcricao, cx))
-                        .child(self.meeting_tab_btn("Resumo", MeetingTab::Resumo, cx))
-                        .child(self.meeting_tab_btn("Uso", MeetingTab::Uso, cx)),
+                    document_column()
+                        .pt_1()
+                        .pb_2()
+                        .gap_1()
+                        .child(Label::new(date).size(LabelSize::Small).color(Color::Muted))
+                        .child(
+                            h_flex()
+                                .flex_wrap()
+                                .gap_2()
+                                .child(self.meeting_tab_btn("Notas", MeetingTab::Notas, cx))
+                                .child(self.meeting_tab_btn(
+                                    "Transcrição",
+                                    MeetingTab::Transcricao,
+                                    cx,
+                                ))
+                                .child(self.meeting_tab_btn("Resumo", MeetingTab::Resumo, cx))
+                                .child(self.meeting_tab_btn("Uso", MeetingTab::Uso, cx)),
+                        ),
                 )
                 .into_any_element(),
         )
@@ -2303,6 +2289,23 @@ fn filtered_menu(
         .collect()
 }
 
+fn text_without_slash_query<'a>(text: &'a str, slash: Option<&SlashState>) -> &'a str {
+    let Some(slash) = slash else {
+        return text;
+    };
+    let Some(position) = text.rfind('/') else {
+        return text;
+    };
+    if (position == 0 || text[..position].ends_with([' ', '\n', '\t']))
+        && !text[position + 1..].chars().any(char::is_whitespace)
+        && text[position + 1..].to_lowercase() == slash.query
+    {
+        &text[..position]
+    } else {
+        text
+    }
+}
+
 /// Tipo do bloco criado ao dar Enter: listas/citação/código continuam; resto vira parágrafo.
 fn continuation_kind(kind: BlockKind) -> BlockKind {
     match kind {
@@ -2341,22 +2344,48 @@ fn style_for(kind: BlockKind) -> TextStyleRefinement {
     TextStyleRefinement {
         font_size: Some(px(size).into()),
         font_weight: Some(weight),
+        line_height: Some(px(size * 1.5).into()),
         ..Default::default()
     }
 }
 
 /// Igual ao `style_for`, mas usa a fonte monoespaçada do editor no bloco de código.
 fn block_style(kind: BlockKind, cx: &App) -> TextStyleRefinement {
-    let mut r = style_for(kind);
-    if matches!(kind, BlockKind::Code | BlockKind::Table) {
-        r.font_family = Some(
-            theme_settings::ThemeSettings::get_global(cx)
-                .buffer_font
-                .family
-                .clone(),
-        );
+    let settings = theme_settings::ThemeSettings::get_global(cx);
+    TextStyleRefinement {
+        font_family: Some(if matches!(kind, BlockKind::Code | BlockKind::Table) {
+            settings.buffer_font.family.clone()
+        } else {
+            settings.markdown_preview_font_family().clone()
+        }),
+        ..style_for(kind)
     }
-    r
+}
+
+fn note_markdown_style(window: &Window, cx: &App) -> MarkdownStyle {
+    let themed = MarkdownStyle::themed(MarkdownFont::Preview, window, cx);
+    let mut base_text_style = themed.base_text_style.clone();
+    base_text_style.refine(&block_style(BlockKind::Paragraph, cx));
+    MarkdownStyle {
+        base_text_style,
+        // A mesma linha mantém sua altura ao alternar entre preview e edição.
+        height_is_multiple_of_line_height: true,
+        heading: gpui::StyleRefinement {
+            margin: gpui::EdgesRefinement {
+                top: Some(px(0.).into()),
+                bottom: Some(px(0.).into()),
+                ..Default::default()
+            },
+            ..themed.heading.clone()
+        },
+        heading_level_styles: Some(HeadingLevelStyles {
+            h1: Some(style_for(BlockKind::H1)),
+            h2: Some(style_for(BlockKind::H2)),
+            h3: Some(style_for(BlockKind::H3)),
+            ..Default::default()
+        }),
+        ..themed
+    }
 }
 
 fn apply_editor_style(editor: &mut Editor, kind: BlockKind, cx: &mut Context<Editor>) {
@@ -2522,15 +2551,20 @@ impl NoteDoc {
     ) -> AnyElement {
         let Some(block) = self.blocks.get(index) else {
             return v_flex()
+                .w_full()
+                .min_w_0()
+                .items_center()
                 .child(
-                    div()
-                        .id("note-tail")
-                        .w_full()
-                        .min_h(px(160.))
-                        .cursor_text()
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.ensure_trailing(window, cx)),
-                        ),
+                    document_column().child(
+                        div()
+                            .id("note-tail")
+                            .w_full()
+                            .min_h(px(160.))
+                            .cursor_text()
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.ensure_trailing(window, cx)),
+                            ),
+                    ),
                 )
                 .pb_16()
                 .into_any_element();
@@ -2573,12 +2607,22 @@ impl NoteDoc {
             block_element
         };
 
-        div()
+        let (space_before, space_after) = match block.kind {
+            BlockKind::H1 | BlockKind::H2 | BlockKind::H3 => (24., 8.),
+            BlockKind::Bullet | BlockKind::Numbered | BlockKind::Todo(_) => (0., 2.),
+            BlockKind::Code | BlockKind::Table | BlockKind::Image | BlockKind::Divider => (8., 12.),
+            BlockKind::Paragraph | BlockKind::Quote => (0., 8.),
+        };
+        v_flex()
             .w_full()
-            .ml(px(-48.))
-            .when(index == 0, |element| element.mt_2())
-            .pb_1()
-            .child(row)
+            .min_w_0()
+            .items_center()
+            .child(
+                document_column()
+                    .pt(px(if index == 0 { 8. } else { space_before }))
+                    .pb(px(space_after))
+                    .child(row),
+            )
             .into_any_element()
     }
 }
@@ -2611,12 +2655,11 @@ impl Render for NoteDoc {
             div()
                 .flex_1()
                 .min_h(px(0.))
+                .min_w_0()
                 .w_full()
                 .relative()
                 .child(
-                    gpui::list(body_list.clone(), cx.processor(Self::render_body_item))
-                        .size_full()
-                        .px_12(),
+                    gpui::list(body_list.clone(), cx.processor(Self::render_body_item)).size_full(),
                 )
                 .custom_scrollbars(
                     Scrollbars::new(ScrollAxes::Vertical).tracked_scroll_handle(&body_list),
@@ -2631,17 +2674,19 @@ impl Render for NoteDoc {
             div()
                 .flex_1()
                 .min_h(px(0.))
+                .min_w_0()
                 .w_full()
                 .relative()
                 .child(
                     v_flex()
                         .id("note-scroll")
                         .size_full()
+                        .min_w_0()
+                        .items_center()
                         .overflow_y_scroll()
                         .track_scroll(&self.body_scroll)
-                        .px_12()
                         .pb_16()
-                        .child(body),
+                        .child(document_column().flex_none().child(body)),
                 )
                 .custom_scrollbars(
                     Scrollbars::new(ScrollAxes::Vertical).tracked_scroll_handle(&self.body_scroll),
@@ -2657,6 +2702,8 @@ impl Render for NoteDoc {
             .id("note-doc")
             .track_focus(&self.focus_handle)
             .size_full()
+            .min_w_0()
+            .bg(cx.theme().colors().editor_background)
             .on_action(cx.listener(Self::split_block))
             .on_action(cx.listener(Self::merge_backward))
             .on_action(cx.listener(Self::slash_confirm))
@@ -2702,16 +2749,17 @@ impl Render for NoteDoc {
             // Capa e cabeçalho ficam fixos no topo.
             .child(self.render_cover(cx))
             .child(
-                div()
+                v_flex()
                     .flex_none()
                     .w_full()
-                    .px_12()
-                    .pt_2()
-                    .child(self.render_header(cx)),
+                    .min_w_0()
+                    .items_center()
+                    .child(document_column().child(self.render_header(cx))),
             )
             // Abas da reunião (fixas, só p/ reunião).
             .children(tabbar)
             .child(scroll_body)
+            .children(self.render_context_menu())
     }
 }
 
@@ -2821,100 +2869,103 @@ impl NoteDoc {
     }
 
     fn render_cover(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        div().w_full().when_some(self.cover.clone(), |el, cover| {
-            // Cover pode ser uma cor predefinida ("1".."6") ou um caminho de imagem.
-            let color = COVERS
-                .iter()
-                .find(|(c, _)| *c == cover)
-                .map(|(_, rgb)| *rgb);
-            // Altura proporcional à LARGURA (banner ~3.5:1): nota mais larga → capa mais alta,
-            // mais estreita → mais baixa. `aspect_ratio` = largura/altura (taffy).
-            el.w_full()
-                .flex_none()
-                .aspect_ratio(3.5)
-                .max_h(px(360.))
-                .relative()
-                .overflow_hidden()
-                .map(|el| match color {
-                    Some(rgb) => el.bg(gpui::rgb(rgb)),
-                    None => el.child(
-                        img(PathBuf::from(cover.clone()))
-                            .absolute()
-                            .inset_0()
-                            .size_full()
-                            .object_fit(gpui::ObjectFit::Cover),
-                    ),
-                })
-                .child(
-                    h_flex()
-                        .absolute()
-                        .right_3()
-                        .bottom_3()
-                        .gap_1()
-                        .child(Button::new("cover-change", "Trocar").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.cover_menu_open = !this.cover_menu_open;
-                                cx.notify();
-                            },
-                        )))
-                        .child(Button::new("cover-remove", "Remover").on_click(cx.listener(
-                            |this, _, _, cx| {
-                                this.cover = None;
-                                this.cover_menu_open = false;
-                                this.save_chrome(cx);
-                                cx.notify();
-                            },
-                        ))),
-                )
-                .when(self.cover_menu_open, |el| {
-                    el.child(
+        div()
+            .w_full()
+            .flex_none()
+            .when_some(self.cover.clone(), |el, cover| {
+                // Cover pode ser uma cor predefinida ("1".."6") ou um caminho de imagem.
+                let color = COVERS
+                    .iter()
+                    .find(|(c, _)| *c == cover)
+                    .map(|(_, rgb)| *rgb);
+                // Limitar a capa fixa preserva espaço de escrita em janelas baixas.
+                el.w_full()
+                    .flex_none()
+                    .aspect_ratio(3.5)
+                    .max_h(px(220.))
+                    .relative()
+                    .overflow_hidden()
+                    .map(|el| match color {
+                        Some(rgb) => el.bg(gpui::rgb(rgb)),
+                        None => el.child(
+                            img(PathBuf::from(cover.clone()))
+                                .absolute()
+                                .inset_0()
+                                .size_full()
+                                .object_fit(gpui::ObjectFit::Cover),
+                        ),
+                    })
+                    .child(
                         h_flex()
                             .absolute()
                             .right_3()
-                            .bottom_12()
+                            .bottom_3()
                             .gap_1()
-                            .items_center()
-                            .p_1()
-                            .rounded_md()
-                            .bg(cx.theme().colors().elevated_surface_background)
-                            .children(COVERS.iter().map(|(id, rgb)| {
-                                let id = id.to_string();
-                                div()
-                                    .id(SharedString::from(format!("cover-{id}")))
-                                    .size(px(24.))
-                                    .rounded_sm()
-                                    .bg(gpui::rgb(*rgb))
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.cover = Some(id.clone());
-                                        this.cover_menu_open = false;
-                                        this.save_chrome(cx);
-                                        cx.notify();
-                                    }))
-                            }))
-                            .child(
-                                Button::new("cover-image", "Imagem")
-                                    .on_click(cx.listener(|this, _, _, cx| this.pick_cover(cx))),
-                            ),
+                            .child(Button::new("cover-change", "Trocar").on_click(cx.listener(
+                                |this, _, _, cx| {
+                                    this.cover_menu_open = !this.cover_menu_open;
+                                    cx.notify();
+                                },
+                            )))
+                            .child(Button::new("cover-remove", "Remover").on_click(cx.listener(
+                                |this, _, _, cx| {
+                                    this.cover = None;
+                                    this.cover_menu_open = false;
+                                    this.save_chrome(cx);
+                                    cx.notify();
+                                },
+                            ))),
                     )
-                })
-        })
+                    .when(self.cover_menu_open, |el| {
+                        el.child(
+                            h_flex()
+                                .absolute()
+                                .right_3()
+                                .bottom_12()
+                                .gap_1()
+                                .items_center()
+                                .p_1()
+                                .rounded_md()
+                                .bg(cx.theme().colors().elevated_surface_background)
+                                .children(COVERS.iter().map(|(id, rgb)| {
+                                    let id = id.to_string();
+                                    div()
+                                        .id(SharedString::from(format!("cover-{id}")))
+                                        .size(px(24.))
+                                        .rounded_sm()
+                                        .bg(gpui::rgb(*rgb))
+                                        .cursor_pointer()
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.cover = Some(id.clone());
+                                            this.cover_menu_open = false;
+                                            this.save_chrome(cx);
+                                            cx.notify();
+                                        }))
+                                }))
+                                .child(
+                                    Button::new("cover-image", "Imagem").on_click(
+                                        cx.listener(|this, _, _, cx| this.pick_cover(cx)),
+                                    ),
+                                ),
+                        )
+                    })
+            })
     }
 
-    /// Header estilo Notion: ícone (emoji OU imagem) sobre a borda inferior da capa,
-    /// com o título AO LADO. Abaixo, os botões de adicionar ícone/capa.
     fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let has_cover = self.cover.is_some();
         v_flex()
+            .w_full()
+            .min_w_0()
             .relative()
+            .pt_4()
+            .pb_3()
             .gap_1()
             .child(
                 h_flex()
-                    .items_end()
+                    .w_full()
+                    .min_w_0()
+                    .items_center()
                     .gap_3()
-                    // Ícone straddleia a borda inferior da capa (metade dentro, metade fora).
-                    .when(has_cover, |el| el.mt(px(-40.)))
-                    .when(!has_cover, |el| el.pt_8())
                     .when_some(self.icon.clone(), |el, icon| {
                         el.child(
                             div()
@@ -2931,7 +2982,7 @@ impl NoteDoc {
                     .child(
                         div()
                             .flex_1()
-                            .pb_1()
+                            .min_w_0()
                             .text_size(px(30.))
                             .child(self.title.clone()),
                     ),
@@ -2948,28 +2999,36 @@ impl NoteDoc {
             })
             .child(
                 h_flex()
+                    .flex_wrap()
                     .gap_2()
                     .when(self.icon.is_none(), |el| {
                         el.child(
-                            Button::new("add-icon", "Adicionar ícone").on_click(cx.listener(
-                                |this, _, _, cx| {
+                            Button::new("add-icon", "Adicionar ícone")
+                                .label_size(LabelSize::XSmall)
+                                .color(Color::Muted)
+                                .on_click(cx.listener(|this, _, _, cx| {
                                     this.icon_menu_open = !this.icon_menu_open;
                                     cx.notify();
-                                },
-                            )),
+                                })),
                         )
                     })
                     .when(self.cover.is_none(), |el| {
                         el.child(
-                            Button::new("add-cover", "Adicionar capa").on_click(cx.listener(
-                                |this, _, _, cx| {
+                            Button::new("add-cover", "Adicionar capa")
+                                .label_size(LabelSize::XSmall)
+                                .color(Color::Muted)
+                                .on_click(cx.listener(|this, _, _, cx| {
                                     this.cover = Some("1".to_string());
                                     this.save_chrome(cx);
                                     cx.notify();
-                                },
-                            )),
+                                })),
                         )
-                    }),
+                    })
+                    .child(
+                        Label::new("/ para inserir · botão direito para formatar")
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    ),
             )
     }
 
@@ -3043,38 +3102,130 @@ impl NoteDoc {
             )
     }
 
-    /// Gutter estilo Notion. EM FLUXO (reserva largura fixa) — assim a área dele faz parte
-    /// do hitbox do bloco e não some quando o mouse vai clicar. Conteúdo só aparece no hover.
-    fn render_gutter(&self, id: usize, cx: &mut Context<Self>) -> impl IntoElement {
-        h_flex()
-            .flex_none()
-            .w(px(48.))
-            .gap_0p5()
-            .justify_end()
-            .pr_1()
-            .pt(px(1.))
-            .invisible()
-            .group_hover("blk", |s| s.visible())
-            .child(
-                IconButton::new(SharedString::from(format!("add-{id}")), IconName::Plus)
-                    .icon_size(IconSize::Small)
-                    .tooltip(ui::Tooltip::text("Transformar esta linha"))
-                    .on_click(cx.listener(move |this, _, _, cx| this.open_type_menu(id, cx))),
+    fn open_context_menu(
+        &mut self,
+        id: usize,
+        position: gpui::Point<gpui::Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.blocks.iter().position(|block| block.id == id) else {
+            return;
+        };
+        let block = &self.blocks[index];
+        let clipboard_editor = block
+            .cells
+            .iter()
+            .flatten()
+            .find(|cell| cell.focus_handle(cx).is_focused(window))
+            .or_else(|| block.cells.first().and_then(|row| row.first()))
+            .unwrap_or(&block.editor)
+            .clone();
+        let editable = !matches!(block.kind, BlockKind::Image | BlockKind::Divider);
+        let previous = index.checked_sub(1).map(|index| self.blocks[index].id);
+        let next = self.blocks.get(index + 1).map(|block| block.id);
+        let doc = cx.entity();
+        let format_doc = cx.weak_entity();
+        let menu = ui::ContextMenu::build(window, cx, |menu, window, _cx| {
+            menu.submenu("Formatar como", move |mut menu, window, _cx| {
+                    let Some(doc) = format_doc.upgrade() else {
+                        return menu;
+                    };
+                    for &(_, label, _, _, kind) in MENU {
+                        menu = menu.entry(
+                            label,
+                            None,
+                            window.handler_for(&doc, move |this, window, cx| {
+                                this.apply_menu_item(id, kind, window, cx);
+                                if let Some(block) = this.blocks.iter().find(|block| block.id == id)
+                                    && !matches!(kind, BlockKind::Image | BlockKind::Divider)
+                                {
+                                    let editor = block
+                                        .cells
+                                        .first()
+                                        .and_then(|row| row.first())
+                                        .unwrap_or(&block.editor);
+                                    window.focus(&editor.focus_handle(cx), cx);
+                                }
+                            }),
+                        );
+                    }
+                    menu
+                })
+                .when_some(previous, |menu, previous| {
+                    menu.entry(
+                        "Mover para cima",
+                        None,
+                        window.handler_for(&doc, move |this, _, cx| {
+                            this.move_block(id, previous, cx);
+                        }),
+                    )
+                })
+                .when_some(next, |menu, next| {
+                    menu.entry(
+                        "Mover para baixo",
+                        None,
+                        window.handler_for(&doc, move |this, _, cx| {
+                            this.move_block(next, id, cx);
+                        }),
+                    )
+                })
+                .when(editable, |menu| {
+                    // O editor pode estar desmontado enquanto o preview está visível.
+                    // Chamar diretamente mantém o clipboard independente da árvore de foco.
+                    menu.separator()
+                        .entry("Recortar", Some(Box::new(editor::actions::Cut)), window.handler_for(&clipboard_editor, |editor, window, cx| {
+                            window.focus(&editor.focus_handle(cx), cx);
+                            editor.cut(&editor::actions::Cut, window, cx);
+                        }))
+                        .entry("Copiar", Some(Box::new(editor::actions::Copy)), window.handler_for(&clipboard_editor, |editor, window, cx| {
+                            editor.copy(&editor::actions::Copy, window, cx);
+                        }))
+                        .entry("Colar", Some(Box::new(editor::actions::Paste)), window.handler_for(&clipboard_editor, |editor, window, cx| {
+                            window.focus(&editor.focus_handle(cx), cx);
+                            editor.paste(&editor::actions::Paste, window, cx);
+                        }))
+                })
+        });
+        let previous_focus = window
+            .focused(cx)
+            .unwrap_or_else(|| self.focus_handle.clone());
+        self._context_menu_subscription = Some(cx.subscribe_in(
+            &menu,
+            window,
+            move |this, menu, _: &gpui::DismissEvent, window, cx| {
+                if menu.focus_handle(cx).contains_focused(window, cx) {
+                    window.focus(&previous_focus, cx);
+                }
+                this.context_menu = None;
+                cx.notify();
+            },
+        ));
+        self.slash = None;
+        self.link = None;
+        self.context_menu = Some((menu.clone(), position));
+        // O menu só entra na árvore de foco depois do desenho deferred.
+        cx.on_next_frame(window, move |_, window, cx| {
+            cx.on_next_frame(window, move |this, window, cx| {
+                if this.context_menu.as_ref().is_some_and(|(active, _)| *active == menu) {
+                    window.focus(&menu.focus_handle(cx), cx);
+                }
+            });
+        });
+        cx.notify();
+    }
+
+    fn render_context_menu(&self) -> Option<AnyElement> {
+        self.context_menu.as_ref().map(|(menu, position)| {
+            gpui::deferred(
+                gpui::anchored()
+                    .position(*position)
+                    .snap_to_window_with_margin(px(8.))
+                    .child(div().occlude().child(menu.clone())),
             )
-            .child(
-                div()
-                    .id(SharedString::from(format!("drag-{id}")))
-                    .cursor_grab()
-                    .p_1()
-                    .rounded_sm()
-                    .hover(|s| s.bg(cx.theme().colors().element_hover))
-                    .on_drag(DraggedBlock(id), |d, _, _, cx| cx.new(|_| d.clone()))
-                    .child(
-                        Icon::new(IconName::Menu)
-                            .size(IconSize::Small)
-                            .color(Color::Muted),
-                    ),
-            )
+            .with_priority(1)
+            .into_any_element()
+        })
     }
 
     /// Preview renderizado de um code block "rico" (```plot). None p/ blocos normais ou
@@ -3872,10 +4023,7 @@ impl NoteDoc {
                                     window.focus(&handle, cx);
                                 }
                             }))
-                            .child(MarkdownElement::new(
-                                md,
-                                MarkdownStyle::themed(MarkdownFont::Preview, window, cx),
-                            ));
+                            .child(MarkdownElement::new(md, note_markdown_style(window, cx)));
                         // Listas mantêm o marcador (•, número, checkbox) ao lado do conteúdo.
                         match self.list_marker(block.kind, id, number_label, cx) {
                             Some(marker) => h_flex()
@@ -3994,15 +4142,11 @@ impl NoteDoc {
                             let has_rich_preview = rich_preview.is_some();
                             let show_source = rich_preview.is_none() || focused;
                             let source_height =
-                                text.lines().count().clamp(8, 22) as f32 * 22.0 + 28.0;
+                                text.lines().count().clamp(2, 22) as f32 * 24.0 + 24.0;
                             let source_editor = div()
                                 .w_full()
                                 .h(px(source_height))
-                                .min_h(px(180.))
-                                .rounded_md()
-                                .border_1()
-                                .border_color(cx.theme().colors().border)
-                                .bg(cx.theme().colors().editor_background)
+                                .min_h(px(72.))
                                 .overflow_hidden()
                                 .child(block.editor.clone());
                             row.child(
@@ -4011,28 +4155,70 @@ impl NoteDoc {
                                     .w_full()
                                     .rounded_md()
                                     .when(!has_rich_preview || show_source, |el| {
-                                        el.bg(cx.theme().colors().editor_background)
+                                        el.bg(cx.theme().colors().element_background)
                                     })
                                     .child(
                                         // Cabeçalho do bloco: pill com a linguagem (abre o menu).
-                                        h_flex().justify_end().px_2().pt_1().child(
-                                            div()
-                                                .id(SharedString::from(format!("lang-{id}")))
-                                                .px_1p5()
-                                                .rounded_sm()
-                                                .cursor_pointer()
-                                                .hover(|s| s.bg(cx.theme().colors().element_hover))
-                                                .child(
-                                                    Label::new(lang_label)
-                                                        .size(LabelSize::XSmall)
-                                                        .color(Color::Muted),
+                                        h_flex()
+                                            .justify_between()
+                                            .px_2()
+                                            .pt_1()
+                                            .child(
+                                                div()
+                                                    .id(SharedString::from(format!("lang-{id}")))
+                                                    .px_1p5()
+                                                    .rounded_sm()
+                                                    .cursor_pointer()
+                                                    .hover(|s| {
+                                                        s.bg(cx.theme().colors().element_hover)
+                                                    })
+                                                    .child(
+                                                        Label::new(lang_label)
+                                                            .size(LabelSize::XSmall)
+                                                            .color(Color::Muted),
+                                                    )
+                                                    .on_click(cx.listener(
+                                                        move |this, _, _, cx| {
+                                                            this.lang_menu = (this.lang_menu
+                                                                != Some(id))
+                                                            .then_some(id);
+                                                            cx.notify();
+                                                        },
+                                                    )),
+                                            )
+                                            .when(has_rich_preview, |bar| {
+                                                bar.child(
+                                                    Button::new(
+                                                        SharedString::from(format!(
+                                                            "rich-source-{id}"
+                                                        )),
+                                                        if show_source {
+                                                            "Visualizar"
+                                                        } else {
+                                                            "Editar código"
+                                                        },
+                                                    )
+                                                    .on_click(cx.listener(
+                                                        move |this, _, window, cx| {
+                                                            if show_source {
+                                                                window
+                                                                    .focus(&this.focus_handle, cx);
+                                                            } else if let Some(block) = this
+                                                                .blocks
+                                                                .iter()
+                                                                .find(|block| block.id == id)
+                                                            {
+                                                                window.focus(
+                                                                    &block.editor.focus_handle(cx),
+                                                                    cx,
+                                                                );
+                                                            }
+                                                            this.remeasure_block(id);
+                                                            cx.notify();
+                                                        },
+                                                    )),
                                                 )
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    this.lang_menu =
-                                                        (this.lang_menu != Some(id)).then_some(id);
-                                                    cx.notify();
-                                                })),
-                                        ),
+                                            }),
                                     )
                                     .when(show_source, |el| {
                                         el.child(div().px_2().pb_2().child(source_editor))
@@ -4067,19 +4253,20 @@ impl NoteDoc {
             }
         };
 
-        // Envelope comum: gutter (hover, em fluxo) + alvo de drop pra reordenar.
-        h_flex()
-            .group("blk")
+        div()
+            .id(SharedString::from(format!("note-line-{id}")))
             .w_full()
-            .items_start()
-            .drag_over::<DraggedBlock>(|el, _, _, cx| {
-                el.border_t_2()
-                    .border_color(cx.theme().colors().border_focused)
-            })
-            .on_drop(cx.listener(move |this, dragged: &DraggedBlock, _, cx| {
-                this.move_block(dragged.0, id, cx)
-            }))
-            .child(self.render_gutter(id, cx))
+            .min_w_0()
+            // Os editores consomem o botão direito no bubble; capturamos antes deles.
+            .capture_any_mouse_down(cx.listener(
+                move |this, event: &gpui::MouseDownEvent, window, cx| {
+                    if event.button == gpui::MouseButton::Right {
+                        cx.stop_propagation();
+                        window.prevent_default();
+                        this.open_context_menu(id, event.position, window, cx);
+                    }
+                },
+            ))
             .child(
                 div()
                     .id(SharedString::from(format!("blk-content-{id}")))
@@ -4104,6 +4291,29 @@ mod tests {
     use settings::SettingsStore;
     use std::sync::atomic::Ordering;
     use std::time::Instant;
+
+    #[test]
+    fn formatting_preserves_paths_links_and_literal_slashes() {
+        let text = "[[Pasta]] https://example.com/notas /texto";
+        assert_eq!(text_without_slash_query(text, None), text);
+        let slash = SlashState {
+            block_id: 0,
+            query: "texto".into(),
+            selected: 0,
+        };
+        assert_eq!(
+            text_without_slash_query("[[Pasta]] https://example.com/notas /Texto", Some(&slash)),
+            "[[Pasta]] https://example.com/notas "
+        );
+        for text in [
+            "https://example.com/texto",
+            "pasta/texto",
+            "anotação / texto",
+            "anotação /outro",
+        ] {
+            assert_eq!(text_without_slash_query(text, Some(&slash)), text);
+        }
+    }
 
     #[test]
     fn detects_pasted_mathstudio_document_as_blocks() {
