@@ -265,6 +265,39 @@ impl CdpClient {
             .decode(encoded)
             .context("Obscura returned invalid screenshot data")
     }
+
+    pub async fn start_screencast(
+        &self,
+        page: &BrowserPage,
+    ) -> Result<broadcast::Receiver<CdpEvent>> {
+        let events = self.subscribe();
+        self.send_with_session(
+            "Page.startScreencast",
+            json!({
+                "format": "png",
+                "maxWidth": 2048,
+                "maxHeight": 2048,
+                "everyNthFrame": 1,
+            }),
+            Some(&page.session_id),
+        )
+        .await?;
+        Ok(events)
+    }
+
+    async fn acknowledge_screencast_frame(
+        &self,
+        page: &BrowserPage,
+        session_id: i64,
+    ) -> Result<()> {
+        self.send_with_session(
+            "Page.screencastFrameAck",
+            json!({ "sessionId": session_id }),
+            Some(&page.session_id),
+        )
+        .await
+        .map(|_| ())
+    }
 }
 
 async fn run_cdp_socket<S>(
@@ -419,11 +452,11 @@ fn normalize_url(input: &str) -> Result<String> {
     Ok(url.to_string())
 }
 
-#[derive(Clone)]
 struct BrowserNavigation {
     client: CdpClient,
     page: BrowserPage,
     screenshot: Vec<u8>,
+    screencast: Option<broadcast::Receiver<CdpEvent>>,
 }
 
 pub struct BrowserPanel {
@@ -436,6 +469,7 @@ pub struct BrowserPanel {
     image: Option<Arc<Image>>,
     status: SharedString,
     navigation_task: Option<Task<()>>,
+    screencast_task: Option<Task<()>>,
 }
 
 impl BrowserPanel {
@@ -450,6 +484,7 @@ impl BrowserPanel {
             image: None,
             status: "Inicie o Obscura e navegue para uma URL".into(),
             navigation_task: None,
+            screencast_task: None,
         }
     }
 
@@ -498,6 +533,7 @@ impl BrowserPanel {
         let endpoint = default_endpoint();
         let existing_client = self.client.clone();
         let existing_page = self.page.clone();
+        let should_start_screencast = self.screencast_task.is_none();
         self.status = if existing_page.is_some() {
             "Navegando...".into()
         } else {
@@ -523,23 +559,34 @@ impl BrowserPanel {
                 None => client.create_page(&url).await?,
             };
             let screenshot = client.capture_screenshot(&page).await?;
+            let screencast = if should_start_screencast {
+                client.start_screencast(&page).await.ok()
+            } else {
+                None
+            };
             Ok(BrowserNavigation {
                 client,
                 page,
                 screenshot,
+                screencast,
             })
         });
         self.navigation_task = Some(cx.spawn_in(window, async move |this, cx| match task.await {
             Ok(navigation) => {
                 this.update_in(cx, |this, window, cx| {
-                    this.client = Some(navigation.client);
-                    this.page = Some(navigation.page.clone());
+                    let client = navigation.client.clone();
+                    let page = navigation.page.clone();
+                    this.client = Some(client.clone());
+                    this.page = Some(page.clone());
                     this.image = Some(Arc::new(Image::from_bytes(
                         ImageFormat::Png,
                         navigation.screenshot,
                     )));
-                    this.set_address_bar(&navigation.page.url, window, cx);
-                    this.status = navigation.page.url.into();
+                    this.set_address_bar(&page.url, window, cx);
+                    this.status = page.url.clone().into();
+                    if let Some(events) = navigation.screencast {
+                        this.start_screencast(client, page, events, window, cx);
+                    }
                     cx.notify();
                 })
                 .ok();
@@ -547,6 +594,44 @@ impl BrowserPanel {
             Err(error) => {
                 this.update(cx, |this, cx| {
                     this.status = format!("Falha no navegador: {error:#}").into();
+                    cx.notify();
+                })
+                .ok();
+            }
+        }));
+    }
+
+    fn start_screencast(
+        &mut self,
+        client: CdpClient,
+        page: BrowserPage,
+        mut events: broadcast::Receiver<CdpEvent>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.screencast_task = Some(cx.spawn_in(window, async move |this, cx| {
+            loop {
+                let event = match events.recv().await {
+                    Ok(event) => event,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                };
+                if event.method != "Page.screencastFrame"
+                    || event.session_id.as_deref() != Some(&page.session_id)
+                {
+                    continue;
+                }
+                let Some(encoded) = event.params.get("data").and_then(Value::as_str) else {
+                    continue;
+                };
+                let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded) else {
+                    continue;
+                };
+                if let Some(session_id) = event.params.get("sessionId").and_then(Value::as_i64) {
+                    let _ = client.acknowledge_screencast_frame(&page, session_id).await;
+                }
+                this.update(cx, |this, cx| {
+                    this.image = Some(Arc::new(Image::from_bytes(ImageFormat::Png, bytes)));
                     cx.notify();
                 })
                 .ok();
