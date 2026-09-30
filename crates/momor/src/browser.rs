@@ -346,6 +346,29 @@ impl CdpClient {
         .await
         .map(|_| ())
     }
+
+    pub async fn dispatch_key_event(
+        &self,
+        page: &BrowserPage,
+        event_type: &str,
+        key: &str,
+        text: &str,
+        modifiers: u8,
+    ) -> Result<()> {
+        self.send_with_session(
+            "Input.dispatchKeyEvent",
+            json!({
+                "type": event_type,
+                "key": key,
+                "code": cdp_key_code(key),
+                "text": text,
+                "modifiers": modifiers,
+            }),
+            Some(&page.session_id),
+        )
+        .await
+        .map(|_| ())
+    }
 }
 
 async fn run_cdp_socket<S>(
@@ -500,6 +523,38 @@ fn normalize_url(input: &str) -> Result<String> {
     Ok(url.to_string())
 }
 
+fn cdp_key_code(key: &str) -> String {
+    match key.to_ascii_lowercase().as_str() {
+        "enter" => "Enter".to_string(),
+        "backspace" => "Backspace".to_string(),
+        "delete" => "Delete".to_string(),
+        "tab" => "Tab".to_string(),
+        "escape" | "esc" => "Escape".to_string(),
+        "arrowleft" => "ArrowLeft".to_string(),
+        "arrowright" => "ArrowRight".to_string(),
+        "arrowup" => "ArrowUp".to_string(),
+        "arrowdown" => "ArrowDown".to_string(),
+        "home" => "Home".to_string(),
+        "end" => "End".to_string(),
+        "pageup" => "PageUp".to_string(),
+        "pagedown" => "PageDown".to_string(),
+        key if key.len() == 1 && key.chars().all(|character| character.is_ascii_alphabetic()) => {
+            format!("Key{}", key.to_ascii_uppercase())
+        }
+        key if key.len() == 1 && key.chars().all(|character| character.is_ascii_digit()) => {
+            format!("Digit{key}")
+        }
+        key => key.to_string(),
+    }
+}
+
+fn cdp_modifiers(modifiers: &gpui::Modifiers) -> u8 {
+    u8::from(modifiers.alt)
+        | (u8::from(modifiers.control) << 1)
+        | (u8::from(modifiers.platform) << 2)
+        | (u8::from(modifiers.shift) << 3)
+}
+
 struct BrowserNavigation {
     client: CdpClient,
     page: BrowserPage,
@@ -618,6 +673,24 @@ impl BrowserPanel {
         let _ = gpui_tokio::Tokio::handle(cx).spawn(async move {
             let _ = client
                 .dispatch_mouse_wheel(&page, x, y, delta_x, delta_y)
+                .await;
+        });
+    }
+
+    fn dispatch_key(
+        &self,
+        event_type: &'static str,
+        key: String,
+        text: String,
+        modifiers: u8,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some(client), Some(page)) = (self.client.clone(), self.page.clone()) else {
+            return;
+        };
+        let _ = gpui_tokio::Tokio::handle(cx).spawn(async move {
+            let _ = client
+                .dispatch_key_event(&page, event_type, &key, &text, modifiers)
                 .await;
         });
     }
@@ -880,13 +953,14 @@ impl Render for BrowserPanel {
                     })
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
+                        cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
                             this.dispatch_mouse(
                                 "mousePressed",
                                 event.position,
                                 event.click_count,
                                 cx,
                             );
+                            cx.focus_self(window);
                         }),
                     )
                     .on_mouse_up(
@@ -912,6 +986,28 @@ impl Render for BrowserPanel {
                             cx.stop_propagation();
                         },
                     ))
+                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                        this.dispatch_key(
+                            "keyDown",
+                            event.keystroke.key.clone(),
+                            event.keystroke.key_char.clone().unwrap_or_default(),
+                            cdp_modifiers(&event.keystroke.modifiers),
+                            cx,
+                        );
+                        window.prevent_default();
+                        cx.stop_propagation();
+                    }))
+                    .on_key_up(cx.listener(|this, event: &gpui::KeyUpEvent, window, cx| {
+                        this.dispatch_key(
+                            "keyUp",
+                            event.keystroke.key.clone(),
+                            String::new(),
+                            cdp_modifiers(&event.keystroke.modifiers),
+                            cx,
+                        );
+                        window.prevent_default();
+                        cx.stop_propagation();
+                    }))
                     .when_some(image.clone(), |this, image| {
                         this.child(img(image).size_full())
                     })
