@@ -10,8 +10,9 @@ use async_tungstenite::tungstenite::Message;
 use base64::Engine as _;
 use futures::StreamExt;
 use gpui::{
-    App, Context, Entity, EventEmitter, FocusHandle, Focusable, Image, ImageFormat, Render,
-    SharedString, Subscription, Task, WeakEntity, Window, img, prelude::*,
+    App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, Image, ImageFormat,
+    MouseButton, Pixels, Point, Render, SharedString, Subscription, Task, WeakEntity, Window, img,
+    prelude::*,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -298,6 +299,53 @@ impl CdpClient {
         .await
         .map(|_| ())
     }
+
+    pub async fn dispatch_mouse_event(
+        &self,
+        page: &BrowserPage,
+        event_type: &str,
+        x: f32,
+        y: f32,
+        click_count: usize,
+    ) -> Result<()> {
+        self.send_with_session(
+            "Input.dispatchMouseEvent",
+            json!({
+                "type": event_type,
+                "x": x,
+                "y": y,
+                "button": "left",
+                "buttons": if event_type == "mousePressed" { 1 } else { 0 },
+                "clickCount": click_count,
+            }),
+            Some(&page.session_id),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    pub async fn dispatch_mouse_wheel(
+        &self,
+        page: &BrowserPage,
+        x: f32,
+        y: f32,
+        delta_x: f32,
+        delta_y: f32,
+    ) -> Result<()> {
+        self.send_with_session(
+            "Input.dispatchMouseEvent",
+            json!({
+                "type": "mouseWheel",
+                "x": x,
+                "y": y,
+                "deltaX": delta_x,
+                "deltaY": delta_y,
+            }),
+            Some(&page.session_id),
+        )
+        .await
+        .map(|_| ())
+    }
 }
 
 async fn run_cdp_socket<S>(
@@ -470,6 +518,7 @@ pub struct BrowserPanel {
     status: SharedString,
     navigation_task: Option<Task<()>>,
     screencast_task: Option<Task<()>>,
+    content_bounds: Option<Bounds<Pixels>>,
 }
 
 impl BrowserPanel {
@@ -485,6 +534,7 @@ impl BrowserPanel {
             status: "Inicie o Obscura e navegue para uma URL".into(),
             navigation_task: None,
             screencast_task: None,
+            content_bounds: None,
         }
     }
 
@@ -515,6 +565,61 @@ impl BrowserPanel {
         if let Some(address_bar) = self.address_bar.clone() {
             address_bar.update(cx, |field, cx| field.set_text(url, window, cx));
         }
+    }
+
+    fn browser_coordinates(&self, position: Point<Pixels>) -> Option<(f32, f32)> {
+        let bounds = self.content_bounds?;
+        let local = position - bounds.origin;
+        if local.x < px(0.)
+            || local.y < px(0.)
+            || local.x > bounds.size.width
+            || local.y > bounds.size.height
+        {
+            return None;
+        }
+        Some((f32::from(local.x), f32::from(local.y)))
+    }
+
+    fn dispatch_mouse(
+        &self,
+        event_type: &'static str,
+        position: Point<Pixels>,
+        click_count: usize,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some(client), Some(page), Some((x, y))) = (
+            self.client.clone(),
+            self.page.clone(),
+            self.browser_coordinates(position),
+        ) else {
+            return;
+        };
+        let _ = gpui_tokio::Tokio::handle(cx).spawn(async move {
+            let _ = client
+                .dispatch_mouse_event(&page, event_type, x, y, click_count)
+                .await;
+        });
+    }
+
+    fn dispatch_mouse_wheel(
+        &self,
+        position: Point<Pixels>,
+        delta_x: f32,
+        delta_y: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some(client), Some(page), Some((x, y))) = (
+            self.client.clone(),
+            self.page.clone(),
+            self.browser_coordinates(position),
+        ) else {
+            return;
+        };
+        let _ = gpui_tokio::Tokio::handle(cx).spawn(async move {
+            let _ = client
+                .dispatch_mouse_wheel(&page, x, y, delta_x, delta_y)
+                .await;
+        });
     }
 
     fn navigate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -720,6 +825,7 @@ impl Render for BrowserPanel {
         let address_bar = self.address_bar.clone().expect("browser address bar");
         let status = self.status.clone();
         let image = self.image.clone();
+        let content_bounds_entity = cx.weak_entity();
         v_flex()
             .key_context("BrowserPanel")
             .track_focus(&self.focus_handle)
@@ -765,6 +871,47 @@ impl Render for BrowserPanel {
                     .min_h_0()
                     .w_full()
                     .overflow_hidden()
+                    .on_children_prepainted(move |children, _window, cx| {
+                        if let Some(bounds) = children.first().copied() {
+                            content_bounds_entity
+                                .update(cx, |this, _cx| this.content_bounds = Some(bounds))
+                                .ok();
+                        }
+                    })
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &gpui::MouseDownEvent, _window, cx| {
+                            this.dispatch_mouse(
+                                "mousePressed",
+                                event.position,
+                                event.click_count,
+                                cx,
+                            );
+                        }),
+                    )
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &gpui::MouseUpEvent, _window, cx| {
+                            this.dispatch_mouse(
+                                "mouseReleased",
+                                event.position,
+                                event.click_count,
+                                cx,
+                            );
+                        }),
+                    )
+                    .on_scroll_wheel(cx.listener(
+                        |this, event: &gpui::ScrollWheelEvent, _window, cx| {
+                            let delta = event.delta.pixel_delta(px(16.0));
+                            this.dispatch_mouse_wheel(
+                                event.position,
+                                f32::from(delta.x),
+                                f32::from(delta.y),
+                                cx,
+                            );
+                            cx.stop_propagation();
+                        },
+                    ))
                     .when_some(image.clone(), |this, image| {
                         this.child(img(image).size_full())
                     })
