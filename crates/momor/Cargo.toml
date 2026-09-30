@@ -65,6 +65,8 @@ agent-client-protocol.workspace = true
 agent_settings.workspace = true
 agent_ui = { workspace = true, features = ["audio"] }
 anyhow.workspace = true
+async-tungstenite = { workspace = true, features = ["tokio"] }
+base64.workspace = true
 askpass.workspace = true
 assets.workspace = true
 audio.workspace = true
@@ -136,6 +138,7 @@ rope.workspace = true
 search.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
 session.workspace = true
 settings.workspace = true
 settings_ui.workspace = true
@@ -157,6 +160,7 @@ theme_selector.workspace = true
 time.workspace = true
 time_format.workspace = true
 title_bar.workspace = true
+ui_input.workspace = true
 ztracing.workspace = true
 tracing.workspace = true
 ui.workspace = true

@@ -8386,6 +8386,28 @@ impl Default for NotebookSlot {
 }
 impl gpui::Global for NotebookSlot {}
 
+/// Slot global for Momor's first-party Obscura browser surface. It lives
+/// outside the regular docks for the same reason as the notebook slot: the
+/// browser owns a wide, persistent surface and must not depend on dock side
+/// preferences intended for tool panels.
+pub struct BrowserSlot {
+    pub view: Option<gpui::AnyView>,
+    pub open: bool,
+    pub width: f32,
+}
+
+impl Default for BrowserSlot {
+    fn default() -> Self {
+        Self {
+            view: None,
+            open: false,
+            width: 720.0,
+        }
+    }
+}
+
+impl gpui::Global for BrowserSlot {}
+
 #[derive(Clone)]
 pub(crate) struct DraggedNotebookDivider;
 impl Render for DraggedNotebookDivider {
@@ -8418,6 +8440,9 @@ pub fn toggle_notebook(cx: &mut App) -> bool {
         slot.open = !slot.open;
         slot.open
     };
+    if open {
+        cx.default_global::<BrowserSlot>().open = false;
+    }
     // Persiste pra reabrir a sidebar no mesmo estado na próxima sessão.
     let store = db::kvp::KeyValueStore::global(cx);
     db::write_and_log(cx, move || async move {
@@ -8436,6 +8461,51 @@ pub fn set_notebook_open(open: bool, cx: &mut App) {
 pub fn notebook_open(cx: &App) -> bool {
     cx.try_global::<NotebookSlot>()
         .map(|s| s.open)
+        .unwrap_or(false)
+}
+
+pub fn set_browser_view(view: gpui::AnyView, cx: &mut App) {
+    cx.default_global::<BrowserSlot>().view = Some(view);
+}
+
+pub fn set_browser_width(width: f32, cx: &mut App) {
+    cx.default_global::<BrowserSlot>().width = width.clamp(440.0, 3200.0);
+}
+
+pub fn browser_width(cx: &App) -> f32 {
+    cx.try_global::<BrowserSlot>()
+        .map(|slot| slot.width)
+        .unwrap_or(720.0)
+}
+
+pub fn toggle_browser(cx: &mut App) -> bool {
+    let open = {
+        let slot = cx.default_global::<BrowserSlot>();
+        slot.open = !slot.open;
+        slot.open
+    };
+    if open {
+        cx.default_global::<NotebookSlot>().open = false;
+    }
+    let store = db::kvp::KeyValueStore::global(cx);
+    db::write_and_log(cx, move || async move {
+        store
+            .write_kvp("momor_browser_open".into(), open.to_string())
+            .await
+    });
+    open
+}
+
+pub fn set_browser_open(open: bool, cx: &mut App) {
+    cx.default_global::<BrowserSlot>().open = open;
+    if open {
+        cx.default_global::<NotebookSlot>().open = false;
+    }
+}
+
+pub fn browser_open(cx: &App) -> bool {
+    cx.try_global::<BrowserSlot>()
+        .map(|slot| slot.open)
         .unwrap_or(false)
 }
 
@@ -8574,11 +8644,21 @@ impl Render for Workspace {
             .or_else(|| self.right_dock.read(cx).active_panel())
             .or_else(|| self.bottom_dock.read(cx).active_panel())
             .map(|panel| panel.to_any());
-        let notebook = cx
-            .try_global::<NotebookSlot>()
+        let browser = cx
+            .try_global::<BrowserSlot>()
             .filter(|slot| slot.open)
             .and_then(|slot| slot.view.clone());
-        let notebook_width = notebook_width(cx);
+        let browser_open = browser.is_some();
+        let notebook = cx
+            .try_global::<NotebookSlot>()
+            .filter(|slot| slot.open && !browser_open)
+            .and_then(|slot| slot.view.clone());
+        let sidebar = browser.or(notebook);
+        let sidebar_width = if browser_open {
+            browser_width(cx)
+        } else {
+            notebook_width(cx)
+        };
         {
             return div()
                 .relative()
@@ -8597,7 +8677,7 @@ impl Render for Workspace {
                         .w_full()
                         .overflow_hidden()
                         // ponytail: alça externa = resize do chat vs notebook.
-                        .when(notebook.is_some(), |this| {
+                        .when(sidebar.is_some(), |this| {
                             this.on_drag_move(cx.listener(
                                 move |_this, e: &DragMoveEvent<DraggedNotebookDivider>, window, cx| {
                                     // Deixa esticar mais (chat guarda ~300px) e a coluna tem
@@ -8605,16 +8685,20 @@ impl Render for Workspace {
                                     let vw = f32::from(window.viewport_size().width);
                                     let max = (vw - 300.0).max(440.0);
                                     let w = f32::from(e.event.position.x).clamp(440.0, max);
-                                    set_notebook_width(w, cx);
+                                    if browser_open {
+                                        set_browser_width(w, cx);
+                                    } else {
+                                        set_notebook_width(w, cx);
+                                    }
                                     cx.notify();
                                 },
                             ))
                         })
-                        .when_some(notebook, |this, panel| {
+                        .when_some(sidebar, |this, panel| {
                             this.child(
                                 div()
                                     .relative()
-                                    .w(px(notebook_width))
+                                    .w(px(sidebar_width))
                                     .h_full()
                                     .flex_none()
                                     .overflow_hidden()

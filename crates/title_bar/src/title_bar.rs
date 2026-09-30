@@ -360,6 +360,25 @@ impl Render for TitleBar {
         // ponytail: ícone de sidebar (topo-esquerdo) — abre/fecha o painel Notion (notas
         // + reuniões) AO LADO do chat. Client area + stop_propagation pra não virar arraste.
         let notebook_open = workspace::notebook_open(cx);
+        let browser_open = workspace::browser_open(cx);
+        children.push(
+            div()
+                .window_control_area(gpui::WindowControlArea::Client)
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    IconButton::new("toggle-browser", IconName::Public)
+                        .icon_size(IconSize::Small)
+                        .toggle_state(browser_open)
+                        .selected_icon_color(Color::Accent)
+                        .tooltip(Tooltip::text("Navegador Obscura"))
+                        .on_click(cx.listener(|this, _, _window, cx| {
+                            workspace::toggle_browser(cx);
+                            this.workspace.update(cx, |_, cx| cx.notify()).ok();
+                            cx.notify();
+                        })),
+                )
+                .into_any_element(),
+        );
         children.push(
             div()
                 .window_control_area(gpui::WindowControlArea::Client)
