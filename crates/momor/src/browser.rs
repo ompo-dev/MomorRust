@@ -211,6 +211,44 @@ impl CdpClient {
         Ok(())
     }
 
+    pub async fn navigate_history(&self, page: &mut BrowserPage, delta: i32) -> Result<()> {
+        let history = self
+            .send_with_session(
+                "Page.getNavigationHistory",
+                json!({}),
+                Some(&page.session_id),
+            )
+            .await?;
+        let current_index = history
+            .get("currentIndex")
+            .and_then(Value::as_i64)
+            .context("Obscura did not return the current history index")?;
+        let target_index = current_index + i64::from(delta);
+        let entries = history
+            .get("entries")
+            .and_then(Value::as_array)
+            .context("Obscura did not return navigation history")?;
+        let target = entries
+            .get(usize::try_from(target_index).unwrap_or(usize::MAX))
+            .context("no browser history entry in that direction")?;
+        let entry_id = target
+            .get("id")
+            .and_then(Value::as_i64)
+            .context("Obscura did not return a history entry id")?;
+        self.send_with_session(
+            "Page.navigateToHistoryEntry",
+            json!({ "entryId": entry_id }),
+            Some(&page.session_id),
+        )
+        .await?;
+        page.url = target
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or(&page.url)
+            .to_string();
+        Ok(())
+    }
+
     pub async fn capture_screenshot(&self, page: &BrowserPage) -> Result<Vec<u8>> {
         let response = self
             .send_with_session(
@@ -438,6 +476,12 @@ impl BrowserPanel {
         self.address_bar = Some(field);
     }
 
+    fn set_address_bar(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(address_bar) = self.address_bar.clone() {
+            address_bar.update(cx, |field, cx| field.set_text(url, window, cx));
+        }
+    }
+
     fn navigate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(address_bar) = &self.address_bar else {
             return;
@@ -452,16 +496,32 @@ impl BrowserPanel {
             }
         };
         let endpoint = default_endpoint();
-        self.status = format!("Conectando ao Obscura em {endpoint}...").into();
+        let existing_client = self.client.clone();
+        let existing_page = self.page.clone();
+        self.status = if existing_page.is_some() {
+            "Navegando...".into()
+        } else {
+            format!("Conectando ao Obscura em {endpoint}...").into()
+        };
         self.image = None;
         let task = gpui_tokio::Tokio::spawn_result(cx, async move {
-            let client = match CdpClient::connect(&endpoint).await {
-                Ok(client) => client,
-                Err(connect_error) => CdpClient::launch_and_connect()
-                    .await
-                    .with_context(|| format!("{connect_error:#}"))?,
+            let client = match existing_client {
+                Some(client) => client,
+                None => match CdpClient::connect(&endpoint).await {
+                    Ok(client) => client,
+                    Err(connect_error) => CdpClient::launch_and_connect()
+                        .await
+                        .with_context(|| format!("{connect_error:#}"))?,
+                },
             };
-            let page = client.create_page(&url).await?;
+            let page = match existing_page {
+                Some(page) => {
+                    let mut page = page;
+                    client.navigate(&mut page, &url).await?;
+                    page
+                }
+                None => client.create_page(&url).await?,
+            };
             let screenshot = client.capture_screenshot(&page).await?;
             Ok(BrowserNavigation {
                 client,
@@ -471,13 +531,14 @@ impl BrowserPanel {
         });
         self.navigation_task = Some(cx.spawn_in(window, async move |this, cx| match task.await {
             Ok(navigation) => {
-                this.update(cx, |this, cx| {
+                this.update_in(cx, |this, window, cx| {
                     this.client = Some(navigation.client);
                     this.page = Some(navigation.page.clone());
                     this.image = Some(Arc::new(Image::from_bytes(
                         ImageFormat::Png,
                         navigation.screenshot,
                     )));
+                    this.set_address_bar(&navigation.page.url, window, cx);
                     this.status = navigation.page.url.into();
                     cx.notify();
                 })
@@ -490,6 +551,40 @@ impl BrowserPanel {
                 })
                 .ok();
             }
+        }));
+    }
+
+    fn navigate_history(&mut self, delta: i32, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(client), Some(mut page)) = (self.client.clone(), self.page.clone()) else {
+            return;
+        };
+        self.status = if delta < 0 {
+            "Voltando...".into()
+        } else {
+            "Avançando...".into()
+        };
+        self.image = None;
+        self.navigation_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = async {
+                client.navigate_history(&mut page, delta).await?;
+                let screenshot = client.capture_screenshot(&page).await?;
+                anyhow::Ok((page, screenshot))
+            }
+            .await;
+            this.update_in(cx, |this, window, cx| {
+                match result {
+                    Ok((page, screenshot)) => {
+                        this.page = Some(page.clone());
+                        this.image =
+                            Some(Arc::new(Image::from_bytes(ImageFormat::Png, screenshot)));
+                        this.set_address_bar(&page.url, window, cx);
+                        this.status = page.url.into();
+                    }
+                    Err(error) => this.status = format!("Falha no histórico: {error:#}").into(),
+                }
+                cx.notify();
+            })
+            .ok();
         }));
     }
 
@@ -508,12 +603,13 @@ impl BrowserPanel {
                 anyhow::Ok((page, screenshot))
             }
             .await;
-            this.update(cx, |this, cx| {
+            this.update_in(cx, |this, window, cx| {
                 match result {
                     Ok((page, screenshot)) => {
                         this.page = Some(page.clone());
                         this.image =
                             Some(Arc::new(Image::from_bytes(ImageFormat::Png, screenshot)));
+                        this.set_address_bar(&page.url, window, cx);
                         this.status = page.url.into();
                     }
                     Err(error) => this.status = format!("Falha ao atualizar: {error:#}").into(),
@@ -552,6 +648,20 @@ impl Render for BrowserPanel {
                     .p_2()
                     .border_b_1()
                     .border_color(cx.theme().colors().border)
+                    .child(
+                        IconButton::new("browser-back", IconName::ArrowLeft)
+                            .tooltip(Tooltip::text("Voltar"))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.navigate_history(-1, window, cx)
+                            })),
+                    )
+                    .child(
+                        IconButton::new("browser-forward", IconName::ArrowRight)
+                            .tooltip(Tooltip::text("Avançar"))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.navigate_history(1, window, cx)
+                            })),
+                    )
                     .child(
                         IconButton::new("browser-reload", IconName::RotateCw)
                             .tooltip(Tooltip::text("Atualizar"))
