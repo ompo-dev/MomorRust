@@ -1,0 +1,10 @@
+[package]
+name = "obscura-ssrf"
+workspace = "../.."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared SSRF deny-set and private-network opt-in for Obscura's network transports and renderer."
+
+[dependencies]

@@ -18,7 +18,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -26,7 +26,6 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    process::{Child, Command},
     sync::{broadcast, mpsc, oneshot},
     time::sleep,
 };
@@ -57,7 +56,6 @@ pub struct CdpClient {
     commands: mpsc::UnboundedSender<CdpCommand>,
     events: broadcast::Sender<CdpEvent>,
     next_id: Arc<AtomicU64>,
-    _obscura_process: Option<Arc<ObscuraProcess>>,
 }
 
 impl CdpClient {
@@ -76,7 +74,6 @@ impl CdpClient {
             commands,
             events: events.clone(),
             next_id: Arc::new(AtomicU64::new(1)),
-            _obscura_process: None,
         };
 
         tokio::spawn(run_cdp_socket(socket, command_rx, events));
@@ -84,56 +81,38 @@ impl CdpClient {
     }
 
     async fn launch_and_connect() -> Result<Self> {
-        let binary = std::env::var_os("MOMOR_OBSCURA_BINARY")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("obscura"));
         let ready_path = std::env::temp_dir().join(format!(
             "momor-obscura-{}-{}.json",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
-        let mut child = Command::new(&binary)
-            .args([
-                "serve",
-                "--host",
+        let storage_dir = embedded_storage_dir();
+        let server_ready_path = ready_path.clone();
+        tokio::spawn(async move {
+            if let Err(error) = obscura_cdp::start_with_serve_options_limit_and_ready_file(
+                0,
                 "127.0.0.1",
-                "--port",
-                "0",
-                "--workers",
-                "1",
-                "--max-connections",
-                "4",
-                "--ready-file",
-            ])
-            .arg(&ready_path)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .with_context(|| {
-                format!(
-                    "failed to start Obscura; set MOMOR_OBSCURA_BINARY to the rendered obscura executable (attempted {})",
-                    binary.display()
-                )
-            })?;
-
-        let ready = wait_for_ready_file(&mut child, &ready_path).await;
-        let ready = match ready {
-            Ok(ready) => ready,
-            Err(error) => {
-                let _ = child.start_kill();
-                let _ = std::fs::remove_file(&ready_path);
-                return Err(error);
+                None,
+                false,
+                None,
+                false,
+                Some(storage_dir),
+                false,
+                4,
+                Some(&server_ready_path),
+            )
+            .await
+            {
+                tracing::error!("embedded Obscura server stopped: {error:#}");
             }
-        };
-        let endpoint = format!("ws://{}:{}{}", ready.host, ready.port, ready.websocket_path);
-        let process = Arc::new(ObscuraProcess {
-            child: std::sync::Mutex::new(child),
-            ready_path,
         });
-        let mut client = Self::connect(&endpoint).await?;
-        client._obscura_process = Some(process);
-        Ok(client)
+
+        let ready = wait_for_ready_file(&ready_path).await?;
+        if let Err(error) = tokio::fs::remove_file(&ready_path).await {
+            tracing::debug!("failed to remove Obscura ready file: {error:#}");
+        }
+        let endpoint = format!("ws://{}:{}{}", ready.host, ready.port, ready.websocket_path);
+        Self::connect(&endpoint).await
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<CdpEvent> {
@@ -217,6 +196,18 @@ impl CdpClient {
                 "mobile": false,
             }),
             Some(&page.session_id),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    pub async fn set_download_behavior(&self, path: &Path) -> Result<()> {
+        self.send(
+            "Browser.setDownloadBehavior",
+            json!({
+                "behavior": "allow",
+                "downloadPath": path.to_string_lossy(),
+            }),
         )
         .await
         .map(|_| ())
@@ -484,40 +475,36 @@ struct ObscuraReadyFile {
     websocket_path: String,
 }
 
-struct ObscuraProcess {
-    child: std::sync::Mutex<Child>,
-    ready_path: PathBuf,
-}
-
-impl Drop for ObscuraProcess {
-    fn drop(&mut self) {
-        if let Ok(mut child) = self.child.lock() {
-            let _ = child.start_kill();
-        }
-        let _ = std::fs::remove_file(&self.ready_path);
-    }
-}
-
-async fn wait_for_ready_file(
-    child: &mut Child,
-    ready_path: &std::path::Path,
-) -> Result<ObscuraReadyFile> {
+async fn wait_for_ready_file(ready_path: &std::path::Path) -> Result<ObscuraReadyFile> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
         if let Ok(bytes) = tokio::fs::read(ready_path).await {
             return serde_json::from_slice(&bytes).context("invalid Obscura ready file");
         }
-        if let Some(status) = child
-            .try_wait()
-            .context("failed to inspect Obscura process")?
-        {
-            anyhow::bail!("Obscura exited before becoming ready ({status})");
-        }
         if tokio::time::Instant::now() >= deadline {
-            anyhow::bail!("Obscura did not become ready within 20 seconds");
+            anyhow::bail!("embedded Obscura did not become ready within 20 seconds");
         }
         sleep(Duration::from_millis(25)).await;
     }
+}
+
+fn embedded_storage_dir() -> PathBuf {
+    std::env::var_os("MOMOR_OBSCURA_STORAGE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("momor-obscura-profile"))
+}
+
+fn browser_download_dir() -> Result<PathBuf> {
+    let path = std::env::var_os("MOMOR_OBSCURA_DOWNLOAD_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| embedded_storage_dir().join("downloads"));
+    std::fs::create_dir_all(&path).with_context(|| {
+        format!(
+            "failed to create browser download directory {}",
+            path.display()
+        )
+    })?;
+    Ok(path)
 }
 
 fn default_endpoint() -> String {
@@ -581,6 +568,7 @@ struct BrowserNavigation {
     page: BrowserPage,
     screenshot: Vec<u8>,
     screencast: Option<broadcast::Receiver<CdpEvent>>,
+    events: broadcast::Receiver<CdpEvent>,
 }
 
 #[derive(Clone)]
@@ -621,6 +609,8 @@ pub struct BrowserPanel {
     active_tab: usize,
     navigation_task: Option<Task<()>>,
     screencast_tasks: HashMap<String, Task<()>>,
+    download_events_task: Option<Task<()>>,
+    download_status: Option<String>,
     content_bounds: Option<Bounds<Pixels>>,
     viewport_size: Option<(u32, u32)>,
 }
@@ -637,6 +627,8 @@ impl BrowserPanel {
             active_tab: 0,
             navigation_task: None,
             screencast_tasks: HashMap::new(),
+            download_events_task: None,
+            download_status: None,
             content_bounds: None,
             viewport_size: None,
         }
@@ -856,6 +848,9 @@ impl BrowserPanel {
                         .with_context(|| format!("{connect_error:#}"))?,
                 },
             };
+            let events = client.subscribe();
+            let download_dir = browser_download_dir()?;
+            client.set_download_behavior(&download_dir).await?;
             let page = match existing_page {
                 Some(page) => {
                     let mut page = page;
@@ -878,6 +873,7 @@ impl BrowserPanel {
                 page,
                 screenshot,
                 screencast,
+                events,
             })
         });
         self.navigation_task = Some(cx.spawn_in(window, async move |this, cx| match task.await {
@@ -900,6 +896,9 @@ impl BrowserPanel {
                     }
                     if let Some(events) = navigation.screencast {
                         this.start_screencast(client, page, events, window, cx);
+                    }
+                    if this.download_events_task.is_none() {
+                        this.start_download_events(navigation.events, window, cx);
                     }
                     cx.notify();
                 }) {
@@ -978,6 +977,54 @@ impl BrowserPanel {
             }
         });
         self.screencast_tasks.insert(target_id, task);
+    }
+
+    fn start_download_events(
+        &mut self,
+        mut events: broadcast::Receiver<CdpEvent>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.download_events_task = Some(cx.spawn_in(window, async move |this, cx| {
+            loop {
+                let event = match events.recv().await {
+                    Ok(event) => event,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                };
+                let status = match event.method.as_str() {
+                    "Browser.downloadWillBegin" => event
+                        .params
+                        .get("suggestedFilename")
+                        .and_then(Value::as_str)
+                        .map(|filename| format!("Baixando {filename}...")),
+                    "Browser.downloadProgress" => {
+                        match event.params.get("state").and_then(Value::as_str) {
+                            Some("completed") => event
+                                .params
+                                .get("suggestedFilename")
+                                .and_then(Value::as_str)
+                                .map(|filename| format!("Download concluído: {filename}")),
+                            Some("canceled") | Some("interrupted") => {
+                                Some("Download interrompido".to_string())
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                let Some(status) = status else {
+                    continue;
+                };
+                if let Err(error) = this.update(cx, |this, cx| {
+                    this.download_status = Some(status);
+                    cx.notify();
+                }) {
+                    tracing::debug!("browser download UI update failed: {error:#}");
+                    break;
+                }
+            }
+        }));
     }
 
     fn navigate_history(&mut self, delta: i32, window: &mut Window, cx: &mut Context<Self>) {
@@ -1083,6 +1130,7 @@ impl Render for BrowserPanel {
             .active_tab()
             .map(|tab| (SharedString::from(tab.status.clone()), tab.image.clone()))
             .unwrap_or_else(|| (SharedString::from("Nenhuma aba aberta"), None));
+        let download_status = self.download_status.clone().map(SharedString::from);
         let content_bounds_entity = cx.weak_entity();
         let active_tab = self.active_tab;
         let tab_labels = self
@@ -1167,6 +1215,14 @@ impl Render for BrowserPanel {
                     )
                     .when_some(address_bar, |this, address_bar| {
                         this.child(div().flex_1().min_w_0().child(address_bar))
+                    })
+                    .when_some(download_status, |this, status| {
+                        this.child(
+                            h_flex()
+                                .gap_1()
+                                .child(Icon::new(IconName::Download).size(IconSize::Small))
+                                .child(Label::new(status).color(Color::Muted)),
+                        )
                     })
                     .child(
                         IconButton::new("browser-go", IconName::ArrowRight)

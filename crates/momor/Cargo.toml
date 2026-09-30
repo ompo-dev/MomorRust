@@ -178,6 +178,7 @@ momor_actions.workspace = true
 momor_env_vars.workspace = true
 zlog.workspace = true
 zlog_settings.workspace = true
+obscura-cdp = { path = "../../vendor/obscura/crates/obscura-cdp", features = ["render"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 etw_tracing.workspace = true

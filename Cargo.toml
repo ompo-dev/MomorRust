@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["vendor/obscura"]
 members = [
     "crates/acp_thread",
     "crates/acp_tools",
@@ -788,6 +789,11 @@ calloop = { git = "https://github.com/zed-industries/calloop" }
 livekit = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "2a87895dc2d2ec6d3e2044e85b654cefb22d4f49" }
 libwebrtc = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "2a87895dc2d2ec6d3e2044e85b654cefb22d4f49" }
 webrtc-sys = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev = "2a87895dc2d2ec6d3e2044e85b654cefb22d4f49" }
+# Obscura carries API-compatible local patches for the versions used by its
+# render layer. Keep them in the Momor root workspace so path dependencies use
+# the same sources when Cargo resolves the combined application.
+taffy = { path = "vendor/obscura/vendor/taffy" }
+cosmic-text = { path = "vendor/obscura/vendor/cosmic-text" }
 
 [profile.dev]
 split-debuginfo = "unpacked"
