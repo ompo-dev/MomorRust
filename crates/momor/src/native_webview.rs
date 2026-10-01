@@ -5,15 +5,15 @@
 
 #![cfg(target_os = "windows")]
 
-use anyhow::{Context as _, Result};
-use std::{path::Path, sync::mpsc};
+use anyhow::{Context as _, Result, anyhow};
+use std::{cell::RefCell, path::Path, rc::Rc};
 use webview2_com::{
     CoTaskMemPWSTR, CreateCoreWebView2ControllerCompletedHandler,
     CreateCoreWebView2EnvironmentCompletedHandler, Microsoft::Web::WebView2::Win32::*,
 };
 use windows_062::{
     Win32::{
-        Foundation::{E_POINTER, HWND, RECT},
+        Foundation::{HWND, RECT},
         System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx},
     },
     core::{BOOL, Interface, PCWSTR},
@@ -25,95 +25,112 @@ pub struct NativeWebView {
 }
 
 impl NativeWebView {
-    pub fn new(parent: HWND, profile_dir: &Path) -> Result<Self> {
+    pub fn create(
+        parent: HWND,
+        profile_dir: &Path,
+        on_ready: impl FnOnce(Result<Self>) + 'static,
+    ) -> Result<()> {
         unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }
             .ok()
             .context("falha ao inicializar COM para o WebView2")?;
 
+        let on_ready = Rc::new(RefCell::new(Some(
+            Box::new(on_ready) as Box<dyn FnOnce(Result<Self>)>
+        )));
         let profile = CoTaskMemPWSTR::from(profile_dir.to_string_lossy().as_ref());
-        let environment = {
-            let (tx, rx) = mpsc::channel();
-            CreateCoreWebView2EnvironmentCompletedHandler::wait_for_async_operation(
-                Box::new(move |handler| unsafe {
-                    CreateCoreWebView2EnvironmentWithOptions(
-                        PCWSTR::null(),
-                        *profile.as_ref().as_pcwstr(),
-                        None,
-                        &handler,
-                    )
-                    .map_err(webview2_com::Error::WindowsError)
-                }),
-                Box::new(move |error_code, environment| {
-                    error_code?;
-                    tx.send(environment.ok_or_else(|| windows_062::core::Error::from(E_POINTER)))
-                        .map_err(|_| windows_062::core::Error::from(E_POINTER))?;
-                    Ok(())
-                }),
-            )
-            .context("falha ao criar o ambiente WebView2")?;
-            rx.recv()
-                .map_err(|_| webview2_com::Error::SendError)
-                .context("ambiente WebView2 não respondeu")??
-        };
+        let environment_ready = on_ready.clone();
+        let environment_handler = CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(
+            move |error_code, environment| {
+                if let Err(error) = error_code {
+                    complete(
+                        &environment_ready,
+                        Err(anyhow!("falha ao criar o ambiente WebView2: {error}")),
+                    );
+                    return Ok(());
+                }
+                let Some(environment) = environment else {
+                    complete(
+                        &environment_ready,
+                        Err(anyhow!("WebView2 não retornou o ambiente")),
+                    );
+                    return Ok(());
+                };
 
-        let controller = {
-            let (tx, rx) = mpsc::channel();
-            CreateCoreWebView2ControllerCompletedHandler::wait_for_async_operation(
-                Box::new(move |handler| unsafe {
-                    environment
-                        .CreateCoreWebView2Controller(parent, &handler)
-                        .map_err(webview2_com::Error::WindowsError)
-                }),
-                Box::new(move |error_code, controller| {
-                    error_code?;
-                    tx.send(controller.ok_or_else(|| windows_062::core::Error::from(E_POINTER)))
-                        .map_err(|_| windows_062::core::Error::from(E_POINTER))?;
-                    Ok(())
-                }),
-            )
-            .context("falha ao criar o controlador WebView2")?;
-            rx.recv()
-                .map_err(|_| webview2_com::Error::SendError)
-                .context("controlador WebView2 não respondeu")??
-        };
+                let controller_ready = environment_ready.clone();
+                let controller_handler = CreateCoreWebView2ControllerCompletedHandler::create(
+                    Box::new(move |error_code, controller| {
+                        if let Err(error) = error_code {
+                            complete(
+                                &controller_ready,
+                                Err(anyhow!("falha ao criar o controlador WebView2: {error}")),
+                            );
+                            return Ok(());
+                        }
+                        let Some(controller) = controller else {
+                            complete(
+                                &controller_ready,
+                                Err(anyhow!("WebView2 não retornou o controlador")),
+                            );
+                            return Ok(());
+                        };
 
-        let webview =
-            unsafe { controller.CoreWebView2() }.context("WebView2 não retornou a página")?;
+                        let result = (|| {
+                            let webview = unsafe { controller.CoreWebView2() }
+                                .context("WebView2 não retornou a página")?;
+                            unsafe {
+                                let controller2: ICoreWebView2Controller2 = controller
+                                    .cast()
+                                    .context("WebView2 não expôs o controlador visual")?;
+                                controller2
+                                    .SetDefaultBackgroundColor(COREWEBVIEW2_COLOR {
+                                        A: 255,
+                                        R: 255,
+                                        G: 255,
+                                        B: 255,
+                                    })
+                                    .context("não foi possível definir o fundo do WebView2")?;
+                                webview
+                                    .Settings()?
+                                    .SetAreDevToolsEnabled(true)
+                                    .context("não foi possível habilitar o DevTools")?;
+                                controller
+                                    .SetIsVisible(true)
+                                    .context("não foi possível exibir o WebView2")?;
+                            }
+                            Ok(Self {
+                                controller,
+                                webview,
+                            })
+                        })();
+                        complete(&controller_ready, result);
+                        Ok(())
+                    }),
+                );
+                unsafe { environment.CreateCoreWebView2Controller(parent, &controller_handler) }
+            },
+        ));
+
         unsafe {
-            let controller2: ICoreWebView2Controller2 = controller
-                .cast()
-                .context("WebView2 não expôs o controlador visual")?;
-            controller2
-                .SetDefaultBackgroundColor(COREWEBVIEW2_COLOR {
-                    A: 255,
-                    R: 255,
-                    G: 255,
-                    B: 255,
-                })
-                .context("não foi possível definir o fundo do WebView2")?;
-            webview
-                .Settings()?
-                .SetAreDevToolsEnabled(true)
-                .context("não foi possível habilitar o DevTools")?;
-            controller
-                .SetIsVisible(true)
-                .context("não foi possível exibir o WebView2")?;
+            CreateCoreWebView2EnvironmentWithOptions(
+                PCWSTR::null(),
+                *profile.as_ref().as_pcwstr(),
+                None,
+                &environment_handler,
+            )
+            .map_err(webview2_com::Error::WindowsError)
+            .context("falha ao iniciar o ambiente WebView2")?;
         }
-
-        Ok(Self {
-            controller,
-            webview,
-        })
+        Ok(())
     }
 
-    pub fn set_bounds(&self, width: i32, height: i32) -> Result<()> {
+    pub fn set_bounds(&self, left: i32, top: i32, width: i32, height: i32) -> Result<()> {
         unsafe {
             self.controller
                 .SetBounds(RECT {
-                    left: 0,
-                    top: 0,
-                    right: width.max(1),
-                    bottom: height.max(1),
+                    left,
+                    top,
+                    right: left + width.max(1),
+                    bottom: top + height.max(1),
                 })
                 .context("não foi possível redimensionar o WebView2")?;
         }
@@ -178,6 +195,16 @@ impl NativeWebView {
                 .context("não foi possível abrir o DevTools")?;
         }
         Ok(())
+    }
+}
+
+fn complete(
+    callback: &Rc<RefCell<Option<Box<dyn FnOnce(Result<NativeWebView>)>>>>,
+    result: Result<NativeWebView>,
+) {
+    let callback = callback.borrow_mut().take();
+    if let Some(callback) = callback {
+        callback(result);
     }
 }
 

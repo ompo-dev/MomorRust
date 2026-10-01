@@ -821,6 +821,10 @@ pub struct BrowserPanel {
     last_mouse_move: Option<Instant>,
     #[cfg(target_os = "windows")]
     native_webview: Option<NativeWebView>,
+    #[cfg(target_os = "windows")]
+    native_webview_pending: bool,
+    #[cfg(target_os = "windows")]
+    native_webview_bounds: Option<(i32, i32, i32, i32)>,
     context_menu: Option<(Entity<ContextMenu>, Point<Pixels>, Subscription)>,
     devtools_open: bool,
     devtools_tab: DevtoolsTab,
@@ -868,6 +872,10 @@ impl BrowserPanel {
             last_mouse_move: None,
             #[cfg(target_os = "windows")]
             native_webview: None,
+            #[cfg(target_os = "windows")]
+            native_webview_pending: false,
+            #[cfg(target_os = "windows")]
+            native_webview_bounds: None,
             context_menu: None,
             devtools_open: false,
             devtools_tab: DevtoolsTab::Console,
@@ -1001,6 +1009,12 @@ impl BrowserPanel {
         _cx: &mut Context<Self>,
     ) {
         let should_open_google = self.active_url() == "about:blank";
+        let scale = window.scale_factor();
+        let left = (bounds.origin.x.as_f32() * scale).round() as i32;
+        let top = (bounds.origin.y.as_f32() * scale).round() as i32;
+        let width = (bounds.size.width.as_f32() * scale).round().max(1.0) as i32;
+        let height = (bounds.size.height.as_f32() * scale).round().max(1.0) as i32;
+        let native_bounds = (left, top, width, height);
         if self.native_webview.is_none() {
             let parent = match window.window_handle() {
                 Ok(handle) => match handle.as_raw() {
@@ -1021,15 +1035,59 @@ impl BrowserPanel {
                     return;
                 }
             };
-            match NativeWebView::new(parent, &embedded_storage_dir().join("webview2-profile")) {
-                Ok(webview) => self.native_webview = Some(webview),
-                Err(error) => {
-                    if let Some(tab) = self.active_tab_mut() {
-                        tab.status = format!("WebView2 indisponível: {error:#}");
+            let weak = _cx.weak_entity();
+            let mut app = _cx.to_async();
+            let initial_url = if should_open_google {
+                "https://www.google.com/".to_string()
+            } else {
+                self.active_url()
+            };
+            if let Err(error) = NativeWebView::create(
+                parent,
+                &embedded_storage_dir().join("webview2-profile"),
+                move |result| {
+                    if let Err(error) = weak.update(&mut app, |this, cx| {
+                        this.native_webview_pending = false;
+                        match result {
+                            Ok(webview) => {
+                                if let Err(error) = webview.set_bounds(left, top, width, height) {
+                                    tracing::debug!(
+                                        "falha ao dimensionar o WebView2 inicial: {error:#}"
+                                    );
+                                }
+                                if let Err(error) = webview.navigate(&initial_url) {
+                                    tracing::debug!("falha ao abrir a página inicial: {error:#}");
+                                }
+                                this.native_webview = Some(webview);
+                                this.native_webview_bounds = Some(native_bounds);
+                                if should_open_google {
+                                    if let Some(tab) = this.active_tab_mut() {
+                                        tab.current_url = initial_url.clone();
+                                        tab.title = "Google".to_string();
+                                        tab.status = initial_url.clone();
+                                        tab.loading = false;
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                if let Some(tab) = this.active_tab_mut() {
+                                    tab.status = format!("WebView2 indisponível: {error:#}");
+                                }
+                            }
+                        }
+                        cx.notify();
+                    }) {
+                        tracing::debug!("falha ao concluir criação do WebView2: {error:#}");
                     }
-                    return;
+                },
+            ) {
+                self.native_webview_pending = false;
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.status = format!("WebView2 indisponível: {error:#}");
                 }
+                return;
             }
+            return;
         }
 
         if should_open_google {
@@ -1046,12 +1104,11 @@ impl BrowserPanel {
             }
         }
 
-        let scale = window.scale_factor();
-        let width = (bounds.size.width.as_f32() * scale).round().max(1.0) as i32;
-        let height = (bounds.size.height.as_f32() * scale).round().max(1.0) as i32;
         if let Some(webview) = &self.native_webview {
-            if let Err(error) = webview.set_bounds(width, height) {
+            if let Err(error) = webview.set_bounds(left, top, width, height) {
                 tracing::debug!("falha ao redimensionar WebView2: {error:#}");
+            } else {
+                self.native_webview_bounds = Some(native_bounds);
             }
         }
     }
@@ -2588,6 +2645,16 @@ impl Render for BrowserPanel {
                     .overflow_hidden()
                     .on_children_prepainted(move |children, window, cx| {
                         if let Some(bounds) = children.first().copied() {
+                            #[cfg(target_os = "windows")]
+                            let native_bounds = {
+                                let scale = window.scale_factor();
+                                (
+                                    (bounds.origin.x.as_f32() * scale).round() as i32,
+                                    (bounds.origin.y.as_f32() * scale).round() as i32,
+                                    (bounds.size.width.as_f32() * scale).round().max(1.0) as i32,
+                                    (bounds.size.height.as_f32() * scale).round().max(1.0) as i32,
+                                )
+                            };
                             if let Err(error) = content_bounds_entity.update(cx, |this, _cx| {
                                 this.content_bounds = Some(bounds);
                             }) {
@@ -2595,7 +2662,35 @@ impl Render for BrowserPanel {
                             } else if let Err(error) =
                                 content_bounds_entity.update(cx, |this, cx| {
                                     #[cfg(target_os = "windows")]
-                                    this.ensure_native_webview(bounds, window, cx);
+                                    if !this.native_webview_pending
+                                        && (this.native_webview.is_none()
+                                            || this.native_webview_bounds != Some(native_bounds))
+                                    {
+                                        this.native_webview_pending = true;
+                                        cx.defer_in(window, move |this, window, cx| {
+                                            if this.native_webview.is_none() {
+                                                this.ensure_native_webview(bounds, window, cx);
+                                            } else if let Some(webview) = &this.native_webview {
+                                                if let Err(error) = webview.set_bounds(
+                                                    native_bounds.0,
+                                                    native_bounds.1,
+                                                    native_bounds.2,
+                                                    native_bounds.3,
+                                                ) {
+                                                    tracing::debug!(
+                                                        "falha ao redimensionar WebView2: {error:#}"
+                                                    );
+                                                } else {
+                                                    this.native_webview_bounds =
+                                                        Some(native_bounds);
+                                                }
+                                                this.native_webview_pending = false;
+                                            }
+                                            cx.notify();
+                                        });
+                                    }
+
+                                    #[cfg(not(target_os = "windows"))]
                                     this.sync_auto_viewport(bounds, window, cx);
                                 })
                             {
