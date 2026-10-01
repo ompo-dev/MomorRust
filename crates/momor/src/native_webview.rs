@@ -15,11 +15,13 @@ use windows_062::{
     Win32::{
         Foundation::{HWND, RECT},
         System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx},
+        UI::Input::KeyboardAndMouse::SetFocus,
     },
     core::{BOOL, Interface, PCWSTR},
 };
 
 pub struct NativeWebView {
+    parent: HWND,
     controller: ICoreWebView2Controller,
     webview: ICoreWebView2,
 }
@@ -113,6 +115,7 @@ impl NativeWebView {
                                     .context("não foi possível exibir o WebView2")?;
                             }
                             Ok(Self {
+                                parent,
                                 controller,
                                 webview,
                             })
@@ -159,6 +162,11 @@ impl NativeWebView {
             self.controller
                 .SetIsVisible(visible)
                 .context("não foi possível alterar a visibilidade do WebView2")?;
+            if !visible {
+                // WebView2 is a native child HWND. Hiding its controller does not
+                // automatically return keyboard focus to GPUI.
+                SetFocus(Some(self.parent)).context("não foi possível devolver o foco ao Momor")?;
+            }
         }
         Ok(())
     }

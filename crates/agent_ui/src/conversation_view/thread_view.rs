@@ -30,6 +30,27 @@ em primeira pessoa, de forma concisa e direta, usando apenas as notas e o contex
 nesta conversa. Siga qualquer instrução de estilo ou formato que o usuário já tenha dado aqui. \
 Se a fala do interlocutor não for uma pergunta ou pedido dirigido ao candidato, não gere resposta.";
 
+const OPENAI_USAGE_WINDOWS: &[&str] = &["5 horas", "Semanal", "Mensal"];
+const ANTHROPIC_USAGE_WINDOWS: &[&str] = &["5 horas", "Semanal", "Mensal"];
+const GOOGLE_USAGE_WINDOWS: &[&str] = &["Diário", "Semanal", "Mensal"];
+const XAI_USAGE_WINDOWS: &[&str] = &["Diário", "Mensal"];
+const GENERIC_USAGE_WINDOWS: &[&str] = &["Janela do provedor", "Semanal", "Mensal"];
+
+fn usage_windows_for_provider(provider_id: &str) -> &'static [&'static str] {
+    let provider_id = provider_id.to_ascii_lowercase();
+    if provider_id.contains("openai") || provider_id.contains("codex") {
+        OPENAI_USAGE_WINDOWS
+    } else if provider_id.contains("anthropic") || provider_id.contains("claude") {
+        ANTHROPIC_USAGE_WINDOWS
+    } else if provider_id.contains("google") || provider_id.contains("gemini") {
+        GOOGLE_USAGE_WINDOWS
+    } else if provider_id.contains("xai") || provider_id.contains("grok") {
+        XAI_USAGE_WINDOWS
+    } else {
+        GENERIC_USAGE_WINDOWS
+    }
+}
+
 #[derive(Default)]
 struct ThreadFeedbackState {
     feedback: Option<ThreadFeedback>,
@@ -332,6 +353,7 @@ pub struct ThreadView {
     pub _subscriptions: Vec<Subscription>,
     pub message_editor: Entity<MessageEditor>,
     pub add_context_menu_handle: PopoverMenuHandle<ContextMenu>,
+    pub usage_limits_menu_handle: PopoverMenuHandle<ContextMenu>,
     pub thinking_effort_menu_handle: PopoverMenuHandle<ContextMenu>,
     pub project: WeakEntity<Project>,
     pub show_external_source_prompt_warning: bool,
@@ -575,6 +597,7 @@ impl ThreadView {
             in_flight_prompt: None,
             message_editor,
             add_context_menu_handle: PopoverMenuHandle::default(),
+            usage_limits_menu_handle: PopoverMenuHandle::default(),
             thinking_effort_menu_handle: PopoverMenuHandle::default(),
             project,
             show_external_source_prompt_warning,
@@ -3357,6 +3380,7 @@ impl ThreadView {
                                 h_flex()
                                     .gap_0p5()
                                     .child(self.render_add_context_button(cx))
+                                    .child(self.render_usage_limits_control(cx))
                                     .child(self.render_follow_toggle(cx))
                                     .children(self.render_fast_mode_control(cx))
                                     .children(self.render_thinking_control(cx)),
@@ -4149,6 +4173,93 @@ impl ThreadView {
                     .update(cx, |this, cx| this.build_add_context_menu(window, cx))
                     .ok()
             })
+    }
+
+    fn render_usage_limits_control(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(thread) = self.as_native_thread(cx) else {
+            return Empty.into_any_element();
+        };
+        let thread = thread.read(cx);
+        let Some(model) = thread.model() else {
+            return Empty.into_any_element();
+        };
+
+        let provider_id = model.provider_id().0.to_string();
+        let provider_name = model.provider_name().0.to_string();
+        let model_name = model.name().0.to_string();
+        let usage_windows = usage_windows_for_provider(&provider_id);
+        let context_limit = crate::humanize_token_count(model.max_token_count());
+        let output_limit = model
+            .max_output_tokens()
+            .map(crate::humanize_token_count);
+
+        PopoverMenu::new("usage-limits-menu")
+            .trigger_with_tooltip(
+                IconButton::new("usage-limits", IconName::Info)
+                    .icon_size(IconSize::Small)
+                    .icon_color(Color::Muted),
+                Tooltip::text("Limites de uso"),
+            )
+            .anchor(gpui::Anchor::BottomLeft)
+            .with_handle(self.usage_limits_menu_handle.clone())
+            .offset(gpui::Point {
+                x: px(0.0),
+                y: px(-2.0),
+            })
+            .menu(move |window, cx| {
+                Some(ContextMenu::build(window, cx, |mut menu, _window, _cx| {
+                    menu = menu.header(format!("{provider_name} · limites"));
+                    menu = menu.item(
+                        ContextMenuEntry::new(model_name.clone())
+                            .icon(IconName::Server)
+                            .icon_color(Color::Muted)
+                            .disabled(true),
+                    );
+                    menu = menu.separator();
+
+                    for usage_window in usage_windows {
+                        menu = menu.item(
+                            ContextMenuEntry::new(format!(
+                                "{usage_window}: quota não informado"
+                            ))
+                            .icon(IconName::Info)
+                            .icon_color(Color::Muted)
+                            .disabled(true),
+                        );
+                    }
+
+                    menu = menu
+                        .separator()
+                        .item(
+                            ContextMenuEntry::new(format!(
+                                "Contexto máximo: {context_limit} tokens"
+                            ))
+                            .icon(IconName::FileTextOutlined)
+                            .icon_color(Color::Muted)
+                            .disabled(true),
+                        );
+                    if let Some(output_limit) = output_limit.clone() {
+                        menu = menu.item(
+                            ContextMenuEntry::new(format!(
+                                "Saída máxima: {output_limit} tokens"
+                            ))
+                            .icon(IconName::FileTextOutlined)
+                            .icon_color(Color::Muted)
+                            .disabled(true),
+                        );
+                    }
+
+                    menu.item(
+                        ContextMenuEntry::new(
+                            "As quotas remotas aparecem quando a API do provedor as expõe.",
+                        )
+                        .icon(IconName::Info)
+                        .icon_color(Color::Muted)
+                        .disabled(true),
+                    )
+                }))
+            })
+            .into_any_element()
     }
 
     fn build_add_context_menu(

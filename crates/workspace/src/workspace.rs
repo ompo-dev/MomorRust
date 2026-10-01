@@ -8696,6 +8696,11 @@ impl Render for Workspace {
                         .min_h(px(0.))
                         .w_full()
                         .overflow_hidden()
+                        .on_mouse_down(MouseButton::Left, |_, window, _cx| {
+                            // A native WebView2 child can retain OS keyboard focus
+                            // after the user returns to the GPUI chat area.
+                            window.activate_window();
+                        })
                         .when_some(notebook, |this, panel| {
                             this.child(
                                 div()

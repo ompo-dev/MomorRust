@@ -3933,16 +3933,16 @@ impl NoteDoc {
                 } else {
                     "NoteBlock"
                 };
-                // Parágrafo FORA de foco → markdown renderizado (esconde `**` etc.); clicar
-                // volta pro editor. Demais blocos (e o focado) usam o editor cru.
+                // O editor nativo fica montado também fora de foco. O preview Markdown
+                // anterior transformava o arraste em seleção do bloco inteiro, porque o
+                // preview não participa da seleção de texto do editor.
                 let focused = block.editor.focus_handle(cx).is_focused(window);
                 let text = block.editor.read(cx).text(cx);
-                // Blocos com `[[wikilink]]` SEMPRE usam o editor (os creases/badges só
-                // aparecem nele, não no MarkdownElement).
+                // Keep isolated wikilinks as clickable badges; all other text remains
+                // in the native editor so arbitrary characters and lines are selectable.
                 let render_md = kind_renders_md(block.kind)
                     && !focused
-                    && !text.trim().is_empty()
-                    && !text.contains("[[");
+                    && lone_wikilink(&text).is_some();
                 if render_md {
                     if !is_list_kind(block.kind)
                         && let Some(link_title) = lone_wikilink(&text)
