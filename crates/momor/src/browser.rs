@@ -3,6 +3,9 @@
 //! Momor owns the browser chrome, tabs, input routing, history and persistence.
 //! The embedded Obscura engine is used only as the page runtime through CDP; no
 //! external browser window or browser shell is launched.
+
+#[cfg(target_os = "windows")]
+use crate::native_webview::NativeWebView;
 use anyhow::{Context as _, Result, anyhow};
 use async_tungstenite::tungstenite::Message;
 use base64::Engine as _;
@@ -13,6 +16,8 @@ use gpui::{
     Render, SharedString, Subscription, Task, WeakEntity, Window, anchored, deferred, img,
     prelude::*,
 };
+#[cfg(target_os = "windows")]
+use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -814,6 +819,8 @@ pub struct BrowserPanel {
     viewport_auto: bool,
     viewport_scale: f32,
     last_mouse_move: Option<Instant>,
+    #[cfg(target_os = "windows")]
+    native_webview: Option<NativeWebView>,
     context_menu: Option<(Entity<ContextMenu>, Point<Pixels>, Subscription)>,
     devtools_open: bool,
     devtools_tab: DevtoolsTab,
@@ -859,6 +866,8 @@ impl BrowserPanel {
             viewport_auto: true,
             viewport_scale: 1.0,
             last_mouse_move: None,
+            #[cfg(target_os = "windows")]
+            native_webview: None,
             context_menu: None,
             devtools_open: false,
             devtools_tab: DevtoolsTab::Console,
@@ -906,6 +915,12 @@ impl BrowserPanel {
         self.viewport_size = None;
         self.viewport_auto = true;
         self.last_mouse_move = None;
+        #[cfg(target_os = "windows")]
+        if let Some(webview) = &self.native_webview {
+            if let Err(error) = webview.navigate(&self.active_url()) {
+                tracing::debug!("falha ao preparar nova aba no WebView2: {error:#}");
+            }
+        }
         self.sync_address_bar(window, cx);
         cx.notify();
     }
@@ -918,6 +933,12 @@ impl BrowserPanel {
         self.viewport_size = None;
         self.viewport_auto = true;
         self.last_mouse_move = None;
+        #[cfg(target_os = "windows")]
+        if let Some(webview) = &self.native_webview {
+            if let Err(error) = webview.navigate(&self.active_url()) {
+                tracing::debug!("falha ao ativar aba no WebView2: {error:#}");
+            }
+        }
         self.sync_address_bar(window, cx);
         cx.notify();
     }
@@ -972,6 +993,54 @@ impl BrowserPanel {
         self.address_bar = Some(field);
     }
 
+    #[cfg(target_os = "windows")]
+    fn ensure_native_webview(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        if self.native_webview.is_none() {
+            let parent = match window.window_handle() {
+                Ok(handle) => match handle.as_raw() {
+                    RawWindowHandle::Win32(handle) => windows_062::Win32::Foundation::HWND(
+                        handle.hwnd.get() as *mut std::ffi::c_void,
+                    ),
+                    _ => {
+                        if let Some(tab) = self.active_tab_mut() {
+                            tab.status = "O WebView2 requer uma janela Win32".to_string();
+                        }
+                        return;
+                    }
+                },
+                Err(error) => {
+                    if let Some(tab) = self.active_tab_mut() {
+                        tab.status = format!("Falha ao obter a janela do navegador: {error:#}");
+                    }
+                    return;
+                }
+            };
+            match NativeWebView::new(parent, &embedded_storage_dir().join("webview2-profile")) {
+                Ok(webview) => self.native_webview = Some(webview),
+                Err(error) => {
+                    if let Some(tab) = self.active_tab_mut() {
+                        tab.status = format!("WebView2 indisponível: {error:#}");
+                    }
+                    return;
+                }
+            }
+        }
+
+        let scale = window.scale_factor();
+        let width = (bounds.size.width.as_f32() * scale).round().max(1.0) as i32;
+        let height = (bounds.size.height.as_f32() * scale).round().max(1.0) as i32;
+        if let Some(webview) = &self.native_webview {
+            if let Err(error) = webview.set_bounds(width, height) {
+                tracing::debug!("falha ao redimensionar WebView2: {error:#}");
+            }
+        }
+    }
+
     fn browser_coordinates(&self, position: Point<Pixels>) -> Option<(f32, f32)> {
         let bounds = self.content_bounds?;
         let local = position - bounds.origin;
@@ -1006,6 +1075,10 @@ impl BrowserPanel {
         modifiers: u8,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(target_os = "windows")]
+        if self.native_webview.is_some() {
+            return;
+        }
         if event_type == "mouseMoved" {
             let now = Instant::now();
             if self
@@ -1156,6 +1229,22 @@ impl BrowserPanel {
         cx: &mut Context<Self>,
     ) {
         let tab_index = self.active_tab;
+        #[cfg(target_os = "windows")]
+        if let Some(webview) = &self.native_webview {
+            if let Err(error) = webview.navigate(&history_entry.url) {
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.status = format!("Falha no histórico: {error:#}");
+                }
+            } else if let Some(tab) = self.active_tab_mut() {
+                tab.current_url = history_entry.url.clone();
+                tab.title = history_entry.title.clone();
+                tab.status = history_entry.url;
+                tab.loading = false;
+            }
+            self.sync_address_bar(window, cx);
+            cx.notify();
+            return;
+        }
         let (Some(client), Some(mut page)) = (self.client.clone(), self.active_page()) else {
             return;
         };
@@ -1606,6 +1695,10 @@ impl BrowserPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(target_os = "windows")]
+        if self.native_webview.is_some() {
+            return;
+        }
         if !self.viewport_auto {
             return;
         }
@@ -1633,6 +1726,17 @@ impl BrowserPanel {
     }
 
     fn open_devtools_tab(&mut self, tab: DevtoolsTab, cx: &mut Context<Self>) {
+        #[cfg(target_os = "windows")]
+        if let Some(webview) = &self.native_webview {
+            if let Err(error) = webview.open_devtools() {
+                if let Some(active_tab) = self.active_tab_mut() {
+                    active_tab.status = format!("DevTools indisponível: {error:#}");
+                }
+            }
+            self.devtools_open = false;
+            cx.notify();
+            return;
+        }
         self.devtools_open = true;
         self.devtools_tab = tab;
         if tab == DevtoolsTab::Dom {
@@ -1725,6 +1829,10 @@ impl BrowserPanel {
         delta_y: f32,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(target_os = "windows")]
+        if self.native_webview.is_some() {
+            return;
+        }
         let (Some(client), Some(page), Some((x, y))) = (
             self.client.clone(),
             self.active_page(),
@@ -1750,6 +1858,10 @@ impl BrowserPanel {
         modifiers: u8,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(target_os = "windows")]
+        if self.native_webview.is_some() {
+            return;
+        }
         let (Some(client), Some(page)) = (self.client.clone(), self.active_page()) else {
             return;
         };
@@ -1778,6 +1890,25 @@ impl BrowserPanel {
                 return;
             }
         };
+        #[cfg(target_os = "windows")]
+        if let Some(webview) = &self.native_webview {
+            if let Err(error) = webview.navigate(&url) {
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.status = format!("Falha no navegador: {error:#}");
+                }
+                cx.notify();
+                return;
+            }
+            if let Some(tab) = self.active_tab_mut() {
+                tab.current_url = url.clone();
+                tab.title = url.clone();
+                tab.status = url;
+                tab.loading = false;
+            }
+            self.sync_address_bar(window, cx);
+            cx.notify();
+            return;
+        }
         let tab_index = self.active_tab;
         let endpoint = default_endpoint();
         let existing_client = self.client.clone();
@@ -2086,6 +2217,21 @@ impl BrowserPanel {
 
     fn navigate_history(&mut self, delta: i32, window: &mut Window, cx: &mut Context<Self>) {
         let tab_index = self.active_tab;
+        #[cfg(target_os = "windows")]
+        if let Some(webview) = &self.native_webview {
+            let moved = if delta < 0 {
+                webview.go_back()
+            } else {
+                webview.go_forward()
+            };
+            if let Err(error) = moved {
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.status = format!("Falha no histórico: {error:#}");
+                }
+            }
+            cx.notify();
+            return;
+        }
         let (Some(client), Some(mut page)) = (self.client.clone(), self.active_page()) else {
             return;
         };
@@ -2138,6 +2284,19 @@ impl BrowserPanel {
 
     fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tab_index = self.active_tab;
+        #[cfg(target_os = "windows")]
+        if let Some(webview) = &self.native_webview {
+            if let Err(error) = webview.reload() {
+                if let Some(tab) = self.active_tab_mut() {
+                    tab.status = format!("Falha ao atualizar: {error:#}");
+                }
+            } else if let Some(tab) = self.active_tab_mut() {
+                tab.status = "Atualizando...".to_string();
+                tab.loading = true;
+            }
+            cx.notify();
+            return;
+        }
         let (Some(client), Some(mut page)) = (self.client.clone(), self.active_page()) else {
             self.navigate(window, cx);
             return;
@@ -2218,6 +2377,10 @@ impl Render for BrowserPanel {
         } else {
             IconName::Star
         };
+        #[cfg(target_os = "windows")]
+        let native_browser_active = self.native_webview.is_some();
+        #[cfg(not(target_os = "windows"))]
+        let native_browser_active = false;
         let tab_labels = self
             .tabs
             .iter()
@@ -2416,6 +2579,8 @@ impl Render for BrowserPanel {
                                 tracing::debug!("browser content bounds update failed: {error:#}");
                             } else if let Err(error) =
                                 content_bounds_entity.update(cx, |this, cx| {
+                                    #[cfg(target_os = "windows")]
+                                    this.ensure_native_webview(bounds, window, cx);
                                     this.sync_auto_viewport(bounds, window, cx);
                                 })
                             {
@@ -2538,10 +2703,12 @@ impl Render for BrowserPanel {
                         window.prevent_default();
                         cx.stop_propagation();
                     }))
-                    .when_some(image.clone(), |this, image| {
-                        this.child(img(image).size_full())
+                    .when(!native_browser_active, |this| {
+                        this.when_some(image.clone(), |this, image| {
+                            this.child(img(image).size_full())
+                        })
                     })
-                    .when(image.is_none(), |this| {
+                    .when(!native_browser_active && image.is_none(), |this| {
                         this.child(
                             v_flex()
                                 .size_full()
@@ -2551,6 +2718,11 @@ impl Render for BrowserPanel {
                                 .child(Icon::new(IconName::Public).size(IconSize::XLarge))
                                 .child(Label::new(status).color(Color::Muted)),
                         )
+                    })
+                    .when(native_browser_active, |this| {
+                        // The native WebView2 child owns the pixels; keep this layout child so
+                        // GPUI continues reporting the live content bounds.
+                        this.child(div().size_full())
                     }),
             )
             .when(devtools_open, |_| {

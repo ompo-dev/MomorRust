@@ -3,6 +3,8 @@
 
 mod browser;
 mod momor;
+#[cfg(target_os = "windows")]
+mod native_webview;
 mod reliability;
 
 // Ensure the binary name stays in sync with APP_NAME so that the paths used
@@ -335,6 +337,12 @@ fn main() {
 
     #[cfg(windows)]
     check_for_conpty_dll();
+
+    // WebView2 is hosted as a child HWND below the Momor browser controls.
+    #[cfg(target_os = "windows")]
+    if std::env::var_os("GPUI_DISABLE_DIRECT_COMPOSITION").is_none() {
+        unsafe { std::env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "1") };
+    }
 
     // This fork has no Momor cloud backend. Keep optional cloud services quiet unless
     // the user explicitly supplies a compatible backend.
