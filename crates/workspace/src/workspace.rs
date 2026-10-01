@@ -2051,6 +2051,14 @@ impl Workspace {
                     (window, workspace)
                 };
 
+            // Momor is a companion surface: keep workspace windows above other
+            // applications until the user minimizes or retracts the window.
+            window
+                .update(cx, |_, window, _cx| {
+                    window.set_always_on_top(true);
+                })
+                .context("failed to keep workspace window on top")?;
+
             notify_if_database_failed(window, cx);
             // Check if this is an empty workspace (no paths to open)
             // An empty workspace is one where project_paths is empty
@@ -8543,7 +8551,7 @@ pub fn toggle_compact(pill_width: f32, window: &mut Window, cx: &mut App) {
             .unwrap_or_else(|| gpui::size(px(900.), px(700.)));
         let slot = cx.default_global::<CompactMode>();
         slot.active = false;
-        window.set_always_on_top(false);
+        window.set_always_on_top(true);
         window.set_window_bounds(centered_bounds(window, restore));
     } else {
         let current = window.viewport_size();
@@ -10094,6 +10102,12 @@ pub fn open_workspace_by_id(
             (window, workspace)
         };
 
+        window
+            .update(cx, |_, window, _cx| {
+                window.set_always_on_top(true);
+            })
+            .context("failed to keep restored workspace window on top")?;
+
         notify_if_database_failed(window, cx);
 
         // Restore items from the serialized workspace
@@ -10676,6 +10690,7 @@ pub fn join_in_room_project(
         };
 
         multi_workspace_window.update(cx, |multi_workspace, window, cx| {
+            window.set_always_on_top(true);
             cx.activate(true);
             window.activate_window();
 

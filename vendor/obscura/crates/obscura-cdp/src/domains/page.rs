@@ -838,6 +838,7 @@ pub(crate) fn command_can_change_screencast_frame(method: &str) -> bool {
         "Page.navigate"
             | "Page.reload"
             | "Page.navigateToHistoryEntry"
+            | "Page.settle"
             | "Input.dispatchMouseEvent"
             | "Input.dispatchKeyEvent"
             | "Input.dispatchTouchEvent"
@@ -1405,6 +1406,22 @@ pub async fn handle(
                 .and_then(|v| v.as_str())
                 .ok_or("url required")?;
             do_navigate(url, params, ctx, session_id).await
+        }
+        "settle" => {
+            // Obscura intentionally returns from Page.navigate at the requested
+            // lifecycle event. Momor also needs the post-load phase, where
+            // timers, fetches, dynamic modules and render resources hydrate the
+            // document before it is presented as a browser surface.
+            let max_ms = params
+                .get("maxMs")
+                .and_then(Value::as_u64)
+                .unwrap_or(3_000)
+                .min(30_000);
+            let page = ctx
+                .get_session_page_mut(session_id)
+                .ok_or("No page for session")?;
+            page.settle(max_ms).await;
+            Ok(json!({ "settled": true, "maxMs": max_ms }))
         }
         "reload" => {
             let current_url = ctx

@@ -36,6 +36,7 @@ use url::Url;
 use workspace::Workspace;
 
 const DEFAULT_CDP_ENDPOINT: &str = "ws://127.0.0.1:9222/devtools/browser";
+const BROWSER_SETTLE_MAX_MS: u64 = 5_000;
 
 #[derive(Clone, Debug)]
 pub struct CdpEvent {
@@ -227,6 +228,16 @@ impl CdpClient {
         .await?;
         page.url = url.to_string();
         Ok(())
+    }
+
+    async fn settle_page(&self, page: &BrowserPage) -> Result<()> {
+        self.send_with_session(
+            "Page.settle",
+            json!({ "maxMs": BROWSER_SETTLE_MAX_MS }),
+            Some(&page.session_id),
+        )
+        .await
+        .map(|_| ())
     }
 
     pub async fn navigate_history(&self, page: &mut BrowserPage, delta: i32) -> Result<()> {
@@ -1012,6 +1023,7 @@ impl BrowserPanel {
                     )
                     .await?;
                 page.url = history_entry.url;
+                client.settle_page(&page).await?;
                 let screenshot = client.capture_screenshot(&page).await?;
                 anyhow::Ok((page, screenshot))
             }
@@ -1597,6 +1609,7 @@ impl BrowserPanel {
             if let Some((width, height)) = viewport {
                 client.set_viewport(&page, width, height).await?;
             }
+            client.settle_page(&page).await?;
             let screenshot = client.capture_screenshot(&page).await?;
             let screencast = if should_start_screencast {
                 match client.start_screencast(&page).await {
@@ -1861,6 +1874,7 @@ impl BrowserPanel {
         self.navigation_task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = async {
                 client.navigate_history(&mut page, delta).await?;
+                client.settle_page(&page).await?;
                 let screenshot = client.capture_screenshot(&page).await?;
                 anyhow::Ok((page, screenshot))
             }
@@ -1904,6 +1918,7 @@ impl BrowserPanel {
             let result = async {
                 let url = page.url.clone();
                 client.navigate(&mut page, &url).await?;
+                client.settle_page(&page).await?;
                 let screenshot = client.capture_screenshot(&page).await?;
                 anyhow::Ok((page, screenshot))
             }

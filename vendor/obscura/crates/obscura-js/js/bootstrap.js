@@ -113,6 +113,25 @@ globalThis.dispatchEvent = function(event) {
   return _eventTargetDispatch(globalThis, event);
 };
 
+// Polymer/ShadyDOM uses these names to retain a handle to the host's native
+// window event methods before it installs its own delegation layer. Obscura
+// owns the EventTarget implementation, so expose equivalent stable entry
+// points instead of letting that compatibility probe abort page bootstrap.
+Object.defineProperties(globalThis, {
+  __shady_native_addEventListener: {
+    value: (type, fn, options) => _eventTargetAdd(globalThis, type, fn, options),
+    configurable: true,
+  },
+  __shady_native_removeEventListener: {
+    value: (type, fn, options) => _eventTargetRemove(globalThis, type, fn, options),
+    configurable: true,
+  },
+  __shady_native_dispatchEvent: {
+    value: (event) => _eventTargetDispatch(globalThis, event),
+    configurable: true,
+  },
+});
+
 let _domMutationEpoch = 0;
 let _treeMutationEpoch = 0;
 const _DOM_MUTATION_COMMANDS = new Set([
@@ -2349,6 +2368,7 @@ class Node {
     _registerWindowNamedTree(c);
     if (globalThis.__mutationObservers?.length) globalThis.__notifyMutation('childList', this._nid, [c._nid], []);
     __prepareInsertedSubtree(c);
+    if (parentConnected) globalThis.customElements?._connectInserted(c);
     if (c instanceof Element && c.tagName === 'LINK') {
       _loadLinkedStylesheet(c);
     }
@@ -2418,6 +2438,7 @@ class Node {
       globalThis.__notifyMutation('childList', this._nid, [newChild._nid], [oldChild._nid]);
     }
     __prepareInsertedSubtree(newChild);
+    if (parentConnected) globalThis.customElements?._connectInserted(newChild);
     if (newChild instanceof Element && newChild.tagName === 'LINK') {
       _loadLinkedStylesheet(newChild);
     }
@@ -2455,6 +2476,7 @@ class Node {
     // observer sees it and whether a <link> loads its stylesheet.
     if (globalThis.__mutationObservers?.length) globalThis.__notifyMutation('childList', this._nid, [n._nid], []);
     __prepareInsertedSubtree(n);
+    if (parentConnected) globalThis.customElements?._connectInserted(n);
     if (n instanceof Element && n.tagName === 'LINK') {
       _loadLinkedStylesheet(n);
     }
@@ -3693,6 +3715,11 @@ class Element extends Node {
     if (this.namespaceURI !== "http://www.w3.org/1999/xhtml" || this.localName !== "iframe") return undefined;
     if (!this._sandboxList) this._sandboxList = new DOMTokenList(this, "sandbox", ["allow-downloads","allow-forms","allow-modals","allow-orientation-lock","allow-pointer-lock","allow-popups","allow-popups-to-escape-sandbox","allow-presentation","allow-same-origin","allow-scripts","allow-top-navigation","allow-top-navigation-by-user-activation","allow-top-navigation-to-custom-protocols"]);
     return this._sandboxList;
+  }
+  set sandbox(value) {
+    if (this.namespaceURI === "http://www.w3.org/1999/xhtml" && this.localName === "iframe") {
+      this.setAttribute("sandbox", String(value));
+    }
   }
   get sizes() {
     if (this.namespaceURI !== "http://www.w3.org/1999/xhtml" || this.localName !== "link") return undefined;
@@ -6881,9 +6908,24 @@ function _elementClassForKnownName(namespace, qualifiedName) {
   }
   return Element;
 }
+
+// Parser-created nodes can be wrapped before an asynchronously loaded bundle
+// calls customElements.define(). Revisit cached wrappers when they cross the
+// JS boundary so late definitions still upgrade the live object, matching the
+// browser's custom-element upgrade reaction instead of leaving framework hosts
+// as inert plain Elements.
+function _upgradeWrappedCustomElement(element, nid) {
+  const registry = globalThis.customElements;
+  if (!element || !registry?._registry) return element;
+  const localName = _domParse("local_name", nid);
+  const definition = localName && registry._registry.get(localName);
+  if (definition) registry._upgradeElement(element, definition);
+  return element;
+}
+
 function _wrap(nid) {
   if (nid < 0 || nid === null || nid === undefined || isNaN(nid)) return null;
-  if (_cache.has(nid)) return _cache.get(nid);
+  if (_cache.has(nid)) return _upgradeWrappedCustomElement(_cache.get(nid), nid);
   const t = +_dom("node_type", nid);
   let n;
   if (t === 1) { const C = _elementClassFor(nid); n = new C(nid); }
@@ -6892,15 +6934,15 @@ function _wrap(nid) {
   else if (t === 9) n = new Document(nid);
   else n = new Node(nid);
   _cache.set(nid, n);
-  return n;
+  return _upgradeWrappedCustomElement(n, nid);
 }
 function _wrapEl(nid) {
   if (nid < 0 || nid === null || nid === undefined || isNaN(nid)) return null;
-  if (_cache.has(nid)) return _cache.get(nid);
+  if (_cache.has(nid)) return _upgradeWrappedCustomElement(_cache.get(nid), nid);
   const C = _elementClassFor(nid);
   const n = new C(nid);
   _cache.set(nid, n);
-  return n;
+  return _upgradeWrappedCustomElement(n, nid);
 }
 
 globalThis._wrap = _wrap;
@@ -9762,7 +9804,14 @@ function _isValidCustomElementName(name) {
   return /^[a-z][a-z0-9._·À-￿-]*-[a-z0-9._·À-￿-]*$/.test(name);
 }
 class CustomElementRegistry {
-  constructor() { this._registry = new Map(); this._byCtor = new Map(); this._whenDefinedResolvers = new Map(); this._defining = false; }
+  constructor() {
+    this._registry = new Map();
+    this._byCtor = new Map();
+    this._whenDefinedResolvers = new Map();
+    this._defining = false;
+    this._pendingInserted = new Set();
+    this._insertedFlushScheduled = false;
+  }
   define(name, cls, opts) {
     if (!_isConstructorCE(cls)) throw new TypeError("Failed to execute 'define' on 'CustomElementRegistry': parameter 2 is not a constructor.");
     if (!_isValidCustomElementName(name)) throw new DOMException("Failed to execute 'define' on 'CustomElementRegistry': \"" + name + "\" is not a valid custom element name", "SyntaxError");
@@ -9781,7 +9830,13 @@ class CustomElementRegistry {
     // music.apple.com, and any web-component site as empty shells.
     try {
       const matches = globalThis.document?.querySelectorAll(name) || [];
-      for (const el of matches) this._upgradeElement(el, cls);
+      for (const el of matches) {
+        // A parent definition can arrive after its already-parsed children.
+        // Upgrade the subtree first so connectedCallback observes the same
+        // component graph it would see in a browser.
+        this.upgrade(el);
+        this._upgradeElement(el, cls);
+      }
     } catch (e) {}
     const resolvers = this._whenDefinedResolvers.get(name);
     if (resolvers) {
@@ -9809,12 +9864,96 @@ class CustomElementRegistry {
       if (constructed !== el) {
         throw new TypeError("Custom element constructor did not produce the element being upgraded");
       }
-      if (typeof el.connectedCallback === 'function' && globalThis.document?.contains?.(el)) {
-        try { el.connectedCallback(); } catch (e) {}
-      }
+      this._connectElement(el);
     } catch (e) {
       el.__customUpgradeFailed = true;
     }
+  }
+  _connectElement(el) {
+    if (!el || el.__customConnected || el.__customConnecting || !el.isConnected) {
+      return !el || !!el.__customConnected || !!el.__customConnecting;
+    }
+    const callback = el.connectedCallback;
+    if (typeof callback !== 'function') {
+      el.__customConnected = true;
+      return true;
+    }
+    el.__customConnecting = true;
+    try {
+      callback.call(el);
+      el.__customConnected = true;
+      el.__customConnectedError = null;
+      el.__customConnectAttempts = 0;
+      this._replayInitialData(el);
+      return true;
+    } catch (e) {
+      // Frameworks such as Polymer can connect a parent before a lazily loaded
+      // child definition or resource is ready. Keep the element retryable so a
+      // transient startup failure does not leave the entire application inert.
+      el.__customConnectedError = String(e?.stack || e?.message || e);
+      const attempts = el.__customConnectAttempts || 0;
+      if (attempts < 12) {
+        el.__customConnectAttempts = attempts + 1;
+        globalThis.setTimeout(
+          () => this._connectElement(el),
+          Math.min(250, 25 * attempts),
+        );
+      }
+      return false;
+    } finally {
+      el.__customConnecting = false;
+    }
+  }
+  _connectInserted(el) {
+    if (!el?.isConnected) return;
+    this._pendingInserted.add(el);
+    this._scheduleInsertedFlush();
+  }
+  _scheduleInsertedFlush() {
+    if (this._insertedFlushScheduled) return;
+    this._insertedFlushScheduled = true;
+    globalThis.setTimeout(() => {
+      this._insertedFlushScheduled = false;
+      this._flushInserted();
+    }, 0);
+  }
+  _flushInserted() {
+    const pending = Array.from(this._pendingInserted);
+    this._pendingInserted.clear();
+    const batch = pending.slice(0, 64);
+    for (const el of batch) {
+      if (!el?.isConnected) continue;
+      const definition = el.localName && this._registry.get(el.localName);
+      if (definition && !el.__customUpgraded) this._upgradeElement(el, definition);
+      if (el.__customUpgraded) this._connectElement(el);
+    }
+    for (const el of pending.slice(64)) this._pendingInserted.add(el);
+    if (this._pendingInserted.size) this._scheduleInsertedFlush();
+  }
+  _replayInitialData(el) {
+    if (el?.localName !== 'ytd-app' || el.__obscuraInitialDataReplayScheduled) return;
+    el.__obscuraInitialDataReplayScheduled = true;
+    // The server contract can run before YouTube's app module installs its
+    // loadInitialData hook. Replay the same payload once the custom element is
+    // connected so the app can build its initial route and render its content.
+    const replay = (attempt) => {
+      if (el.data || el.appData) return;
+      if (typeof el.loadData !== 'function' || !globalThis.ytInitialData || !globalThis.ytCommand) {
+        if (attempt < 20) globalThis.setTimeout(() => replay(attempt + 1), 50);
+        return;
+      }
+      el.__obscuraInitialDataReplayed = true;
+      try {
+        el.loadData({
+          page: globalThis.ytPageType,
+          endpoint: globalThis.ytCommand,
+          response: globalThis.ytInitialData,
+        });
+      } catch (e) {
+        el.__obscuraInitialDataError = String(e?.stack || e?.message || e);
+      }
+    };
+    globalThis.setTimeout(() => replay(0), 0);
   }
   get(name) { return this._registry.get(name); }
   getName(cls) {
