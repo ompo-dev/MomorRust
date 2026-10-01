@@ -794,6 +794,8 @@ webrtc-sys = { git = "https://github.com/zed-industries/livekit-rust-sdks", rev 
 # the same sources when Cargo resolves the combined application.
 taffy = { path = "vendor/obscura/vendor/taffy" }
 cosmic-text = { path = "vendor/obscura/vendor/cosmic-text" }
+# Keep MathJax on the same rusty_v8 release as the embedded Obscura engine.
+mathjax_svg = { path = "vendor/mathjax_svg" }
 
 [profile.dev]
 split-debuginfo = "unpacked"

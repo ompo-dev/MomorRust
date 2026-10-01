@@ -4223,7 +4223,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85cdff08dedf79da6a40f97554f47d59d419ba3df8061b8b31789cd2cbe00433"
 dependencies = [
- "v8 150.4.0",
+ "v8",
  "v8x",
 ]
 
@@ -9350,12 +9350,10 @@ dependencies = [
 [[package]]
 name = "mathjax_svg"
 version = "3.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad495ba668b38f70fa36349e597df582caf9055949b1dde96cce646e67c93e1c"
 dependencies = [
  "anyhow",
  "thiserror 2.0.17",
- "v8 139.0.0",
+ "v8",
 ]
 
 [[package]]
@@ -17400,22 +17398,6 @@ checksum = "23b082222b4f6619906941c17eb2297fff4c2fb96cb60164170522942a200bd8"
 dependencies = [
  "outref",
  "vsimd",
-]
-
-[[package]]
-name = "v8"
-version = "139.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a33ccf9cc537275d7bb848e94f160986164e2ea5138e60166551d115c7ea8f1a"
-dependencies = [
- "bindgen 0.72.1",
- "bitflags 2.10.0",
- "fslock",
- "gzip-header",
- "home",
- "miniz_oxide",
- "paste",
- "which 6.0.3",
 ]
 
 [[package]]
