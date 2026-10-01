@@ -158,6 +158,10 @@ pub enum Crease<T> {
 pub struct CreaseMetadata {
     pub icon_path: SharedString,
     pub label: SharedString,
+    #[serde(default)]
+    pub kind: Option<SharedString>,
+    #[serde(default)]
+    pub uri: Option<SharedString>,
 }
 
 impl<T> Crease<T> {

@@ -987,6 +987,8 @@ pub(crate) fn insert_crease_for_mention(
             metadata: Some(CreaseMetadata {
                 label: crease_label,
                 icon_path: crease_icon,
+                kind: None,
+                uri: None,
             }),
         };
 
@@ -1015,7 +1017,12 @@ pub(crate) fn crease_for_mention(
     let render_trailer = move |_row, _unfold, _window: &mut Window, _cx: &mut App| Empty.into_any();
 
     Crease::inline(range, placeholder, fold_toggle("mention"), render_trailer)
-        .with_metadata(CreaseMetadata { icon_path, label })
+        .with_metadata(CreaseMetadata {
+            icon_path,
+            label,
+            kind: None,
+            uri: None,
+        })
 }
 
 fn render_fold_icon_button(

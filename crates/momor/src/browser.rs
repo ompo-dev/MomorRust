@@ -62,10 +62,19 @@ pub struct CdpClient {
     commands: mpsc::UnboundedSender<CdpCommand>,
     events: broadcast::Sender<CdpEvent>,
     next_id: Arc<AtomicU64>,
+    direct_page: bool,
 }
 
 impl CdpClient {
     pub async fn connect(endpoint: &str) -> Result<Self> {
+        Self::connect_with_mode(endpoint, false).await
+    }
+
+    pub async fn connect_page(endpoint: &str) -> Result<Self> {
+        Self::connect_with_mode(endpoint, true).await
+    }
+
+    async fn connect_with_mode(endpoint: &str, direct_page: bool) -> Result<Self> {
         let endpoint_url = Url::parse(endpoint).context("invalid browser CDP endpoint")?;
         if !matches!(endpoint_url.scheme(), "ws" | "wss") {
             anyhow::bail!("browser CDP endpoint must use ws:// or wss://");
@@ -80,6 +89,7 @@ impl CdpClient {
             commands,
             events: events.clone(),
             next_id: Arc::new(AtomicU64::new(1)),
+            direct_page,
         };
 
         tokio::spawn(run_cdp_socket(socket, command_rx, events));
@@ -147,8 +157,9 @@ impl CdpClient {
             })
             .map_err(|_| anyhow!("browser engine CDP connection closed"))?;
 
-        response
+        tokio::time::timeout(Duration::from_secs(15), response)
             .await
+            .map_err(|_| anyhow!("browser engine CDP request timed out: {method}"))?
             .map_err(|_| anyhow!("browser engine CDP connection closed"))?
             .map_err(|error| anyhow!(error))
     }
@@ -193,10 +204,73 @@ impl CdpClient {
         })
     }
 
+    pub async fn active_page(&self) -> Result<BrowserPage> {
+        if self.direct_page {
+            return Ok(BrowserPage {
+                target_id: String::new(),
+                session_id: String::new(),
+                url: "about:blank".to_string(),
+            });
+        }
+
+        let response = self.send("Target.getTargets", json!({})).await?;
+        let targets = response
+            .get("targetInfos")
+            .and_then(Value::as_array)
+            .context("browser did not return target information")?;
+        let target = targets
+            .iter()
+            .find(|target| target.get("type").and_then(Value::as_str) == Some("page"))
+            .context("browser has no open page")?;
+        let target_id = target
+            .get("targetId")
+            .and_then(Value::as_str)
+            .context("browser target has no id")?;
+        let url = target
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or("about:blank");
+        self.attach_page(target_id, url).await
+    }
+
+    async fn attach_page(&self, target_id: &str, url: &str) -> Result<BrowserPage> {
+        let attached = self
+            .send(
+                "Target.attachToTarget",
+                json!({ "targetId": target_id, "flatten": true }),
+            )
+            .await?;
+        let session_id = attached
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .context("browser did not return a target session id")?
+            .to_string();
+        self.send_with_session("Page.enable", json!({}), Some(&session_id))
+            .await?;
+        self.send_with_session("Runtime.enable", json!({}), Some(&session_id))
+            .await?;
+        self.send_with_session("Network.enable", json!({}), Some(&session_id))
+            .await?;
+        self.send_with_session("DOM.enable", json!({}), Some(&session_id))
+            .await?;
+        Ok(BrowserPage {
+            target_id: target_id.to_string(),
+            session_id,
+            url: url.to_string(),
+        })
+    }
+
     pub async fn close_page(&self, page: &BrowserPage) -> Result<()> {
+        if page.target_id.is_empty() {
+            return Ok(());
+        }
         self.send("Target.closeTarget", json!({ "targetId": page.target_id }))
             .await
             .map(|_| ())
+    }
+
+    fn page_session<'a>(&self, page: &'a BrowserPage) -> Option<&'a str> {
+        (!page.session_id.is_empty()).then_some(page.session_id.as_str())
     }
 
     pub async fn set_viewport(&self, page: &BrowserPage, width: u32, height: u32) -> Result<()> {
@@ -208,7 +282,7 @@ impl CdpClient {
                 "deviceScaleFactor": 1,
                 "mobile": false,
             }),
-            Some(&page.session_id),
+            self.page_session(page),
         )
         .await
         .map(|_| ())
@@ -230,7 +304,7 @@ impl CdpClient {
         self.send_with_session(
             "Page.navigate",
             json!({ "url": url }),
-            Some(&page.session_id),
+            self.page_session(page),
         )
         .await?;
         page.url = url.to_string();
@@ -241,7 +315,7 @@ impl CdpClient {
         self.send_with_session(
             "Page.settle",
             json!({ "maxMs": BROWSER_SETTLE_MAX_MS }),
-            Some(&page.session_id),
+            self.page_session(page),
         )
         .await
         .map(|_| ())
@@ -252,7 +326,7 @@ impl CdpClient {
             .send_with_session(
                 "Page.getNavigationHistory",
                 json!({}),
-                Some(&page.session_id),
+                self.page_session(page),
             )
             .await?;
         let current_index = history
@@ -274,7 +348,7 @@ impl CdpClient {
         self.send_with_session(
             "Page.navigateToHistoryEntry",
             json!({ "entryId": entry_id }),
-            Some(&page.session_id),
+            self.page_session(page),
         )
         .await?;
         page.url = target
@@ -293,7 +367,7 @@ impl CdpClient {
             .send_with_session(
                 "Page.getNavigationHistory",
                 json!({}),
-                Some(&page.session_id),
+                self.page_session(page),
             )
             .await?;
         let current_index = history
@@ -328,7 +402,7 @@ impl CdpClient {
             .send_with_session(
                 "Page.captureScreenshot",
                 json!({ "format": "png" }),
-                Some(&page.session_id),
+                self.page_session(page),
             )
             .await?;
         let encoded = response
@@ -353,7 +427,7 @@ impl CdpClient {
                 "maxHeight": 2048,
                 "everyNthFrame": 1,
             }),
-            Some(&page.session_id),
+            self.page_session(page),
         )
         .await?;
         Ok(events)
@@ -367,7 +441,7 @@ impl CdpClient {
         self.send_with_session(
             "Page.screencastFrameAck",
             json!({ "sessionId": session_id }),
-            Some(&page.session_id),
+            self.page_session(page),
         )
         .await
         .map(|_| ())
@@ -394,7 +468,7 @@ impl CdpClient {
                 "clickCount": click_count,
                 "modifiers": modifiers,
             }),
-            Some(&page.session_id),
+            self.page_session(page),
         )
         .await
         .map(|_| ())
@@ -417,7 +491,7 @@ impl CdpClient {
                 "deltaX": delta_x,
                 "deltaY": delta_y,
             }),
-            Some(&page.session_id),
+            self.page_session(page),
         )
         .await
         .map(|_| ())
@@ -442,7 +516,17 @@ impl CdpClient {
                 "windowsVirtualKeyCode": cdp_virtual_key_code(key),
                 "nativeVirtualKeyCode": cdp_virtual_key_code(key),
             }),
-            Some(&page.session_id),
+            self.page_session(page),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    pub async fn insert_text(&self, page: &BrowserPage, text: &str) -> Result<()> {
+        self.send_with_session(
+            "Input.insertText",
+            json!({ "text": text }),
+            self.page_session(page),
         )
         .await
         .map(|_| ())
@@ -457,7 +541,7 @@ impl CdpClient {
                     "returnByValue": true,
                     "awaitPromise": true,
                 }),
-                Some(&page.session_id),
+                self.page_session(page),
             )
             .await?;
         Ok(response
@@ -472,7 +556,7 @@ impl CdpClient {
             .send_with_session(
                 "Page.printToPDF",
                 json!({ "printBackground": true, "preferCSSPageSize": true }),
-                Some(&page.session_id),
+                self.page_session(page),
             )
             .await?;
         let data = response
@@ -825,6 +909,8 @@ pub struct BrowserPanel {
     native_webview_pending: bool,
     #[cfg(target_os = "windows")]
     native_webview_bounds: Option<(i32, i32, i32, i32)>,
+    #[cfg(target_os = "windows")]
+    native_webview_visible: bool,
     context_menu: Option<(Entity<ContextMenu>, Point<Pixels>, Subscription)>,
     devtools_open: bool,
     devtools_tab: DevtoolsTab,
@@ -876,6 +962,8 @@ impl BrowserPanel {
             native_webview_pending: false,
             #[cfg(target_os = "windows")]
             native_webview_bounds: None,
+            #[cfg(target_os = "windows")]
+            native_webview_visible: false,
             context_menu: None,
             devtools_open: false,
             devtools_tab: DevtoolsTab::Console,
@@ -907,6 +995,19 @@ impl BrowserPanel {
                     .unwrap_or_else(|| tab.current_url.clone())
             })
             .unwrap_or_else(|| "about:blank".to_string())
+    }
+
+    pub fn set_native_visibility(&mut self, visible: bool, cx: &mut Context<Self>) {
+        #[cfg(target_os = "windows")]
+        {
+            self.native_webview_visible = visible;
+            if let Some(webview) = &self.native_webview {
+                if let Err(error) = webview.set_visible(visible) {
+                    tracing::debug!("falha ao alterar a visibilidade do WebView2: {error:#}");
+                }
+            }
+        }
+        cx.notify();
     }
 
     fn sync_address_bar(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1053,6 +1154,11 @@ impl BrowserPanel {
                                 if let Err(error) = webview.set_bounds(left, top, width, height) {
                                     tracing::debug!(
                                         "falha ao dimensionar o WebView2 inicial: {error:#}"
+                                    );
+                                }
+                                if let Err(error) = webview.set_visible(this.native_webview_visible) {
+                                    tracing::debug!(
+                                        "falha ao aplicar visibilidade inicial do WebView2: {error:#}"
                                     );
                                 }
                                 if let Err(error) = webview.navigate(&initial_url) {

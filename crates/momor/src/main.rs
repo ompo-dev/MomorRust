@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod browser;
+mod browser_mcp;
 mod momor;
 #[cfg(target_os = "windows")]
 mod native_webview;
@@ -195,6 +196,14 @@ fn main() {
     util::prevent_root_execution();
 
     let args = Args::parse();
+
+    if args.browser_mcp {
+        if let Err(error) = browser_mcp::run() {
+            eprintln!("Momor browser MCP failed: {error:#}");
+            process::exit(1);
+        }
+        return;
+    }
 
     // `momor --askpass` Makes momor operate in nc/netcat mode for use with askpass
     #[cfg(not(target_os = "windows"))]
@@ -1560,6 +1569,10 @@ struct Args {
     /// by having Momor act like netcat communicating over a Unix socket.
     #[arg(long, hide = true)]
     nc: Option<String>,
+
+    /// Expose the visible Momor browser to ACP/MCP agents over stdio.
+    #[arg(long, hide = true)]
+    browser_mcp: bool,
 
     /// Used for recording minidumps on crashes by having Momor run a separate
     /// process communicating over a socket.

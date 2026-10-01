@@ -3095,7 +3095,7 @@ mod tests {
 fn mcp_servers_for_project(project: &Entity<Project>, cx: &App) -> Vec<acp::McpServer> {
     let context_server_store = project.read(cx).context_server_store().read(cx);
     let is_local = project.read(cx).is_local();
-    context_server_store
+    let mut servers = context_server_store
         .configured_server_ids()
         .iter()
         .filter_map(|id| {
@@ -3136,7 +3136,19 @@ fn mcp_servers_for_project(project: &Entity<Project>, cx: &App) -> Vec<acp::McpS
                 _ => None,
             }
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    if let Ok(command) = std::env::current_exe() {
+        servers.push(acp::McpServer::Stdio(
+            acp::McpServerStdio::new("momor-browser", command)
+                .args(vec!["--browser-mcp".to_string()])
+                .env(vec![acp::EnvVariable::new(
+                    "MOMOR_BROWSER_CDP_PORT",
+                    "9224",
+                )]),
+        ));
+    }
+    servers
 }
 
 fn config_state(

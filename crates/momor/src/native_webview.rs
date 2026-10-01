@@ -8,7 +8,7 @@
 use anyhow::{Context as _, Result, anyhow};
 use std::{cell::RefCell, path::Path, rc::Rc};
 use webview2_com::{
-    CoTaskMemPWSTR, CreateCoreWebView2ControllerCompletedHandler,
+    CoTaskMemPWSTR, CoreWebView2EnvironmentOptions, CreateCoreWebView2ControllerCompletedHandler,
     CreateCoreWebView2EnvironmentCompletedHandler, Microsoft::Web::WebView2::Win32::*,
 };
 use windows_062::{
@@ -22,6 +22,14 @@ use windows_062::{
 pub struct NativeWebView {
     controller: ICoreWebView2Controller,
     webview: ICoreWebView2,
+}
+
+pub fn debugging_port() -> u16 {
+    std::env::var("MOMOR_BROWSER_CDP_PORT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|port: &u16| *port != 0)
+        .unwrap_or(9224)
 }
 
 impl NativeWebView {
@@ -38,6 +46,13 @@ impl NativeWebView {
             Box::new(on_ready) as Box<dyn FnOnce(Result<Self>)>
         )));
         let profile = CoTaskMemPWSTR::from(profile_dir.to_string_lossy().as_ref());
+        let environment_options = CoreWebView2EnvironmentOptions::default();
+        unsafe {
+            environment_options.set_additional_browser_arguments(format!(
+                "--remote-debugging-port={} --remote-allow-origins=*",
+                debugging_port()
+            ));
+        }
         let environment_ready = on_ready.clone();
         let environment_handler = CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(
             move |error_code, environment| {
@@ -110,11 +125,13 @@ impl NativeWebView {
             },
         ));
 
+        let environment_options: ICoreWebView2EnvironmentOptions = environment_options.into();
+
         unsafe {
             CreateCoreWebView2EnvironmentWithOptions(
                 PCWSTR::null(),
                 *profile.as_ref().as_pcwstr(),
-                None,
+                Some(&environment_options),
                 &environment_handler,
             )
             .map_err(webview2_com::Error::WindowsError)
@@ -133,6 +150,15 @@ impl NativeWebView {
                     bottom: top + height.max(1),
                 })
                 .context("não foi possível redimensionar o WebView2")?;
+        }
+        Ok(())
+    }
+
+    pub fn set_visible(&self, visible: bool) -> Result<()> {
+        unsafe {
+            self.controller
+                .SetIsVisible(visible)
+                .context("não foi possível alterar a visibilidade do WebView2")?;
         }
         Ok(())
     }

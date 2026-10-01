@@ -6604,6 +6604,9 @@ impl Workspace {
     }
 
     pub fn on_window_activation_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Keep Momor above other applications, including after Windows changes the
+        // active window. The user can still hide it through the compact/close controls.
+        window.set_always_on_top(true);
         if window.is_window_active() {
             self.update_active_view_for_followers(window, cx);
 
@@ -8402,6 +8405,7 @@ pub struct BrowserSlot {
     pub view: Option<gpui::AnyView>,
     pub open: bool,
     pub width: f32,
+    pub set_visibility: Option<Rc<dyn Fn(bool, &mut App)>>,
 }
 
 impl Default for BrowserSlot {
@@ -8410,6 +8414,7 @@ impl Default for BrowserSlot {
             view: None,
             open: false,
             width: 720.0,
+            set_visibility: None,
         }
     }
 }
@@ -8419,6 +8424,14 @@ impl gpui::Global for BrowserSlot {}
 #[derive(Clone)]
 pub(crate) struct DraggedNotebookDivider;
 impl Render for DraggedNotebookDivider {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        gpui::Empty
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct DraggedBrowserDivider;
+impl Render for DraggedBrowserDivider {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         gpui::Empty
     }
@@ -8448,9 +8461,6 @@ pub fn toggle_notebook(cx: &mut App) -> bool {
         slot.open = !slot.open;
         slot.open
     };
-    if open {
-        cx.default_global::<BrowserSlot>().open = false;
-    }
     // Persiste pra reabrir a sidebar no mesmo estado na próxima sessão.
     let store = db::kvp::KeyValueStore::global(cx);
     db::write_and_log(cx, move || async move {
@@ -8476,8 +8486,21 @@ pub fn set_browser_view(view: gpui::AnyView, cx: &mut App) {
     cx.default_global::<BrowserSlot>().view = Some(view);
 }
 
+pub fn set_browser_visibility_callback(callback: Rc<dyn Fn(bool, &mut App)>, cx: &mut App) {
+    cx.default_global::<BrowserSlot>().set_visibility = Some(callback);
+}
+
+fn update_browser_visibility(visible: bool, cx: &mut App) {
+    let callback = cx
+        .try_global::<BrowserSlot>()
+        .and_then(|slot| slot.set_visibility.clone());
+    if let Some(callback) = callback {
+        callback(visible, cx);
+    }
+}
+
 pub fn set_browser_width(width: f32, cx: &mut App) {
-    cx.default_global::<BrowserSlot>().width = width.clamp(440.0, 3200.0);
+    cx.default_global::<BrowserSlot>().width = width.clamp(50.0, 3200.0);
 }
 
 pub fn browser_width(cx: &App) -> f32 {
@@ -8492,9 +8515,7 @@ pub fn toggle_browser(cx: &mut App) -> bool {
         slot.open = !slot.open;
         slot.open
     };
-    if open {
-        cx.default_global::<NotebookSlot>().open = false;
-    }
+    update_browser_visibility(open, cx);
     let store = db::kvp::KeyValueStore::global(cx);
     db::write_and_log(cx, move || async move {
         store
@@ -8506,9 +8527,7 @@ pub fn toggle_browser(cx: &mut App) -> bool {
 
 pub fn set_browser_open(open: bool, cx: &mut App) {
     cx.default_global::<BrowserSlot>().open = open;
-    if open {
-        cx.default_global::<NotebookSlot>().open = false;
-    }
+    update_browser_visibility(open, cx);
 }
 
 pub fn browser_open(cx: &App) -> bool {
@@ -8656,17 +8675,10 @@ impl Render for Workspace {
             .try_global::<BrowserSlot>()
             .filter(|slot| slot.open)
             .and_then(|slot| slot.view.clone());
-        let browser_open = browser.is_some();
         let notebook = cx
             .try_global::<NotebookSlot>()
-            .filter(|slot| slot.open && !browser_open)
+            .filter(|slot| slot.open)
             .and_then(|slot| slot.view.clone());
-        let sidebar = browser.or(notebook);
-        let sidebar_width = if browser_open {
-            browser_width(cx)
-        } else {
-            notebook_width(cx)
-        };
         {
             return div()
                 .relative()
@@ -8684,34 +8696,32 @@ impl Render for Workspace {
                         .min_h(px(0.))
                         .w_full()
                         .overflow_hidden()
-                        // ponytail: alça externa = resize do chat vs notebook.
-                        .when(sidebar.is_some(), |this| {
-                            this.on_drag_move(cx.listener(
-                                move |_this, e: &DragMoveEvent<DraggedNotebookDivider>, window, cx| {
-                                    // Deixa esticar mais (chat guarda ~300px) e a coluna tem
-                                    // mínimo (440) pra caber árvore + nota sem colapsar.
-                                    let vw = f32::from(window.viewport_size().width);
-                                    let max = (vw - 300.0).max(440.0);
-                                    let w = f32::from(e.event.position.x).clamp(440.0, max);
-                                    if browser_open {
-                                        set_browser_width(w, cx);
-                                    } else {
-                                        set_notebook_width(w, cx);
-                                    }
-                                    cx.notify();
-                                },
-                            ))
-                        })
-                        .when_some(sidebar, |this, panel| {
+                        .when_some(notebook, |this, panel| {
                             this.child(
                                 div()
                                     .relative()
-                                    .w(px(sidebar_width))
+                                    .w(px(notebook_width(cx)))
                                     .h_full()
                                     .flex_none()
                                     .overflow_hidden()
                                     .border_r_1()
                                     .border_color(colors.border)
+                                    .on_drag_move(cx.listener(
+                                        |_this,
+                                         event: &DragMoveEvent<DraggedNotebookDivider>,
+                                         window,
+                                         cx| {
+                                            let viewport_width =
+                                                f32::from(window.viewport_size().width);
+                                            let max_width =
+                                                (viewport_width - browser_width(cx) - 300.0)
+                                                    .max(280.0);
+                                            let width = f32::from(event.event.position.x)
+                                                .clamp(280.0, max_width);
+                                            set_notebook_width(width, cx);
+                                            cx.notify();
+                                        },
+                                    ))
                                     .child(panel)
                                     .child(gpui::deferred(
                                         div()
@@ -8726,10 +8736,59 @@ impl Render for Workspace {
                                                 cx.stop_propagation();
                                                 cx.new(|_| d.clone())
                                             })
-                                            .on_mouse_down(
-                                                gpui::MouseButton::Left,
-                                                |_, _, cx| cx.stop_propagation(),
+                                            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                                cx.stop_propagation()
+                                            })
+                                            .occlude(),
+                                    )),
+                            )
+                        })
+                        .when_some(browser, |this, panel| {
+                            this.child(
+                                div()
+                                    .relative()
+                                    .w(px(browser_width(cx)))
+                                    .h_full()
+                                    .flex_none()
+                                    .overflow_hidden()
+                                    .border_r_1()
+                                    .border_color(colors.border)
+                                    .on_drag_move(cx.listener(
+                                        |_this,
+                                         event: &DragMoveEvent<DraggedBrowserDivider>,
+                                         window,
+                                         cx| {
+                                            let viewport_width =
+                                                f32::from(window.viewport_size().width);
+                                            let browser_left = f32::from(event.bounds.left());
+                                            let max_width =
+                                                (viewport_width - browser_left - 300.0)
+                                                    .max(50.0);
+                                            let width = f32::from(
+                                                event.event.position.x - event.bounds.left(),
                                             )
+                                                .clamp(50.0, max_width);
+                                            set_browser_width(width, cx);
+                                            cx.notify();
+                                        },
+                                    ))
+                                    .child(panel)
+                                    .child(gpui::deferred(
+                                        div()
+                                            .id("browser-chat-resize")
+                                            .absolute()
+                                            .top_0()
+                                            .right(px(-3.))
+                                            .w(px(6.))
+                                            .h_full()
+                                            .cursor_col_resize()
+                                            .on_drag(DraggedBrowserDivider, |d, _, _, cx| {
+                                                cx.stop_propagation();
+                                                cx.new(|_| d.clone())
+                                            })
+                                            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                                cx.stop_propagation()
+                                            })
                                             .occlude(),
                                     )),
                             )

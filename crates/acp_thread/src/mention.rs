@@ -355,7 +355,7 @@ impl MentionUri {
             MentionUri::Diagnostics { .. } => IconName::Warning.path().into(),
             MentionUri::TerminalSelection { .. } => IconName::Terminal.path().into(),
             MentionUri::Selection { .. } => IconName::Reader.path().into(),
-            MentionUri::Fetch { .. } => IconName::ToolWeb.path().into(),
+            MentionUri::Fetch { .. } => IconName::Public.path().into(),
             MentionUri::GitDiff { .. } => IconName::GitBranch.path().into(),
             MentionUri::MergeConflict { .. } => IconName::GitMergeConflict.path().into(),
         }

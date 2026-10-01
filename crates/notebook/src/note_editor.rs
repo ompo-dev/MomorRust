@@ -3833,6 +3833,8 @@ impl NoteDoc {
                     metadata: Some(CreaseMetadata {
                         label: title.clone().into(),
                         icon_path: IconName::FileDoc.path().into(),
+                        kind: None,
+                        uri: None,
                     }),
                 });
             }

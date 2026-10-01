@@ -651,12 +651,23 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
             // dos docks pra não brigar com o dock do agent). O render mostra como coluna
             // esquerda quando aberto; alterna pelo ícone de sidebar na titlebar.
             let weak = cx.entity().downgrade();
-            let browser_panel =
-                cx.new(|cx| crate::browser::BrowserPanel::new(weak.clone(), cx));
+            let browser_panel = cx.new(|cx| crate::browser::BrowserPanel::new(weak.clone(), cx));
+            let browser_visibility = browser_panel.downgrade();
             workspace::set_browser_view(browser_panel.into(), cx);
+            workspace::set_browser_visibility_callback(
+                std::rc::Rc::new(move |visible, cx| {
+                    if let Err(error) = browser_visibility.update(cx, |browser, cx| {
+                        browser.set_native_visibility(visible, cx);
+                    }) {
+                        tracing::debug!(
+                            "falha ao sincronizar visibilidade do navegador: {error:#}"
+                        );
+                    }
+                }),
+                cx,
+            );
             let languages = workspace.app_state().languages.clone();
-            let notebook_panel =
-                cx.new(|cx| notebook::NotebookPanel::new(weak, languages, cx));
+            let notebook_panel = cx.new(|cx| notebook::NotebookPanel::new(weak, languages, cx));
             workspace::set_notebook_view(notebook_panel.into(), cx);
             let browser_open = db::kvp::KeyValueStore::global(cx)
                 .read_kvp("momor_browser_open")
@@ -670,7 +681,7 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
                 .ok()
                 .flatten()
                 .is_some_and(|v| v == "true");
-            workspace::set_notebook_open(sidebar_open && !browser_open, cx);
+            workspace::set_notebook_open(sidebar_open, cx);
             workspace.focus_panel::<agent_ui::AgentPanel>(window, cx);
         })?;
 

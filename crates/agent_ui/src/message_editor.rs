@@ -316,6 +316,7 @@ fn notebook_badge_render(
                 "meeting" => IconName::Mic,
                 "skill" => IconName::Book,
                 "mcp" => IconName::DatabaseZap,
+                "browser" => IconName::Public,
                 _ => IconName::FileDoc,
             };
             Icon::new(name)
@@ -934,59 +935,69 @@ impl MessageEditor {
                 editor.display_map.update(cx, |map, cx| {
                     let snapshot = map.snapshot(cx);
                     for (crease_id, crease) in snapshot.crease_snapshot.creases() {
-                        let Some((uri, mention)) = contents.get(&crease_id) else {
-                            continue;
-                        };
-
                         let crease_range = crease.range().to_offset(&snapshot.buffer_snapshot());
                         if crease_range.start.0 > ix {
                             let chunk = text[ix..crease_range.start.0].into();
                             chunks.push(chunk);
                         }
-                        let chunk = match mention {
-                            Mention::Text {
-                                content,
-                                tracked_buffers,
-                            } => {
-                                all_tracked_buffers.extend(tracked_buffers.iter().cloned());
-                                if supports_embedded_context {
-                                    acp::ContentBlock::Resource(acp::EmbeddedResource::new(
-                                        acp::EmbeddedResourceResource::TextResourceContents(
-                                            acp::TextResourceContents::new(
-                                                content.clone(),
-                                                uri.to_uri().to_string(),
+                        let chunk = if let Some((uri, mention)) = contents.get(&crease_id) {
+                            match mention {
+                                Mention::Text {
+                                    content,
+                                    tracked_buffers,
+                                } => {
+                                    all_tracked_buffers.extend(tracked_buffers.iter().cloned());
+                                    if supports_embedded_context {
+                                        acp::ContentBlock::Resource(acp::EmbeddedResource::new(
+                                            acp::EmbeddedResourceResource::TextResourceContents(
+                                                acp::TextResourceContents::new(
+                                                    content.clone(),
+                                                    uri.to_uri().to_string(),
+                                                ),
                                             ),
-                                        ),
-                                    ))
-                                } else {
-                                    acp::ContentBlock::ResourceLink(acp::ResourceLink::new(
-                                        uri.name(),
-                                        uri.to_uri().to_string(),
-                                    ))
+                                        ))
+                                    } else {
+                                        acp::ContentBlock::ResourceLink(acp::ResourceLink::new(
+                                            uri.name(),
+                                            uri.to_uri().to_string(),
+                                        ))
+                                    }
                                 }
+                                Mention::Image(mention_image) => acp::ContentBlock::Image(
+                                    acp::ImageContent::new(
+                                        mention_image.data.clone(),
+                                        mention_image.format.mime_type(),
+                                    )
+                                    .uri(match uri {
+                                        MentionUri::File { .. } => Some(uri.to_uri().to_string()),
+                                        MentionUri::PastedImage { .. } => {
+                                            Some(uri.to_uri().to_string())
+                                        }
+                                        other => {
+                                            debug_panic!(
+                                                "unexpected mention uri for image: {:?}",
+                                                other
+                                            );
+                                            None
+                                        }
+                                    }),
+                                ),
+                                Mention::Link => acp::ContentBlock::ResourceLink(
+                                    acp::ResourceLink::new(uri.name(), uri.to_uri().to_string()),
+                                ),
                             }
-                            Mention::Image(mention_image) => acp::ContentBlock::Image(
-                                acp::ImageContent::new(
-                                    mention_image.data.clone(),
-                                    mention_image.format.mime_type(),
-                                )
-                                .uri(match uri {
-                                    MentionUri::File { .. } => Some(uri.to_uri().to_string()),
-                                    MentionUri::PastedImage { .. } => {
-                                        Some(uri.to_uri().to_string())
-                                    }
-                                    other => {
-                                        debug_panic!(
-                                            "unexpected mention uri for image: {:?}",
-                                            other
-                                        );
-                                        None
-                                    }
-                                }),
-                            ),
-                            Mention::Link => acp::ContentBlock::ResourceLink(
-                                acp::ResourceLink::new(uri.name(), uri.to_uri().to_string()),
-                            ),
+                        } else if let Some(metadata) = crease.metadata()
+                            && metadata.kind.as_deref() == Some("browser")
+                        {
+                            let Some(uri) = metadata.uri.clone() else {
+                                continue;
+                            };
+                            acp::ContentBlock::ResourceLink(acp::ResourceLink::new(
+                                metadata.label.clone(),
+                                uri,
+                            ))
+                        } else {
+                            continue;
                         };
                         chunks.push(chunk);
                         ix = crease_range.end.0;
@@ -1711,6 +1722,7 @@ impl MessageEditor {
         let path_style = workspace.read(cx).project().read(cx).path_style(cx);
         let mut text = String::new();
         let mut mentions = Vec::new();
+        let mut browser_labels = Vec::new();
 
         for chunk in message {
             match chunk {
@@ -1749,6 +1761,11 @@ impl MessageEditor {
                         let start = text.len();
                         write!(&mut text, "{}", mention_uri.as_link()).ok();
                         let end = text.len();
+                        if matches!(mention_uri, MentionUri::Fetch { .. })
+                            && resource.name != resource.uri
+                        {
+                            browser_labels.push((start, resource.name.clone()));
+                        }
                         mentions.push((start..end, mention_uri, Mention::Link));
                     }
                 }
@@ -1813,11 +1830,22 @@ impl MessageEditor {
         for (range, mention_uri, mention) in mentions {
             let adjusted_start = insertion_start + range.start;
             let anchor = snapshot.anchor_before(MultiBufferOffset(adjusted_start));
+            let browser_label = browser_labels
+                .iter()
+                .find(|(start, _)| *start == range.start)
+                .map(|(_, label)| label.clone());
+            let crease_label = browser_label
+                .clone()
+                .unwrap_or_else(|| mention_uri.name());
+            let crease_icon = browser_label
+                .as_ref()
+                .map(|_| IconName::Public.path().into())
+                .unwrap_or_else(|| mention_uri.icon_path(cx));
             let Some((crease_id, tx)) = insert_crease_for_mention(
                 snapshot.anchor_to_buffer_anchor(anchor).unwrap().0,
                 range.end - range.start,
-                mention_uri.name().into(),
-                mention_uri.icon_path(cx),
+                crease_label.into(),
+                crease_icon,
                 mention_uri.tooltip_text(),
                 Some(mention_uri.clone()),
                 Some(self.workspace.clone()),
@@ -1891,6 +1919,8 @@ impl MessageEditor {
             return;
         }
         let content_len = label.len();
+        let metadata_kind = kind.clone();
+        let metadata_uri = id.clone();
         let editor = self.editor.clone();
         // Ancora a posição do cursor ANTES de inserir (mesma dança das @menções).
         let text_anchor = editor.update(cx, |editor, cx| {
@@ -1936,7 +1966,13 @@ impl MessageEditor {
                 render_trailer: None,
                 metadata: Some(CreaseMetadata {
                     label: label.into(),
-                    icon_path: IconName::FileDoc.path().into(),
+                    icon_path: if metadata_kind == "browser" {
+                        IconName::Public.path().into()
+                    } else {
+                        IconName::FileDoc.path().into()
+                    },
+                    kind: Some(metadata_kind.into()),
+                    uri: Some(metadata_uri.into()),
                 }),
             };
             let _ = editor.insert_creases(vec![crease.clone()], cx);
