@@ -1109,6 +1109,11 @@ impl BrowserPanel {
                         }),
                 )
                 .item(
+                    ContextMenuEntry::new("Ativar tela cheia")
+                        .icon(IconName::Maximize)
+                        .handler(move |window, _cx| window.toggle_fullscreen()),
+                )
+                .item(
                     ContextMenuEntry::new("Histórico")
                         .icon(IconName::HistoryRerun)
                         .handler(move |_window, cx| {
