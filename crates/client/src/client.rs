@@ -2,10 +2,10 @@
 pub mod test;
 
 mod llm_token;
+pub mod momor_urls;
 mod proxy;
 pub mod telemetry;
 pub mod user;
-pub mod momor_urls;
 
 use anyhow::{Context as _, Result, anyhow};
 use async_tungstenite::tungstenite::{
@@ -62,7 +62,14 @@ pub use user::*;
 
 static MOMOR_SERVER_URL: LazyLock<Option<String>> =
     LazyLock::new(|| std::env::var("MOMOR_SERVER_URL").ok());
-static MOMOR_RPC_URL: LazyLock<Option<String>> = LazyLock::new(|| std::env::var("MOMOR_RPC_URL").ok());
+static MOMOR_RPC_URL: LazyLock<Option<String>> =
+    LazyLock::new(|| std::env::var("MOMOR_RPC_URL").ok());
+
+/// Returns whether optional Momor-hosted services are available for this build.
+pub fn local_mode_enabled() -> bool {
+    std::env::var("MOMOR_LOCAL_MODE")
+        .is_ok_and(|value| value.is_empty() || matches!(value.as_str(), "1" | "true" | "yes"))
+}
 
 pub static IMPERSONATE_LOGIN: LazyLock<Option<String>> = LazyLock::new(|| {
     std::env::var("MOMOR_IMPERSONATE")
@@ -70,7 +77,8 @@ pub static IMPERSONATE_LOGIN: LazyLock<Option<String>> = LazyLock::new(|| {
         .and_then(|s| if s.is_empty() { None } else { Some(s) })
 });
 
-pub static USE_WEB_LOGIN: LazyLock<bool> = LazyLock::new(|| std::env::var("MOMOR_WEB_LOGIN").is_ok());
+pub static USE_WEB_LOGIN: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("MOMOR_WEB_LOGIN").is_ok());
 
 pub static ADMIN_API_TOKEN: LazyLock<Option<String>> = LazyLock::new(|| {
     std::env::var("MOMOR_ADMIN_API_TOKEN")

@@ -586,7 +586,7 @@ impl ExtensionStore {
     /// This can be used to make certain functionality provided by extensions
     /// available out-of-the-box.
     pub fn auto_install_extensions(&mut self, cx: &mut Context<Self>) {
-        if cfg!(test) {
+        if cfg!(test) || client::local_mode_enabled() {
             return;
         }
 
@@ -618,6 +618,9 @@ impl ExtensionStore {
     }
 
     pub fn check_for_updates(&mut self, cx: &mut Context<Self>) {
+        if client::local_mode_enabled() {
+            return;
+        }
         let task = self.fetch_extensions_with_update_available(cx);
         cx.spawn(async move |this, cx| Self::upgrade_extensions(this, task.await?, cx).await)
             .detach();

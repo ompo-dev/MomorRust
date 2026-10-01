@@ -386,7 +386,7 @@ impl Telemetry {
     ) {
         let mut state = self.state.lock();
 
-        if !state.settings.metrics {
+        if crate::local_mode_enabled() || !state.settings.metrics {
             return;
         }
 
@@ -516,7 +516,7 @@ impl Telemetry {
         // RUST_LOG=telemetry=trace to debug telemetry events
         log::trace!(target: "telemetry", "{:?}", event);
 
-        if !state.settings.metrics {
+        if crate::local_mode_enabled() || !state.settings.metrics {
             return;
         }
 

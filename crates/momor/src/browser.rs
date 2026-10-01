@@ -1,10 +1,13 @@
 //! Momor's first-party browser surface.
 //!
-//! The browser engine stays in Obscura. Momor owns the user-facing surface and
-//! speaks the Chrome DevTools Protocol over a local WebSocket. Keeping this
-//! boundary explicit lets us replace screenshot polling with screencast frames
-//! later without coupling the two applications' renderers.
+//! Momor owns the browser surface while Chromium owns web compatibility.
+//!
+//! The Windows path embeds the installed BrowserOS Chromium window and controls
+//! its page targets through the Chrome DevTools Protocol. Obscura remains an
+//! explicit fallback for development environments without a Chromium runtime.
 
+#[cfg(target_os = "windows")]
+use crate::native_chromium::{NativeBrowser, NativeEvent};
 use anyhow::{Context as _, Result, anyhow};
 use async_tungstenite::tungstenite::Message;
 use base64::Engine as _;
@@ -15,6 +18,8 @@ use gpui::{
     Render, SharedString, Subscription, Task, WeakEntity, Window, anchored, deferred, img,
     prelude::*,
 };
+#[cfg(target_os = "windows")]
+use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -24,7 +29,7 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{
     sync::{broadcast, mpsc, oneshot},
@@ -37,6 +42,7 @@ use workspace::Workspace;
 
 const DEFAULT_CDP_ENDPOINT: &str = "ws://127.0.0.1:9222/devtools/browser";
 const BROWSER_SETTLE_MAX_MS: u64 = 5_000;
+const DEFAULT_SEARCH_ENGINE: &str = "https://www.google.com/search";
 
 #[derive(Clone, Debug)]
 pub struct CdpEvent {
@@ -62,14 +68,14 @@ pub struct CdpClient {
 
 impl CdpClient {
     pub async fn connect(endpoint: &str) -> Result<Self> {
-        let endpoint_url = Url::parse(endpoint).context("invalid Obscura CDP endpoint")?;
+        let endpoint_url = Url::parse(endpoint).context("invalid browser CDP endpoint")?;
         if !matches!(endpoint_url.scheme(), "ws" | "wss") {
-            anyhow::bail!("Obscura CDP endpoint must use ws:// or wss://");
+            anyhow::bail!("browser CDP endpoint must use ws:// or wss://");
         }
 
         let (socket, _) = async_tungstenite::tokio::connect_async(endpoint)
             .await
-            .context("failed to connect to Obscura CDP")?;
+            .context("failed to connect to browser CDP")?;
         let (commands, command_rx) = mpsc::unbounded_channel();
         let (events, _) = broadcast::channel(64);
         let client = Self {
@@ -80,6 +86,27 @@ impl CdpClient {
 
         tokio::spawn(run_cdp_socket(socket, command_rx, events));
         Ok(client)
+    }
+
+    async fn connect_chromium(port: u16) -> Result<Self> {
+        let version_url = format!("http://127.0.0.1:{port}/json/version");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        loop {
+            if let Ok(response) = reqwest::get(&version_url).await
+                && response.status().is_success()
+                && let Ok(body) = response.text().await
+                && let Ok(version) = serde_json::from_str::<Value>(&body)
+                && let Some(endpoint) = version.get("webSocketDebuggerUrl").and_then(Value::as_str)
+            {
+                return Self::connect(endpoint).await;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                anyhow::bail!(
+                    "Chromium não abriu o endpoint CDP em http://127.0.0.1:{port}/json/version"
+                );
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
     }
 
     async fn launch_and_connect() -> Result<Self> {
@@ -151,12 +178,15 @@ impl CdpClient {
 
     pub async fn create_page(&self, url: &str) -> Result<BrowserPage> {
         let created = self
-            .send("Target.createTarget", json!({ "url": url }))
+            .send(
+                "Target.createTarget",
+                json!({ "url": url, "newWindow": false, "background": false }),
+            )
             .await?;
         let target_id = created
             .get("targetId")
             .and_then(Value::as_str)
-            .context("Obscura did not return a target id")?
+            .context("browser did not return a target id")?
             .to_string();
         let attached = self
             .send(
@@ -167,7 +197,7 @@ impl CdpClient {
         let session_id = attached
             .get("sessionId")
             .and_then(Value::as_str)
-            .context("Obscura did not return a target session id")?
+            .context("browser did not return a target session id")?
             .to_string();
 
         self.send_with_session("Page.enable", json!({}), Some(&session_id))
@@ -184,6 +214,66 @@ impl CdpClient {
             session_id,
             url: url.to_string(),
         })
+    }
+
+    async fn connect_existing_page(&self, url: &str) -> Result<BrowserPage> {
+        let targets = self.send("Target.getTargets", json!({})).await?;
+        let target = targets
+            .get("targetInfos")
+            .and_then(Value::as_array)
+            .and_then(|targets| {
+                targets
+                    .iter()
+                    .find(|target| {
+                        target.get("type").and_then(Value::as_str) == Some("page")
+                            && target
+                                .get("url")
+                                .and_then(Value::as_str)
+                                .is_some_and(|url| {
+                                    url == "about:blank" || url.starts_with("chrome://newtab")
+                                })
+                    })
+                    .or_else(|| {
+                        targets.iter().find(|target| {
+                            target.get("type").and_then(Value::as_str) == Some("page")
+                        })
+                    })
+            })
+            .context("Chromium não retornou uma página incorporada")?;
+        let target_id = target
+            .get("targetId")
+            .and_then(Value::as_str)
+            .context("Chromium não retornou o id da página incorporada")?;
+        let attached = self
+            .send(
+                "Target.attachToTarget",
+                json!({ "targetId": target_id, "flatten": true }),
+            )
+            .await?;
+        let session_id = attached
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .context("Chromium não retornou a sessão da página incorporada")?
+            .to_string();
+        self.send_with_session("Page.enable", json!({}), Some(&session_id))
+            .await?;
+        self.send_with_session("Runtime.enable", json!({}), Some(&session_id))
+            .await?;
+        self.send_with_session("Network.enable", json!({}), Some(&session_id))
+            .await?;
+        self.send_with_session("DOM.enable", json!({}), Some(&session_id))
+            .await?;
+        let mut page = BrowserPage {
+            target_id: target_id.to_string(),
+            session_id,
+            url: target
+                .get("url")
+                .and_then(Value::as_str)
+                .unwrap_or("about:blank")
+                .to_string(),
+        };
+        self.navigate(&mut page, url).await?;
+        Ok(page)
     }
 
     pub async fn close_page(&self, page: &BrowserPage) -> Result<()> {
@@ -428,10 +518,12 @@ impl CdpClient {
             "Input.dispatchKeyEvent",
             json!({
                 "type": event_type,
-                "key": key,
+                "key": cdp_key_value(key),
                 "code": cdp_key_code(key),
                 "text": text,
                 "modifiers": modifiers,
+                "windowsVirtualKeyCode": cdp_virtual_key_code(key),
+                "nativeVirtualKeyCode": cdp_virtual_key_code(key),
             }),
             Some(&page.session_id),
         )
@@ -634,6 +726,17 @@ fn normalize_url(input: &str) -> Result<String> {
     if input.is_empty() {
         return Ok("about:blank".to_string());
     }
+    if !input.contains("://")
+        && !input.starts_with("about:")
+        && !input.contains('.')
+        && !input.starts_with("localhost")
+        && !input.starts_with('[')
+        && !input.contains(':')
+    {
+        let mut search_url = Url::parse(DEFAULT_SEARCH_ENGINE)?;
+        search_url.query_pairs_mut().append_pair("q", input);
+        return Ok(search_url.to_string());
+    }
     let candidate = if input.contains("://") || input.starts_with("about:") {
         input.to_string()
     } else {
@@ -674,6 +777,57 @@ fn cdp_key_code(key: &str) -> String {
     }
 }
 
+fn cdp_key_value(key: &str) -> String {
+    match key.to_ascii_lowercase().as_str() {
+        "enter" => "Enter".to_string(),
+        "backspace" => "Backspace".to_string(),
+        "delete" => "Delete".to_string(),
+        "tab" => "Tab".to_string(),
+        "escape" | "esc" => "Escape".to_string(),
+        "space" => " ".to_string(),
+        "arrowleft" => "ArrowLeft".to_string(),
+        "arrowright" => "ArrowRight".to_string(),
+        "arrowup" => "ArrowUp".to_string(),
+        "arrowdown" => "ArrowDown".to_string(),
+        "home" => "Home".to_string(),
+        "end" => "End".to_string(),
+        "pageup" => "PageUp".to_string(),
+        "pagedown" => "PageDown".to_string(),
+        "shift" => "Shift".to_string(),
+        "control" | "ctrl" => "Control".to_string(),
+        "alt" => "Alt".to_string(),
+        "meta" | "cmd" | "command" => "Meta".to_string(),
+        key => key.to_string(),
+    }
+}
+
+fn cdp_virtual_key_code(key: &str) -> u32 {
+    match key.to_ascii_lowercase().as_str() {
+        "backspace" => 8,
+        "tab" => 9,
+        "enter" => 13,
+        "shift" => 16,
+        "control" | "ctrl" => 17,
+        "alt" => 18,
+        "escape" | "esc" => 27,
+        "space" => 32,
+        "pageup" => 33,
+        "pagedown" => 34,
+        "end" => 35,
+        "home" => 36,
+        "arrowleft" => 37,
+        "arrowup" => 38,
+        "arrowright" => 39,
+        "arrowdown" => 40,
+        "delete" => 46,
+        key if key.len() == 1 && key.as_bytes()[0].is_ascii_alphabetic() => {
+            key.as_bytes()[0].to_ascii_uppercase() as u32
+        }
+        key if key.len() == 1 && key.as_bytes()[0].is_ascii_digit() => key.as_bytes()[0] as u32,
+        _ => 0,
+    }
+}
+
 fn cdp_modifiers(modifiers: &gpui::Modifiers) -> u8 {
     u8::from(modifiers.alt)
         | (u8::from(modifiers.control) << 1)
@@ -692,6 +846,7 @@ struct BrowserNavigation {
 #[derive(Clone)]
 struct BrowserTab {
     page: Option<BrowserPage>,
+    current_url: String,
     title: String,
     image: Option<Arc<Image>>,
     status: String,
@@ -704,6 +859,7 @@ impl BrowserTab {
     fn new() -> Self {
         Self {
             page: None,
+            current_url: "about:blank".to_string(),
             title: "Nova aba".to_string(),
             image: None,
             status: "Digite uma URL para navegar".to_string(),
@@ -721,6 +877,10 @@ impl BrowserTab {
             .as_ref()
             .map(|page| page.url.clone())
             .filter(|url| !url.is_empty() && url != "about:blank")
+            .or_else(|| {
+                (!self.current_url.is_empty() && self.current_url != "about:blank")
+                    .then(|| self.current_url.clone())
+            })
             .unwrap_or_else(|| self.title.clone())
             .into()
     }
@@ -740,7 +900,13 @@ pub struct BrowserPanel {
     download_status: Option<String>,
     content_bounds: Option<Bounds<Pixels>>,
     viewport_size: Option<(u32, u32)>,
+    viewport_auto: bool,
     viewport_scale: f32,
+    last_mouse_move: Option<Instant>,
+    #[cfg(target_os = "windows")]
+    native_browser: Option<NativeBrowser>,
+    #[cfg(target_os = "windows")]
+    native_events_task: Option<Task<()>>,
     context_menu: Option<(Entity<ContextMenu>, Point<Pixels>, Subscription)>,
     devtools_open: bool,
     devtools_tab: DevtoolsTab,
@@ -783,7 +949,13 @@ impl BrowserPanel {
             download_status: None,
             content_bounds: None,
             viewport_size: None,
+            viewport_auto: true,
             viewport_scale: 1.0,
+            last_mouse_move: None,
+            #[cfg(target_os = "windows")]
+            native_browser: None,
+            #[cfg(target_os = "windows")]
+            native_events_task: None,
             context_menu: None,
             devtools_open: false,
             devtools_tab: DevtoolsTab::Console,
@@ -806,11 +978,22 @@ impl BrowserPanel {
         self.active_tab().and_then(|tab| tab.page.clone())
     }
 
+    fn active_url(&self) -> String {
+        self.active_tab()
+            .map(|tab| {
+                tab.page
+                    .as_ref()
+                    .map(|page| page.url.clone())
+                    .unwrap_or_else(|| tab.current_url.clone())
+            })
+            .unwrap_or_else(|| "about:blank".to_string())
+    }
+
     fn sync_address_bar(&self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(address_bar) = self.address_bar.clone() else {
             return;
         };
-        let text = self.active_page().map(|page| page.url).unwrap_or_default();
+        let text = self.active_url();
         address_bar.update(cx, |field, cx| field.set_text(&text, window, cx));
     }
 
@@ -818,6 +1001,17 @@ impl BrowserPanel {
         self.tabs.push(BrowserTab::new());
         self.active_tab = self.tabs.len().saturating_sub(1);
         self.viewport_size = None;
+        self.viewport_auto = true;
+        self.last_mouse_move = None;
+        #[cfg(target_os = "windows")]
+        if let Some(native_browser) = &self.native_browser {
+            if let Err(error) = native_browser.ensure_tab(self.active_tab, "about:blank") {
+                tracing::debug!("failed to create native browser tab: {error:#}");
+            }
+            if let Err(error) = native_browser.set_active_tab(self.active_tab) {
+                tracing::debug!("failed to activate native browser tab: {error:#}");
+            }
+        }
         self.sync_address_bar(window, cx);
         cx.notify();
     }
@@ -828,6 +1022,17 @@ impl BrowserPanel {
         }
         self.active_tab = index;
         self.viewport_size = None;
+        self.viewport_auto = true;
+        self.last_mouse_move = None;
+        #[cfg(target_os = "windows")]
+        if let Some(native_browser) = &self.native_browser {
+            if let Err(error) = native_browser.ensure_tab(index, &self.active_url()) {
+                tracing::debug!("failed to prepare native browser tab: {error:#}");
+            }
+            if let Err(error) = native_browser.set_active_tab(index) {
+                tracing::debug!("failed to activate native browser tab: {error:#}");
+            }
+        }
         self.sync_address_bar(window, cx);
         cx.notify();
     }
@@ -837,6 +1042,12 @@ impl BrowserPanel {
             return;
         }
         let tab = self.tabs.remove(index);
+        #[cfg(target_os = "windows")]
+        if let Some(native_browser) = &self.native_browser {
+            if let Err(error) = native_browser.close_tab(index) {
+                tracing::debug!("failed to close native browser tab: {error:#}");
+            }
+        }
         if let (Some(client), Some(page)) = (self.client.clone(), tab.page) {
             let task = gpui_tokio::Tokio::handle(cx).spawn(async move {
                 if let Err(error) = client.close_page(&page).await {
@@ -854,6 +1065,8 @@ impl BrowserPanel {
             self.active_tab = self.tabs.len().saturating_sub(1);
         }
         self.viewport_size = None;
+        self.viewport_auto = true;
+        self.last_mouse_move = None;
         cx.notify();
     }
 
@@ -880,6 +1093,103 @@ impl BrowserPanel {
         self.address_bar = Some(field);
     }
 
+    #[cfg(target_os = "windows")]
+    fn ensure_native_browser(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.native_browser.is_none() {
+            let parent = match window.window_handle() {
+                Ok(handle) => match handle.as_raw() {
+                    RawWindowHandle::Win32(handle) => {
+                        windows::Win32::Foundation::HWND(handle.hwnd.get() as *mut std::ffi::c_void)
+                    }
+                    _ => {
+                        if let Some(tab) = self.active_tab_mut() {
+                            tab.status = "O navegador nativo requer uma janela Win32".to_string();
+                        }
+                        return;
+                    }
+                },
+                Err(error) => {
+                    if let Some(tab) = self.active_tab_mut() {
+                        tab.status = format!("Falha ao obter a janela do navegador: {error:#}");
+                    }
+                    return;
+                }
+            };
+            match NativeBrowser::new(parent, &embedded_storage_dir()) {
+                Ok(native_browser) => self.native_browser = Some(native_browser),
+                Err(error) => {
+                    if let Some(tab) = self.active_tab_mut() {
+                        tab.status = format!("Chromium indisponível: {error:#}");
+                    }
+                    return;
+                }
+            }
+        }
+
+        let scale = window.scale_factor();
+        let origin_x = (bounds.origin.x.as_f32() * scale).round() as i32;
+        let origin_y = (bounds.origin.y.as_f32() * scale).round() as i32;
+        let width = (bounds.size.width.as_f32() * scale).round().max(1.0) as i32;
+        let height = (bounds.size.height.as_f32() * scale).round().max(1.0) as i32;
+        if let Some(native_browser) = &self.native_browser {
+            if let Err(error) = native_browser.set_bounds(origin_x, origin_y, width, height) {
+                tracing::debug!("failed to resize native browser: {error:#}");
+            }
+            if let Err(error) = native_browser.ensure_tab(self.active_tab, &self.active_url()) {
+                tracing::debug!("failed to ensure active native tab: {error:#}");
+            }
+            if let Err(error) = native_browser.set_active_tab(self.active_tab) {
+                tracing::debug!("failed to show active native tab: {error:#}");
+            }
+        }
+        self.start_native_event_pump(window, cx);
+    }
+
+    #[cfg(target_os = "windows")]
+    fn start_native_event_pump(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.native_events_task.is_some() {
+            return;
+        }
+        self.native_events_task = Some(cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(50))
+                    .await;
+                let update = this.update_in(cx, |this, _window, cx| {
+                    let Some(native_browser) = &this.native_browser else {
+                        return true;
+                    };
+                    let events = native_browser.drain_events();
+                    this.apply_native_events(events, cx);
+                    true
+                });
+                if update.is_err() {
+                    break;
+                }
+            }
+        }));
+    }
+
+    #[cfg(target_os = "windows")]
+    fn apply_native_events(&mut self, events: Vec<NativeEvent>, cx: &mut Context<Self>) {
+        for event in events {
+            match event {
+                NativeEvent::Error { message } => {
+                    if let Some(tab) = self.active_tab_mut() {
+                        tab.status = message;
+                        tab.loading = false;
+                    }
+                }
+            }
+        }
+        cx.notify();
+    }
+
     fn browser_coordinates(&self, position: Point<Pixels>) -> Option<(f32, f32)> {
         let bounds = self.content_bounds?;
         let local = position - bounds.origin;
@@ -890,11 +1200,23 @@ impl BrowserPanel {
         {
             return None;
         }
-        Some((f32::from(local.x), f32::from(local.y)))
+        let display_width = f32::from(bounds.size.width);
+        let display_height = f32::from(bounds.size.height);
+        if display_width <= 0.0 || display_height <= 0.0 {
+            return None;
+        }
+        let (viewport_width, viewport_height) = self.viewport_size.unwrap_or((
+            display_width.round().max(1.0) as u32,
+            display_height.round().max(1.0) as u32,
+        ));
+        Some((
+            f32::from(local.x) * viewport_width as f32 / display_width,
+            f32::from(local.y) * viewport_height as f32 / display_height,
+        ))
     }
 
     fn dispatch_mouse(
-        &self,
+        &mut self,
         event_type: &'static str,
         position: Point<Pixels>,
         click_count: usize,
@@ -902,6 +1224,20 @@ impl BrowserPanel {
         modifiers: u8,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(target_os = "windows")]
+        if self.native_browser.is_some() {
+            return;
+        }
+        if event_type == "mouseMoved" {
+            let now = Instant::now();
+            if self
+                .last_mouse_move
+                .is_some_and(|last| now.duration_since(last) < Duration::from_millis(16))
+            {
+                return;
+            }
+            self.last_mouse_move = Some(now);
+        }
         let (Some(client), Some(page), Some((x, y))) = (
             self.client.clone(),
             self.active_page(),
@@ -966,9 +1302,10 @@ impl BrowserPanel {
     }
 
     fn save_current_url(&mut self, key: &'static str, cx: &mut Context<Self>) {
-        let Some(url) = self.active_page().map(|page| page.url) else {
+        let url = self.active_url();
+        if url == "about:blank" {
             return;
-        };
+        }
         let urls = if key == "momor_browser_favorites" {
             &mut self.favorites
         } else {
@@ -993,6 +1330,42 @@ impl BrowserPanel {
                 "Adicionado aos favoritos".to_string()
             } else {
                 "Adicionado à Discagem Rápida".to_string()
+            };
+        }
+        cx.notify();
+    }
+
+    fn toggle_favorite(&mut self, cx: &mut Context<Self>) {
+        let url = self.active_url();
+        if url == "about:blank" {
+            return;
+        }
+
+        let removed = if let Some(index) = self.favorites.iter().position(|saved| saved == &url) {
+            self.favorites.remove(index);
+            true
+        } else {
+            self.favorites.push(url);
+            false
+        };
+        let value = match serde_json::to_string(&self.favorites) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::debug!("serializing browser favorites failed: {error:#}");
+                return;
+            }
+        };
+        let store = db::kvp::KeyValueStore::global(cx).clone();
+        db::write_and_log(cx, move || async move {
+            store
+                .write_kvp("momor_browser_favorites".into(), value)
+                .await
+        });
+        if let Some(tab) = self.active_tab_mut() {
+            tab.status = if removed {
+                "Removido dos favoritos".to_string()
+            } else {
+                "Adicionado aos favoritos".to_string()
             };
         }
         cx.notify();
@@ -1404,6 +1777,7 @@ impl BrowserPanel {
     }
 
     fn set_viewport_scale(&mut self, change: f32, window: &mut Window, cx: &mut Context<Self>) {
+        self.viewport_auto = false;
         self.viewport_scale = if (change - 1.0).abs() < f32::EPSILON {
             1.0
         } else {
@@ -1442,10 +1816,89 @@ impl BrowserPanel {
         .detach();
     }
 
+    fn fit_viewport(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.viewport_auto = true;
+        self.viewport_scale = 1.0;
+        self.viewport_size = None;
+        if let Some(bounds) = self.content_bounds {
+            self.sync_auto_viewport(bounds, window, cx);
+        }
+        cx.notify();
+    }
+
+    fn sync_auto_viewport(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.viewport_auto {
+            return;
+        }
+        let width = f32::from(bounds.size.width).round().max(1.0) as u32;
+        let height = f32::from(bounds.size.height).round().max(1.0) as u32;
+        if self.viewport_size == Some((width, height)) {
+            return;
+        }
+        self.viewport_size = Some((width, height));
+        let (Some(client), Some(page)) = (self.client.clone(), self.active_page()) else {
+            return;
+        };
+        let task = gpui_tokio::Tokio::spawn_result(cx, async move {
+            client.set_viewport(&page, width, height).await
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            if let Err(error) = task.await {
+                tracing::debug!("automatic browser viewport update failed: {error:#}");
+            }
+            if let Err(error) = this.update(cx, |_this, cx| cx.notify()) {
+                tracing::debug!("automatic browser viewport repaint failed: {error:#}");
+            }
+        })
+        .detach();
+    }
+
     fn open_devtools_tab(&mut self, tab: DevtoolsTab, cx: &mut Context<Self>) {
+        #[cfg(target_os = "windows")]
+        if let Some(native_browser) = &self.native_browser {
+            if let Err(error) = native_browser.open_devtools(self.active_tab) {
+                if let Some(active_tab) = self.active_tab_mut() {
+                    active_tab.status = format!("DevTools indisponível: {error:#}");
+                }
+            }
+            self.devtools_open = false;
+            cx.notify();
+            return;
+        }
         self.devtools_open = true;
         self.devtools_tab = tab;
+        if tab == DevtoolsTab::Dom {
+            self.refresh_dom(cx);
+        }
         cx.notify();
+    }
+
+    fn close_devtools(&mut self, cx: &mut Context<Self>) {
+        self.devtools_open = false;
+        cx.notify();
+    }
+
+    fn visible_devtools_output(&self) -> Vec<String> {
+        self.devtools_output
+            .iter()
+            .filter(|line| match self.devtools_tab {
+                DevtoolsTab::Console => line.starts_with('[') || line.starts_with("Erro"),
+                DevtoolsTab::Network => {
+                    line.starts_with("-> ") || line.starts_with("Navegou para ")
+                }
+                DevtoolsTab::Dom => {
+                    !line.starts_with('[')
+                        && !line.starts_with("-> ")
+                        && !line.starts_with("Navegou para ")
+                }
+            })
+            .cloned()
+            .collect()
     }
 
     fn refresh_dom(&mut self, cx: &mut Context<Self>) {
@@ -1509,6 +1962,10 @@ impl BrowserPanel {
         delta_y: f32,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(target_os = "windows")]
+        if self.native_browser.is_some() {
+            return;
+        }
         let (Some(client), Some(page), Some((x, y))) = (
             self.client.clone(),
             self.active_page(),
@@ -1534,6 +1991,10 @@ impl BrowserPanel {
         modifiers: u8,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(target_os = "windows")]
+        if self.native_browser.is_some() {
+            return;
+        }
         let (Some(client), Some(page)) = (self.client.clone(), self.active_page()) else {
             return;
         };
@@ -1564,12 +2025,22 @@ impl BrowserPanel {
         };
         let tab_index = self.active_tab;
         let endpoint = default_endpoint();
+        #[cfg(target_os = "windows")]
+        let chromium_port = self.native_browser.as_ref().map(NativeBrowser::debug_port);
+        #[cfg(not(target_os = "windows"))]
+        let chromium_port = None;
         let existing_client = self.client.clone();
         let existing_page = self.active_page();
-        let should_start_screencast = existing_page
-            .as_ref()
-            .map(|page| !self.screencast_tasks.contains_key(&page.target_id))
-            .unwrap_or(true);
+        let use_existing_chromium_page = chromium_port.is_some()
+            && tab_index == 0
+            && self.tabs.len() == 1
+            && existing_client.is_none()
+            && existing_page.is_none();
+        let should_start_screencast = chromium_port.is_none()
+            && existing_page
+                .as_ref()
+                .map(|page| !self.screencast_tasks.contains_key(&page.target_id))
+                .unwrap_or(true);
         let viewport = self.content_bounds.map(|bounds| {
             (
                 f32::from(bounds.size.width).round().max(1.0) as u32,
@@ -1579,6 +2050,8 @@ impl BrowserPanel {
         if let Some(tab) = self.active_tab_mut() {
             tab.status = if existing_page.is_some() {
                 "Navegando...".to_string()
+            } else if chromium_port.is_some() {
+                "Conectando ao Chromium...".to_string()
             } else {
                 format!("Conectando ao Obscura em {endpoint}...")
             };
@@ -1586,9 +2059,10 @@ impl BrowserPanel {
             tab.loading = true;
         }
         let task = gpui_tokio::Tokio::spawn_result(cx, async move {
-            let client = match existing_client {
-                Some(client) => client,
-                None => match CdpClient::connect(&endpoint).await {
+            let client = match (existing_client, chromium_port) {
+                (Some(client), _) => client,
+                (None, Some(port)) => CdpClient::connect_chromium(port).await?,
+                (None, None) => match CdpClient::connect(&endpoint).await {
                     Ok(client) => client,
                     Err(connect_error) => CdpClient::launch_and_connect()
                         .await
@@ -1604,13 +2078,21 @@ impl BrowserPanel {
                     client.navigate(&mut page, &url).await?;
                     page
                 }
+                None if use_existing_chromium_page => client.connect_existing_page(&url).await?,
                 None => client.create_page(&url).await?,
             };
             if let Some((width, height)) = viewport {
                 client.set_viewport(&page, width, height).await?;
             }
-            client.settle_page(&page).await?;
-            let screenshot = client.capture_screenshot(&page).await?;
+            let screenshot = match client.capture_screenshot(&page).await {
+                Ok(screenshot) => screenshot,
+                Err(initial_error) => {
+                    client.settle_page(&page).await.with_context(|| {
+                        format!("initial browser screenshot failed: {initial_error:#}")
+                    })?;
+                    client.capture_screenshot(&page).await?
+                }
+            };
             let screencast = if should_start_screencast {
                 match client.start_screencast(&page).await {
                     Ok(events) => Some(events),
@@ -1686,6 +2168,7 @@ impl BrowserPanel {
         let task_target_id = target_id.clone();
         let session_id = page.session_id.clone();
         let task = cx.spawn_in(window, async move |this, cx| {
+            let mut last_frame_at = Instant::now() - Duration::from_millis(32);
             loop {
                 let event = match events.recv().await {
                     Ok(event) => event,
@@ -1708,6 +2191,10 @@ impl BrowserPanel {
                 {
                     tracing::debug!("browser screencast acknowledgement failed: {error:#}");
                 }
+                if last_frame_at.elapsed() < Duration::from_millis(16) {
+                    continue;
+                }
+                last_frame_at = Instant::now();
                 if let Err(error) = this.update(cx, |this, cx| {
                     if let Some(tab) = this.tabs.iter_mut().find(|tab| {
                         tab.page
@@ -1874,8 +2361,15 @@ impl BrowserPanel {
         self.navigation_task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = async {
                 client.navigate_history(&mut page, delta).await?;
-                client.settle_page(&page).await?;
-                let screenshot = client.capture_screenshot(&page).await?;
+                let screenshot = match client.capture_screenshot(&page).await {
+                    Ok(screenshot) => screenshot,
+                    Err(initial_error) => {
+                        client.settle_page(&page).await.with_context(|| {
+                            format!("history screenshot failed: {initial_error:#}")
+                        })?;
+                        client.capture_screenshot(&page).await?
+                    }
+                };
                 anyhow::Ok((page, screenshot))
             }
             .await;
@@ -1918,8 +2412,15 @@ impl BrowserPanel {
             let result = async {
                 let url = page.url.clone();
                 client.navigate(&mut page, &url).await?;
-                client.settle_page(&page).await?;
-                let screenshot = client.capture_screenshot(&page).await?;
+                let screenshot = match client.capture_screenshot(&page).await {
+                    Ok(screenshot) => screenshot,
+                    Err(initial_error) => {
+                        client.settle_page(&page).await.with_context(|| {
+                            format!("reload screenshot failed: {initial_error:#}")
+                        })?;
+                        client.capture_screenshot(&page).await?
+                    }
+                };
                 anyhow::Ok((page, screenshot))
             }
             .await;
@@ -1969,12 +2470,20 @@ impl Render for BrowserPanel {
         let active_tab = self.active_tab;
         let devtools_open = self.devtools_open;
         let devtools_tab = self.devtools_tab;
-        let devtools_output = self.devtools_output.clone();
         let history_open = self.history_open;
         let history_entries = self
             .active_tab()
             .map(|tab| (tab.history.clone(), tab.history_index))
             .unwrap_or_default();
+        let favorite_icon = if self.favorites.iter().any(|url| url == &self.active_url()) {
+            IconName::StarFilled
+        } else {
+            IconName::Star
+        };
+        #[cfg(target_os = "windows")]
+        let native_browser_active = self.native_browser.is_some();
+        #[cfg(not(target_os = "windows"))]
+        let native_browser_active = false;
         let tab_labels = self
             .tabs
             .iter()
@@ -1987,7 +2496,7 @@ impl Render for BrowserPanel {
                         .page
                         .as_ref()
                         .map(|page| page.url.clone())
-                        .unwrap_or_default(),
+                        .unwrap_or_else(|| tab.current_url.clone()),
                     title: tab.title.clone(),
                 };
                 h_flex()
@@ -2045,6 +2554,21 @@ impl Render for BrowserPanel {
                     .p_2()
                     .border_b_1()
                     .border_color(cx.theme().colors().border)
+                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                        let address_bar_focused =
+                            this.address_bar.as_ref().is_some_and(|address_bar| {
+                                address_bar
+                                    .read(cx)
+                                    .focus_handle(cx)
+                                    .contains_focused(window, cx)
+                            });
+                        if address_bar_focused && event.keystroke.key.eq_ignore_ascii_case("enter")
+                        {
+                            this.navigate(window, cx);
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        }
+                    }))
                     .child(
                         IconButton::new("browser-back", IconName::ArrowLeft)
                             .tooltip(Tooltip::text("Voltar"))
@@ -2088,25 +2612,10 @@ impl Render for BrowserPanel {
                             .on_click(cx.listener(|this, _, window, cx| this.navigate(window, cx))),
                     )
                     .child(
-                        IconButton::new("browser-devtools", IconName::Debug)
-                            .tooltip(Tooltip::text("Ferramentas do desenvolvedor"))
+                        IconButton::new("browser-favorite", favorite_icon)
+                            .tooltip(Tooltip::text("Adicionar ou remover dos favoritos"))
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.devtools_open = !this.devtools_open;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        IconButton::new("browser-viewport-down", IconName::Minimize)
-                            .tooltip(Tooltip::text("Reduzir viewport"))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.set_viewport_scale(-0.1, window, cx);
-                            })),
-                    )
-                    .child(
-                        IconButton::new("browser-viewport-up", IconName::MaximizeAlt)
-                            .tooltip(Tooltip::text("Aumentar viewport"))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.set_viewport_scale(0.1, window, cx);
+                                this.toggle_favorite(cx);
                             })),
                     ),
             )
@@ -2165,12 +2674,22 @@ impl Render for BrowserPanel {
                     .min_h_0()
                     .w_full()
                     .overflow_hidden()
-                    .on_children_prepainted(move |children, _window, cx| {
+                    .on_children_prepainted(move |children, window, cx| {
                         if let Some(bounds) = children.first().copied() {
                             if let Err(error) = content_bounds_entity.update(cx, |this, _cx| {
                                 this.content_bounds = Some(bounds);
                             }) {
                                 tracing::debug!("browser content bounds update failed: {error:#}");
+                            } else if let Err(error) =
+                                content_bounds_entity.update(cx, |this, cx| {
+                                    #[cfg(target_os = "windows")]
+                                    this.ensure_native_browser(bounds, window, cx);
+                                    this.sync_auto_viewport(bounds, window, cx);
+                                })
+                            {
+                                tracing::debug!(
+                                    "browser automatic viewport sync failed: {error:#}"
+                                );
                             }
                         }
                     })
@@ -2231,6 +2750,14 @@ impl Render for BrowserPanel {
                         },
                     ))
                     .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                        if this.address_bar.as_ref().is_some_and(|address_bar| {
+                            address_bar
+                                .read(cx)
+                                .focus_handle(cx)
+                                .contains_focused(window, cx)
+                        }) {
+                            return;
+                        }
                         let key = event.keystroke.key.to_ascii_lowercase();
                         let command =
                             event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
@@ -2261,6 +2788,14 @@ impl Render for BrowserPanel {
                         cx.stop_propagation();
                     }))
                     .on_key_up(cx.listener(|this, event: &gpui::KeyUpEvent, window, cx| {
+                        if this.address_bar.as_ref().is_some_and(|address_bar| {
+                            address_bar
+                                .read(cx)
+                                .focus_handle(cx)
+                                .contains_focused(window, cx)
+                        }) {
+                            return;
+                        }
                         this.dispatch_key(
                             "keyUp",
                             event.keystroke.key.clone(),
@@ -2271,10 +2806,12 @@ impl Render for BrowserPanel {
                         window.prevent_default();
                         cx.stop_propagation();
                     }))
-                    .when_some(image.clone(), |this, image| {
-                        this.child(img(image).size_full())
+                    .when(!native_browser_active, |this| {
+                        this.when_some(image.clone(), |this, image| {
+                            this.child(img(image).size_full())
+                        })
                     })
-                    .when(image.is_none(), |this| {
+                    .when(!native_browser_active && image.is_none(), |this| {
                         this.child(
                             v_flex()
                                 .size_full()
@@ -2284,6 +2821,11 @@ impl Render for BrowserPanel {
                                 .child(Icon::new(IconName::Public).size(IconSize::XLarge))
                                 .child(Label::new(status).color(Color::Muted)),
                         )
+                    })
+                    .when(native_browser_active, |this| {
+                        // Keep a layout child so the prepaint callback continues to receive
+                        // live content bounds after Chromium takes over rendering.
+                        this.child(div().size_full())
                     }),
             )
             .when(devtools_open, |_| {
@@ -2310,7 +2852,8 @@ impl Render for BrowserPanel {
                             .child(Label::new(tab.label()))
                     })
                     .collect::<Vec<_>>();
-                let output = devtools_output.into_iter().map(|line| {
+                let output = self.visible_devtools_output();
+                let output = output.into_iter().map(|line| {
                     Label::new(line)
                         .size(LabelSize::Small)
                         .color(Color::Muted)
@@ -2323,7 +2866,21 @@ impl Render for BrowserPanel {
                     .border_t_1()
                     .border_color(cx.theme().colors().border)
                     .bg(cx.theme().colors().editor_background)
-                    .child(h_flex().gap_1().px_2().children(tabs))
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .px_2()
+                            .items_center()
+                            .children(tabs)
+                            .child(div().flex_1())
+                            .child(
+                                IconButton::new("browser-devtools-close", IconName::Close)
+                                    .tooltip(Tooltip::text("Fechar DevTools"))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.close_devtools(cx);
+                                    })),
+                            ),
+                    )
                     .child(
                         v_flex()
                             .id("browser-devtools-output")
@@ -2358,6 +2915,14 @@ mod tests {
             "https://example.com/"
         );
         assert_eq!(normalize_url("about:blank").unwrap(), "about:blank");
+    }
+
+    #[test]
+    fn sends_plain_text_to_google_search() {
+        assert_eq!(
+            normalize_url("rust gpui").unwrap(),
+            "https://www.google.com/search?q=rust+gpui"
+        );
     }
 
     #[test]

@@ -1,9 +1,10 @@
 // Disable command line from opening on release mode
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod reliability;
 mod browser;
 mod momor;
+mod native_chromium;
+mod reliability;
 
 // Ensure the binary name stays in sync with APP_NAME so that the paths used
 // at runtime (data dir, config dir, etc.) match what the binary is called.
@@ -43,6 +44,11 @@ use remote::RemoteConnectionOptions;
 use reqwest_client::ReqwestClient;
 
 use assets::Assets;
+use momor::{
+    OpenListener, OpenRequest, RawOpenRequest, app_menus, build_window_options,
+    derive_paths_with_position, handle_cli_connection, handle_keymap_file_changes,
+    initialize_workspace, open_paths_with_positions,
+};
 use node_runtime::{NodeBinaryOptions, NodeRuntime};
 use parking_lot::Mutex;
 use project::{project_settings::ProjectSettings, trusted_worktrees};
@@ -68,11 +74,6 @@ use uuid::Uuid;
 use workspace::{
     AppState, MultiWorkspace, SerializedWorkspaceLocation, SessionWorkspace, Toast,
     WorkspaceSettings, WorkspaceStore, notifications::NotificationId, restore_multiworkspace,
-};
-use momor::{
-    OpenListener, OpenRequest, RawOpenRequest, app_menus, build_window_options,
-    derive_paths_with_position, handle_cli_connection,
-    handle_keymap_file_changes, initialize_workspace, open_paths_with_positions,
 };
 
 use crate::momor::{CrashHandler, OpenRequestKind, eager_load_active_theme_and_icon_theme};
@@ -271,9 +272,11 @@ fn main() {
     match util::get_momor_cli_path() {
         Ok(path) => askpass::set_askpass_program(path),
         Err(err) => {
-            eprintln!("Error: {}", err);
             if std::option_env!("MOMOR_BUNDLE").is_some() {
+                eprintln!("Error: {}", err);
                 process::exit(1);
+            } else {
+                log::debug!("momor-cli is not available in this development build: {err:#}");
             }
         }
     }
@@ -334,6 +337,19 @@ fn main() {
     #[cfg(windows)]
     check_for_conpty_dll();
 
+    // Native Chromium is hosted as a child HWND. GPUI's DirectComposition surface
+    // can otherwise remain above that child and hide its pixels.
+    #[cfg(target_os = "windows")]
+    if std::env::var_os("GPUI_DISABLE_DIRECT_COMPOSITION").is_none() {
+        unsafe { std::env::set_var("GPUI_DISABLE_DIRECT_COMPOSITION", "1") };
+    }
+
+    // This fork has no Momor cloud backend. Keep optional cloud services quiet unless
+    // the user explicitly supplies a compatible backend.
+    if std::env::var_os("MOMOR_LOCAL_MODE").is_none() {
+        unsafe { std::env::set_var("MOMOR_LOCAL_MODE", "1") };
+    }
+
     let app =
         Application::with_platform(gpui_platform::current_platform(false)).with_assets(Assets);
 
@@ -363,7 +379,10 @@ fn main() {
 
         #[cfg(target_os = "windows")]
         {
-            !crate::momor::windows_only_instance::handle_single_instance(open_listener.clone(), &args)
+            !crate::momor::windows_only_instance::handle_single_instance(
+                open_listener.clone(),
+                &args,
+            )
         }
 
         #[cfg(target_os = "macos")]
