@@ -183,7 +183,6 @@ obscura-cdp = { path = "../../vendor/obscura/crates/obscura-cdp", features = ["r
 [target.'cfg(target_os = "windows")'.dependencies]
 etw_tracing.workspace = true
 windows.workspace = true
-raw-window-handle = "0.6"
 gpui = { workspace = true, features = [
     "input-latency-histogram",
     "windows-manifest",

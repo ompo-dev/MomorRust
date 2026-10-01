@@ -9720,7 +9720,6 @@ dependencies = [
  "project",
  "prompt_store",
  "proto",
- "raw-window-handle",
  "rayon",
  "release_channel",
  "remote",
