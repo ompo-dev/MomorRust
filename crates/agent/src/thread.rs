@@ -322,6 +322,13 @@ impl UserMessage {
                         MentionUri::Fetch { url } => {
                             write!(&mut fetch_context, "\nFetch: {}\n\n{}", url, content).ok();
                         }
+                        MentionUri::Notebook { kind, id, .. } => {
+                            write!(
+                                &mut fetch_context,
+                                "\nMomor {kind} ({id}):\n{content}\n"
+                            )
+                            .ok();
+                        }
                         MentionUri::Diagnostics { .. } => {
                             write!(&mut diagnostics_context, "\n{}\n", content).ok();
                         }

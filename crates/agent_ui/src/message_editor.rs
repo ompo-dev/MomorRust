@@ -987,10 +987,18 @@ impl MessageEditor {
                                 ),
                             }
                         } else if let Some(metadata) = crease.metadata()
-                            && metadata.kind.as_deref() == Some("browser")
+                            && let (Some(kind), Some(id)) = (&metadata.kind, &metadata.uri)
                         {
-                            let Some(uri) = metadata.uri.clone() else {
-                                continue;
+                            let uri = if kind.as_ref() == "browser" {
+                                id.to_string()
+                            } else {
+                                MentionUri::Notebook {
+                                    kind: kind.to_string(),
+                                    id: id.to_string(),
+                                    name: metadata.label.to_string(),
+                                }
+                                .to_uri()
+                                .to_string()
                             };
                             acp::ContentBlock::ResourceLink(acp::ResourceLink::new(
                                 metadata.label.clone(),

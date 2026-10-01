@@ -55,6 +55,12 @@ pub enum MentionUri {
     Fetch {
         url: Url,
     },
+    /// A Momor notebook, skill, or MCP item attached to an agent message.
+    Notebook {
+        kind: String,
+        id: String,
+        name: String,
+    },
     TerminalSelection {
         line_count: u32,
     },
@@ -261,6 +267,23 @@ impl MentionUri {
                 } else if path.starts_with("/agent/merge-conflict") {
                     let file_path = single_query_param(&url, "path")?.unwrap_or_default();
                     Ok(Self::MergeConflict { file_path })
+                } else if path == "/agent/notebook" {
+                    let mut kind = None;
+                    let mut id = None;
+                    let mut name = None;
+                    for (key, value) in url.query_pairs() {
+                        match key.as_ref() {
+                            "kind" => kind = Some(value.into_owned()),
+                            "id" => id = Some(value.into_owned()),
+                            "name" => name = Some(value.into_owned()),
+                            _ => bail!("invalid notebook query parameter"),
+                        }
+                    }
+                    Ok(Self::Notebook {
+                        kind: kind.context("Missing notebook kind")?,
+                        id: id.context("Missing notebook id")?,
+                        name: name.context("Missing notebook name")?,
+                    })
                 } else {
                     bail!("invalid momor url: {:?}", input);
                 }
@@ -281,6 +304,7 @@ impl MentionUri {
             MentionUri::Symbol { name, .. } => name.clone(),
             MentionUri::Thread { name, .. } => name.clone(),
             MentionUri::Rule { name, .. } => name.clone(),
+            MentionUri::Notebook { name, .. } => name.clone(),
             MentionUri::Diagnostics { .. } => "Diagnostics".to_string(),
             MentionUri::TerminalSelection { line_count } => {
                 if *line_count == 1 {
@@ -352,6 +376,14 @@ impl MentionUri {
             MentionUri::Symbol { .. } => IconName::Code.path().into(),
             MentionUri::Thread { .. } => IconName::Thread.path().into(),
             MentionUri::Rule { .. } => IconName::Reader.path().into(),
+            MentionUri::Notebook { kind, .. } => match kind.as_str() {
+                "folder" => IconName::Folder.path().into(),
+                "meeting" => IconName::Mic.path().into(),
+                "skill" => IconName::Book.path().into(),
+                "mcp" => IconName::DatabaseZap.path().into(),
+                "browser" => IconName::Public.path().into(),
+                _ => IconName::FileDoc.path().into(),
+            },
             MentionUri::Diagnostics { .. } => IconName::Warning.path().into(),
             MentionUri::TerminalSelection { .. } => IconName::Terminal.path().into(),
             MentionUri::Selection { .. } => IconName::Reader.path().into(),
@@ -449,6 +481,15 @@ impl MentionUri {
                 url
             }
             MentionUri::Fetch { url } => url.clone(),
+            MentionUri::Notebook { kind, id, name } => {
+                let mut url = Url::parse("momor:///").unwrap();
+                url.set_path("/agent/notebook");
+                url.query_pairs_mut()
+                    .append_pair("kind", kind)
+                    .append_pair("id", id)
+                    .append_pair("name", name);
+                url
+            }
             MentionUri::TerminalSelection { line_count } => {
                 let mut url = Url::parse("momor:///agent/terminal-selection").unwrap();
                 url.query_pairs_mut()
@@ -703,6 +744,18 @@ mod tests {
             _ => panic!("Expected Rule variant"),
         }
         assert_eq!(parsed.to_uri().to_string(), rule_uri);
+    }
+
+    #[test]
+    fn test_parse_notebook_uri() {
+        let uri = MentionUri::Notebook {
+            kind: "skill".to_string(),
+            id: "browseros-neo/tools".to_string(),
+            name: "browseros-neo".to_string(),
+        };
+        let serialized = uri.to_uri().to_string();
+        let parsed = MentionUri::parse(&serialized, PathStyle::local()).unwrap();
+        assert_eq!(parsed, uri);
     }
 
     #[test]

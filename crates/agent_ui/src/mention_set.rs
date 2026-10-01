@@ -130,6 +130,7 @@ impl MentionSet {
         match mention_uri {
             MentionUri::Fetch { url } => self.confirm_mention_for_fetch(url, http_client, cx),
             MentionUri::Directory { .. } => Task::ready(Ok(Mention::Link)),
+            MentionUri::Notebook { .. } => Task::ready(Ok(Mention::Link)),
             MentionUri::Thread { id, .. } => self.confirm_mention_for_thread(id, cx),
             MentionUri::File { abs_path } => {
                 self.confirm_mention_for_file(abs_path, supports_images, cx)
@@ -265,6 +266,7 @@ impl MentionSet {
                 self.confirm_mention_for_fetch(url, workspace.read(cx).client().http_client(), cx)
             }
             MentionUri::Directory { .. } => Task::ready(Ok(Mention::Link)),
+            MentionUri::Notebook { .. } => Task::ready(Ok(Mention::Link)),
             MentionUri::Thread { id, .. } => self.confirm_mention_for_thread(id, cx),
             MentionUri::File { abs_path } => {
                 self.confirm_mention_for_file(abs_path, supports_images, cx)

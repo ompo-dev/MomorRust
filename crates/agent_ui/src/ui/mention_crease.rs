@@ -185,6 +185,9 @@ fn open_mention_uri(
         MentionUri::Fetch { url } => {
             cx.open_url(url.as_str());
         }
+        MentionUri::Notebook { kind, id, .. } => {
+            notebook::open_item(&kind, id, window, cx);
+        }
         MentionUri::PastedImage { .. }
         | MentionUri::Selection { abs_path: None, .. }
         | MentionUri::Diagnostics { .. }
