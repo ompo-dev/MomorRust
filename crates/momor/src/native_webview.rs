@@ -9,8 +9,8 @@ use anyhow::{Context as _, Result, anyhow};
 use std::{cell::RefCell, path::Path, rc::Rc};
 use webview2_com::{
     CoTaskMemPWSTR, CoreWebView2EnvironmentOptions, CreateCoreWebView2ControllerCompletedHandler,
-    CreateCoreWebView2EnvironmentCompletedHandler, SourceChangedEventHandler,
-    Microsoft::Web::WebView2::Win32::*,
+    CreateCoreWebView2EnvironmentCompletedHandler, DocumentTitleChangedEventHandler,
+    Microsoft::Web::WebView2::Win32::*, SourceChangedEventHandler,
 };
 use windows_062::{
     Win32::{
@@ -26,6 +26,7 @@ pub struct NativeWebView {
     controller: ICoreWebView2Controller,
     webview: ICoreWebView2,
     source_changed_token: i64,
+    title_changed_token: i64,
 }
 
 pub fn debugging_port() -> u16 {
@@ -41,6 +42,7 @@ impl NativeWebView {
         parent: HWND,
         profile_dir: &Path,
         mut on_url_changed: impl FnMut(String) + 'static,
+        mut on_title_changed: impl FnMut(String) + 'static,
         on_ready: impl FnOnce(Result<Self>) + 'static,
     ) -> Result<()> {
         unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }
@@ -112,7 +114,20 @@ impl NativeWebView {
                                     Ok(())
                                 }),
                             );
+                            let title_changed_handler = DocumentTitleChangedEventHandler::create(
+                                Box::new(move |sender, _args| {
+                                    let Some(sender) = sender else {
+                                        return Ok(());
+                                    };
+                                    let mut title_pointer = windows_062::core::PWSTR::null();
+                                    unsafe { sender.DocumentTitle(&mut title_pointer)? };
+                                    let title = CoTaskMemPWSTR::from(title_pointer).to_string();
+                                    on_title_changed(title);
+                                    Ok(())
+                                }),
+                            );
                             let mut source_changed_token = 0;
+                            let mut title_changed_token = 0;
                             unsafe {
                                 webview
                                     .add_SourceChanged(
@@ -120,6 +135,12 @@ impl NativeWebView {
                                         &mut source_changed_token,
                                     )
                                     .context("não foi possível observar mudanças de URL")?;
+                                webview
+                                    .add_DocumentTitleChanged(
+                                        &title_changed_handler,
+                                        &mut title_changed_token,
+                                    )
+                                    .context("não foi possível observar mudanças de título")?;
                                 let controller2: ICoreWebView2Controller2 = controller
                                     .cast()
                                     .context("WebView2 não expôs o controlador visual")?;
@@ -144,6 +165,7 @@ impl NativeWebView {
                                 controller,
                                 webview,
                                 source_changed_token,
+                                title_changed_token,
                             })
                         })();
                         complete(&controller_ready, result);
@@ -272,6 +294,9 @@ impl Drop for NativeWebView {
     fn drop(&mut self) {
         unsafe {
             let _ = self.webview.remove_SourceChanged(self.source_changed_token);
+            let _ = self
+                .webview
+                .remove_DocumentTitleChanged(self.title_changed_token);
             let _ = self.controller.Close();
         }
     }

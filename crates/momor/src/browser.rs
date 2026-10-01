@@ -233,6 +233,42 @@ impl CdpClient {
         self.attach_page(target_id, url).await
     }
 
+    async fn page_for_url(&self, expected_url: &str) -> Result<BrowserPage> {
+        if self.direct_page {
+            return self.active_page().await;
+        }
+        let response = self.send("Target.getTargets", json!({})).await?;
+        let targets = response
+            .get("targetInfos")
+            .and_then(Value::as_array)
+            .context("browser did not return target information")?;
+        let pages = targets
+            .iter()
+            .filter(|target| target.get("type").and_then(Value::as_str) == Some("page"))
+            .collect::<Vec<_>>();
+        let target = pages
+            .iter()
+            .rev()
+            .find(|target| {
+                target
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .is_some_and(|url| url == expected_url)
+            })
+            .or_else(|| pages.last())
+            .copied()
+            .context("browser has no open page")?;
+        let target_id = target
+            .get("targetId")
+            .and_then(Value::as_str)
+            .context("browser target has no id")?;
+        let url = target
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or("about:blank");
+        self.attach_page(target_id, url).await
+    }
+
     async fn attach_page(&self, target_id: &str, url: &str) -> Result<BrowserPage> {
         let attached = self
             .send(
@@ -861,7 +897,6 @@ struct BrowserNavigation {
     events: broadcast::Receiver<CdpEvent>,
 }
 
-#[derive(Clone)]
 struct BrowserTab {
     page: Option<BrowserPage>,
     current_url: String,
@@ -871,6 +906,8 @@ struct BrowserTab {
     history: Vec<BrowserHistoryEntry>,
     history_index: usize,
     loading: bool,
+    #[cfg(target_os = "windows")]
+    native_webview: Option<NativeWebView>,
 }
 
 impl BrowserTab {
@@ -884,6 +921,8 @@ impl BrowserTab {
             history: Vec::new(),
             history_index: 0,
             loading: false,
+            #[cfg(target_os = "windows")]
+            native_webview: None,
         }
     }
 
@@ -922,7 +961,6 @@ pub struct BrowserPanel {
     viewport_scale: f32,
     last_mouse_move: Option<Instant>,
     #[cfg(target_os = "windows")]
-    native_webview: Option<NativeWebView>,
     #[cfg(target_os = "windows")]
     native_webview_pending: bool,
     #[cfg(target_os = "windows")]
@@ -930,7 +968,6 @@ pub struct BrowserPanel {
     #[cfg(target_os = "windows")]
     native_webview_visible: bool,
     #[cfg(target_os = "windows")]
-    native_display_url: Option<String>,
     #[cfg(target_os = "windows")]
     native_capture_task: Option<Task<()>>,
     #[cfg(target_os = "windows")]
@@ -981,7 +1018,6 @@ impl BrowserPanel {
             viewport_scale: 1.0,
             last_mouse_move: None,
             #[cfg(target_os = "windows")]
-            native_webview: None,
             #[cfg(target_os = "windows")]
             native_webview_pending: false,
             #[cfg(target_os = "windows")]
@@ -989,7 +1025,6 @@ impl BrowserPanel {
             #[cfg(target_os = "windows")]
             native_webview_visible: false,
             #[cfg(target_os = "windows")]
-            native_display_url: None,
             #[cfg(target_os = "windows")]
             native_capture_task: None,
             #[cfg(target_os = "windows")]
@@ -1027,15 +1062,33 @@ impl BrowserPanel {
             .unwrap_or_else(|| "about:blank".to_string())
     }
 
+    #[cfg(target_os = "windows")]
+    fn active_native_webview(&self) -> Option<&NativeWebView> {
+        self.active_tab()
+            .and_then(|tab| tab.native_webview.as_ref())
+    }
+
     pub fn set_native_visibility(&mut self, visible: bool, cx: &mut Context<Self>) {
         #[cfg(target_os = "windows")]
         {
-            self.native_webview_visible = visible;
-            if let Some(webview) = &self.native_webview {
-                if let Err(error) = webview.set_visible(visible) {
-                    tracing::debug!("falha ao alterar a visibilidade do WebView2: {error:#}");
+            let active_visible = visible && self.active_url() != "about:blank";
+            self.native_webview_visible = active_visible;
+            for (index, tab) in self.tabs.iter().enumerate() {
+                let should_be_visible = active_visible && index == self.active_tab;
+                let Some(webview) = tab.native_webview.as_ref() else {
+                    continue;
+                };
+                if let Err(error) = webview.set_visible(should_be_visible) {
+                    tracing::debug!("falha ao alterar visibilidade do WebView2: {error:#}");
                 }
             }
+            if !active_visible {
+                self.native_webview_bounds = None;
+            }
+            /*
+             * WebView2 controllers are kept alive per tab. Hiding the inactive
+             * controller preserves its document, history and media state.
+             */
         }
         cx.notify();
     }
@@ -1067,28 +1120,17 @@ impl BrowserPanel {
         if index >= self.tabs.len() || index == self.active_tab {
             return;
         }
-        let target_url = self
-            .tabs
-            .get(index)
-            .map(|tab| tab.current_url.clone())
-            .unwrap_or_else(|| "about:blank".to_string());
         self.active_tab = index;
         self.viewport_size = None;
         self.viewport_auto = true;
         self.last_mouse_move = None;
-        self.set_native_visibility(self.active_url() != "about:blank", cx);
         #[cfg(target_os = "windows")]
-        if let Some(webview) = &self.native_webview {
-            if target_url != "about:blank"
-                && self.native_display_url.as_deref() != Some(target_url.as_str())
-            {
-                if let Err(error) = webview.navigate(&target_url) {
-                    tracing::debug!("falha ao ativar aba no WebView2: {error:#}");
-                } else {
-                    self.native_display_url = Some(target_url);
-                }
-            }
+        {
+            self.native_webview_bounds = None;
+            self.native_url_task.take();
+            self.native_capture_task.take();
         }
+        self.set_native_visibility(self.active_url() != "about:blank", cx);
         self.sync_address_bar(window, cx);
         cx.notify();
     }
@@ -1149,6 +1191,7 @@ impl BrowserPanel {
     #[cfg(target_os = "windows")]
     fn ensure_native_webview(
         &mut self,
+        tab_index: usize,
         bounds: Bounds<Pixels>,
         window: &mut Window,
         _cx: &mut Context<Self>,
@@ -1159,21 +1202,24 @@ impl BrowserPanel {
         let width = (bounds.size.width.as_f32() * scale).round().max(1.0) as i32;
         let height = (bounds.size.height.as_f32() * scale).round().max(1.0) as i32;
         let native_bounds = (left, top, width, height);
-        if self.native_webview.is_none() {
+        let Some(tab) = self.tabs.get(tab_index) else {
+            return;
+        };
+        if tab.native_webview.is_none() {
             let parent = match window.window_handle() {
                 Ok(handle) => match handle.as_raw() {
                     RawWindowHandle::Win32(handle) => windows_062::Win32::Foundation::HWND(
                         handle.hwnd.get() as *mut std::ffi::c_void,
                     ),
                     _ => {
-                        if let Some(tab) = self.active_tab_mut() {
+                        if let Some(tab) = self.tabs.get_mut(tab_index) {
                             tab.status = "O WebView2 requer uma janela Win32".to_string();
                         }
                         return;
                     }
                 },
                 Err(error) => {
-                    if let Some(tab) = self.active_tab_mut() {
+                    if let Some(tab) = self.tabs.get_mut(tab_index) {
                         tab.status = format!("Falha ao obter a janela do navegador: {error:#}");
                     }
                     return;
@@ -1183,7 +1229,6 @@ impl BrowserPanel {
             let mut url_app = window.to_async(_cx);
             let on_url_changed = move |url: String| {
                 if let Err(error) = url_weak.update_in(&mut url_app, |this, window, cx| {
-                    let tab_index = this.active_tab;
                     let changed = this
                         .tabs
                         .get(tab_index)
@@ -1196,25 +1241,51 @@ impl BrowserPanel {
                             page.url = url.clone();
                         }
                         tab.current_url = url.clone();
-                        tab.title = url.clone();
+                        tab.title.clear();
                         tab.status = url.clone();
                         tab.loading = false;
                     }
-                    this.native_display_url = Some(url);
-                    this.sync_address_bar(window, cx);
-                    this.sync_history(tab_index, window, cx);
+                    if this.active_tab == tab_index {
+                        this.sync_address_bar(window, cx);
+                        this.sync_history(tab_index, window, cx);
+                    }
                     cx.notify();
                 }) {
                     tracing::debug!("falha ao sincronizar URL do WebView2: {error:#}");
                 }
             };
+            let title_weak = _cx.weak_entity();
+            let mut title_app = window.to_async(_cx);
+            let on_title_changed = move |title: String| {
+                let title = title.trim().to_string();
+                if title.is_empty() {
+                    return;
+                }
+                if let Err(error) = title_weak.update_in(&mut title_app, |this, _window, cx| {
+                    let Some(tab) = this.tabs.get_mut(tab_index) else {
+                        return;
+                    };
+                    if tab.title == title {
+                        return;
+                    }
+                    tab.title = title;
+                    cx.notify();
+                }) {
+                    tracing::debug!("falha ao sincronizar título do WebView2: {error:#}");
+                }
+            };
             let weak = _cx.weak_entity();
             let mut app = _cx.to_async();
-            let initial_url = self.active_url();
+            let initial_url = tab
+                .page
+                .as_ref()
+                .map(|page| page.url.clone())
+                .unwrap_or_else(|| tab.current_url.clone());
             if let Err(error) = NativeWebView::create(
                 parent,
                 &embedded_storage_dir().join("webview2-profile"),
                 on_url_changed,
+                on_title_changed,
                 move |result| {
                     if let Err(error) = weak.update(&mut app, |this, cx| {
                         this.native_webview_pending = false;
@@ -1225,7 +1296,8 @@ impl BrowserPanel {
                                         "falha ao dimensionar o WebView2 inicial: {error:#}"
                                     );
                                 }
-                                let visible = this.active_url() != "about:blank";
+                                let visible = this.active_tab == tab_index
+                                    && initial_url != "about:blank";
                                 this.native_webview_visible = visible;
                                 if let Err(error) = webview.set_visible(visible) {
                                     tracing::debug!(
@@ -1237,12 +1309,15 @@ impl BrowserPanel {
                                         tracing::debug!("falha ao abrir a página inicial: {error:#}");
                                     }
                                 }
-                                this.native_display_url = Some(initial_url.clone());
-                                this.native_webview = Some(webview);
-                                this.native_webview_bounds = Some(native_bounds);
+                                if let Some(tab) = this.tabs.get_mut(tab_index) {
+                                    tab.native_webview = Some(webview);
+                                }
+                                if visible {
+                                    this.native_webview_bounds = Some(native_bounds);
+                                }
                             }
                             Err(error) => {
-                                if let Some(tab) = this.active_tab_mut() {
+                                if let Some(tab) = this.tabs.get_mut(tab_index) {
                                     tab.status = format!("WebView2 indisponível: {error:#}");
                                 }
                             }
@@ -1254,7 +1329,7 @@ impl BrowserPanel {
                 },
             ) {
                 self.native_webview_pending = false;
-                if let Some(tab) = self.active_tab_mut() {
+                if let Some(tab) = self.tabs.get_mut(tab_index) {
                     tab.status = format!("WebView2 indisponível: {error:#}");
                 }
                 return;
@@ -1262,7 +1337,11 @@ impl BrowserPanel {
             return;
         }
 
-        if let Some(webview) = &self.native_webview {
+        if let Some(webview) = self
+            .tabs
+            .get(tab_index)
+            .and_then(|tab| tab.native_webview.as_ref())
+        {
             if let Err(error) = webview.set_bounds(left, top, width, height) {
                 tracing::debug!("falha ao redimensionar WebView2: {error:#}");
             } else {
@@ -1273,41 +1352,48 @@ impl BrowserPanel {
 
     #[cfg(target_os = "windows")]
     fn start_native_capture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.client.is_some() || self.native_capture_task.is_some() {
+        if self.native_capture_task.is_some() {
             return;
         }
 
-        let endpoint = format!(
-            "ws://127.0.0.1:{}/devtools/browser",
-            debugging_port()
-        );
+        let tab_index = self.active_tab;
+        if let (Some(client), Some(page)) = (self.client.clone(), self.active_page()) {
+            if self.native_url_task.is_none() {
+                self.start_native_url_sync(client, page, tab_index, window, cx);
+            }
+            return;
+        }
+        let expected_url = self.active_url();
+        let existing_client = self.client.clone();
+
+        let endpoint = format!("ws://127.0.0.1:{}/devtools/browser", debugging_port());
         let task = gpui_tokio::Tokio::spawn_result(cx, async move {
-            let client = CdpClient::connect(&endpoint).await?;
-            let page = client.active_page().await?;
+            let client = match existing_client {
+                Some(client) => client,
+                None => CdpClient::connect(&endpoint).await?,
+            };
+            let page = client.page_for_url(&expected_url).await?;
             let screenshot = client.capture_screenshot(&page).await?;
             let screencast = client.start_screencast(&page).await.ok();
             let download_events = client.subscribe();
             anyhow::Ok((client, page, screenshot, screencast, download_events))
         });
 
-        self.native_capture_task = Some(cx.spawn_in(window, async move |this, cx| {
-            match task.await {
+        self.native_capture_task =
+            Some(cx.spawn_in(window, async move |this, cx| match task.await {
                 Ok((client, page, screenshot, screencast, download_events)) => {
                     if let Err(error) = this.update_in(cx, |this, window, cx| {
                         this.client = Some(client.clone());
-                        let active_url = this.active_url();
-                        if let Some(tab) = this.active_tab_mut() {
+                        if let Some(tab) = this.tabs.get_mut(tab_index) {
                             let mut page = page.clone();
-                            if active_url != "about:blank" {
-                                page.url = active_url.clone();
-                                tab.status = active_url;
+                            if tab.current_url != "about:blank" {
+                                page.url = tab.current_url.clone();
+                                tab.status = tab.current_url.clone();
                                 tab.loading = false;
                             }
                             tab.page = Some(page.clone());
-                            tab.image = Some(Arc::new(Image::from_bytes(
-                                ImageFormat::Png,
-                                screenshot,
-                            )));
+                            tab.image =
+                                Some(Arc::new(Image::from_bytes(ImageFormat::Png, screenshot)));
                         }
                         if let Some(screencast) = screencast {
                             this.start_screencast(
@@ -1321,8 +1407,8 @@ impl BrowserPanel {
                         if this.download_events_task.is_none() {
                             this.start_download_events(download_events, page.clone(), window, cx);
                         }
-                        if this.native_url_task.is_none() {
-                            this.start_native_url_sync(client, page, window, cx);
+                        if this.active_tab == tab_index && this.native_url_task.is_none() {
+                            this.start_native_url_sync(client, page, tab_index, window, cx);
                         }
                         this.native_capture_task = None;
                         cx.notify();
@@ -1341,8 +1427,7 @@ impl BrowserPanel {
                         );
                     }
                 }
-            }
-        }));
+            }));
     }
 
     fn browser_coordinates(&self, position: Point<Pixels>) -> Option<(f32, f32)> {
@@ -1380,7 +1465,7 @@ impl BrowserPanel {
         cx: &mut Context<Self>,
     ) {
         #[cfg(target_os = "windows")]
-        if self.native_webview.is_some() {
+        if self.active_native_webview().is_some() {
             return;
         }
         if event_type == "mouseMoved" {
@@ -1534,7 +1619,7 @@ impl BrowserPanel {
     ) {
         let tab_index = self.active_tab;
         #[cfg(target_os = "windows")]
-        if let Some(webview) = &self.native_webview {
+        if let Some(webview) = self.active_native_webview() {
             if let Err(error) = webview.navigate(&history_entry.url) {
                 if let Some(tab) = self.active_tab_mut() {
                     tab.status = format!("Falha no histórico: {error:#}");
@@ -2000,7 +2085,7 @@ impl BrowserPanel {
         cx: &mut Context<Self>,
     ) {
         #[cfg(target_os = "windows")]
-        if self.native_webview.is_some() {
+        if self.active_native_webview().is_some() {
             return;
         }
         if !self.viewport_auto {
@@ -2031,7 +2116,7 @@ impl BrowserPanel {
 
     fn open_devtools_tab(&mut self, tab: DevtoolsTab, cx: &mut Context<Self>) {
         #[cfg(target_os = "windows")]
-        if let Some(webview) = &self.native_webview {
+        if let Some(webview) = self.active_native_webview() {
             if let Err(error) = webview.open_devtools() {
                 if let Some(active_tab) = self.active_tab_mut() {
                     active_tab.status = format!("DevTools indisponível: {error:#}");
@@ -2134,7 +2219,7 @@ impl BrowserPanel {
         cx: &mut Context<Self>,
     ) {
         #[cfg(target_os = "windows")]
-        if self.native_webview.is_some() {
+        if self.active_native_webview().is_some() {
             return;
         }
         let (Some(client), Some(page), Some((x, y))) = (
@@ -2163,7 +2248,7 @@ impl BrowserPanel {
         cx: &mut Context<Self>,
     ) {
         #[cfg(target_os = "windows")]
-        if self.native_webview.is_some() {
+        if self.active_native_webview().is_some() {
             return;
         }
         let (Some(client), Some(page)) = (self.client.clone(), self.active_page()) else {
@@ -2195,7 +2280,7 @@ impl BrowserPanel {
             }
         };
         #[cfg(target_os = "windows")]
-        if let Some(webview) = &self.native_webview {
+        if let Some(webview) = self.active_native_webview() {
             if let Err(error) = webview.navigate(&url) {
                 if let Some(tab) = self.active_tab_mut() {
                     tab.status = format!("Falha no navegador: {error:#}");
@@ -2203,7 +2288,6 @@ impl BrowserPanel {
                 cx.notify();
                 return;
             }
-            self.native_display_url = Some(url.clone());
             self.set_native_visibility(true, cx);
             if let Some(tab) = self.active_tab_mut() {
                 if let Some(mut page) = tab.page.clone() {
@@ -2211,7 +2295,7 @@ impl BrowserPanel {
                     tab.page = Some(page);
                 }
                 tab.current_url = url.clone();
-                tab.title = url.clone();
+                tab.title.clear();
                 tab.status = url;
                 tab.loading = false;
             }
@@ -2301,7 +2385,7 @@ impl BrowserPanel {
                     this.client = Some(client.clone());
                     if let Some(tab) = this.tabs.get_mut(tab_index) {
                         tab.page = Some(page.clone());
-                        tab.title = page.url.clone();
+                        tab.title.clear();
                         tab.image = Some(Arc::new(Image::from_bytes(
                             ImageFormat::Png,
                             navigation.screenshot,
@@ -2317,12 +2401,7 @@ impl BrowserPanel {
                         this.start_screencast(client, page.clone(), events, window, cx);
                     }
                     if this.download_events_task.is_none() {
-                        this.start_download_events(
-                            navigation.events,
-                            page,
-                            window,
-                            cx,
-                        );
+                        this.start_download_events(navigation.events, page, window, cx);
                     }
                     cx.notify();
                 }) {
@@ -2507,16 +2586,16 @@ impl BrowserPanel {
                             .and_then(Value::as_str)
                             .map(str::to_owned),
                         "Network.requestWillBeSent"
-                            if event
+                            if event.params.get("type").and_then(Value::as_str)
+                                == Some("Document") =>
+                        {
+                            event
                                 .params
-                                .get("type")
+                                .get("request")
+                                .and_then(|request| request.get("url"))
                                 .and_then(Value::as_str)
-                                == Some("Document") => event
-                            .params
-                            .get("request")
-                            .and_then(|request| request.get("url"))
-                            .and_then(Value::as_str)
-                            .map(str::to_owned),
+                                .map(str::to_owned)
+                        }
                         _ => None,
                     }
                 } else {
@@ -2531,11 +2610,8 @@ impl BrowserPanel {
                         this.push_devtools_output(line, cx);
                     }
                     if let Some(url) = navigated_url {
-                        if let Some((index, tab)) = this
-                            .tabs
-                            .iter_mut()
-                            .enumerate()
-                            .find(|(_, tab)| {
+                        if let Some((index, tab)) =
+                            this.tabs.iter_mut().enumerate().find(|(_, tab)| {
                                 tab.page.as_ref().is_some_and(|tab_page| {
                                     tab_page.session_id == page_session
                                         || (event_session.is_none()
@@ -2547,7 +2623,7 @@ impl BrowserPanel {
                                 page.url = url.clone();
                             }
                             tab.current_url = url.clone();
-                            tab.title = url;
+                            tab.title.clear();
                             tab.loading = false;
                             if this.active_tab == index {
                                 this.sync_address_bar(window, cx);
@@ -2569,6 +2645,7 @@ impl BrowserPanel {
         &mut self,
         client: CdpClient,
         page: BrowserPage,
+        tab_index: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -2579,10 +2656,30 @@ impl BrowserPanel {
                 // The browser-level target can retain the URL from the first
                 // document while a SPA changes history with pushState. The
                 // document itself is authoritative for the address bar.
-                let url = match client.evaluate(&page, "location.href").await {
-                    Ok(Value::String(url)) if !url.is_empty() => url,
+                let (url, title) = match client
+                    .evaluate(&page, "({ url: location.href, title: document.title })")
+                    .await
+                {
+                    Ok(Value::Object(state)) => {
+                        let Some(url) = state
+                            .get("url")
+                            .and_then(Value::as_str)
+                            .filter(|url| !url.is_empty())
+                        else {
+                            continue;
+                        };
+                        (
+                            url.to_string(),
+                            state
+                                .get("title")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .trim()
+                                .to_string(),
+                        )
+                    }
                     Ok(_) | Err(_) => match client.target_url(&page).await {
-                        Ok(Some(url)) => url,
+                        Ok(Some(url)) => (url, String::new()),
                         Ok(None) => continue,
                         Err(error) => {
                             tracing::debug!("native browser URL sync failed: {error:#}");
@@ -2592,7 +2689,7 @@ impl BrowserPanel {
                 };
 
                 let update = this.update_in(cx, |this, window, cx| {
-                    let Some(tab) = this.tabs.get_mut(this.active_tab) else {
+                    let Some(tab) = this.tabs.get_mut(tab_index) else {
                         return;
                     };
                     let same_page = tab
@@ -2602,39 +2699,46 @@ impl BrowserPanel {
                     if !same_page {
                         return;
                     }
-                    let changed = tab
-                        .page
-                        .as_ref()
-                        .is_none_or(|tab_page| tab_page.url != url);
+                    let changed = tab.page.as_ref().is_none_or(|tab_page| tab_page.url != url)
+                        || (!title.is_empty() && tab.title != title);
                     if !changed {
                         return;
                     }
                     if let Some(page) = tab.page.as_mut() {
                         page.url = url.clone();
                     }
-                    this.native_display_url = Some(url.clone());
                     tab.current_url = url.clone();
-                    tab.title = url.clone();
+                    if !title.is_empty() {
+                        tab.title = title;
+                    } else if tab.title == "Nova aba" {
+                        tab.title.clear();
+                    }
                     tab.status = url;
                     tab.loading = false;
-                    this.sync_address_bar(window, cx);
-                    this.sync_history(this.active_tab, window, cx);
+                    if this.active_tab == tab_index {
+                        this.sync_address_bar(window, cx);
+                        this.sync_history(tab_index, window, cx);
+                    }
                     cx.notify();
                 });
                 if update.is_err() {
                     break;
                 }
             }
-            let _ = this.update(cx, |this, _cx| {
-                this.native_url_task = None;
-            });
+            if let Err(error) = this.update(cx, |this, _cx| {
+                if this.active_tab == tab_index {
+                    this.native_url_task = None;
+                }
+            }) {
+                tracing::debug!("native browser URL sync cleanup failed: {error:#}");
+            }
         }));
     }
 
     fn navigate_history(&mut self, delta: i32, window: &mut Window, cx: &mut Context<Self>) {
         let tab_index = self.active_tab;
         #[cfg(target_os = "windows")]
-        if let Some(webview) = &self.native_webview {
+        if let Some(webview) = self.active_native_webview() {
             let moved = if delta < 0 {
                 webview.go_back()
             } else {
@@ -2701,7 +2805,7 @@ impl BrowserPanel {
     fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let tab_index = self.active_tab;
         #[cfg(target_os = "windows")]
-        if let Some(webview) = &self.native_webview {
+        if let Some(webview) = self.active_native_webview() {
             if let Err(error) = webview.reload() {
                 if let Some(tab) = self.active_tab_mut() {
                     tab.status = format!("Falha ao atualizar: {error:#}");
@@ -2777,7 +2881,7 @@ impl Render for BrowserPanel {
         // Start CDP capture for blank tabs too. An agent can navigate the
         // visible WebView2 before the browser panel has a URL of its own;
         // starting only after a non-blank URL leaves the address bar stale.
-        if self.native_webview.is_some() {
+        if self.active_native_webview().is_some() {
             self.start_native_capture(window, cx);
         }
         let address_bar = self.address_bar.clone();
@@ -2803,7 +2907,7 @@ impl Render for BrowserPanel {
         let new_tab = self.active_url() == "about:blank";
         #[cfg(target_os = "windows")]
         let native_browser_active =
-            self.native_webview.is_some() && self.native_webview_visible;
+            self.active_native_webview().is_some() && self.native_webview_visible;
         #[cfg(not(target_os = "windows"))]
         let native_browser_active = false;
         let tab_labels = self
@@ -2852,16 +2956,19 @@ impl Render for BrowserPanel {
             .size_full()
             .min_w_0()
             .bg(cx.theme().colors().panel_background)
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
-                // Keep native WebView2 above the page only while the browser is
-                // the active surface. When the screenshot fallback is clicked,
-                // restore the interactive WebView2 child before dispatching input.
-                if this.active_url() != "about:blank" {
-                    this.set_native_visibility(true, cx);
-                }
-                window.activate_window();
-                cx.stop_propagation();
-            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    // Keep native WebView2 above the page only while the browser is
+                    // the active surface. When the screenshot fallback is clicked,
+                    // restore the interactive WebView2 child before dispatching input.
+                    if this.active_url() != "about:blank" {
+                        this.set_native_visibility(true, cx);
+                    }
+                    window.activate_window();
+                    cx.stop_propagation();
+                }),
+            )
             .child(
                 h_flex()
                     .w_full()
@@ -2898,22 +3005,24 @@ impl Render for BrowserPanel {
                             this.navigate(window, cx);
                         }
                     }))
-                    .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                        let address_bar_focused =
-                            this.address_bar.as_ref().is_some_and(|address_bar| {
-                                address_bar
-                                    .read(cx)
-                                    .focus_handle(cx)
-                                    .contains_focused(window, cx)
-                            });
-                        if address_bar_focused
-                            && event.keystroke.key.eq_ignore_ascii_case("enter")
-                        {
-                            this.navigate(window, cx);
-                            window.prevent_default();
-                            cx.stop_propagation();
-                        }
-                    }))
+                    .capture_key_down(cx.listener(
+                        |this, event: &gpui::KeyDownEvent, window, cx| {
+                            let address_bar_focused =
+                                this.address_bar.as_ref().is_some_and(|address_bar| {
+                                    address_bar
+                                        .read(cx)
+                                        .focus_handle(cx)
+                                        .contains_focused(window, cx)
+                                });
+                            if address_bar_focused
+                                && event.keystroke.key.eq_ignore_ascii_case("enter")
+                            {
+                                this.navigate(window, cx);
+                                window.prevent_default();
+                                cx.stop_propagation();
+                            }
+                        },
+                    ))
                     .child(
                         IconButton::new("browser-back", IconName::ArrowLeft)
                             .tooltip(Tooltip::text("Voltar"))
@@ -3039,14 +3148,29 @@ impl Render for BrowserPanel {
                                 content_bounds_entity.update(cx, |this, cx| {
                                     #[cfg(target_os = "windows")]
                                     if !this.native_webview_pending
-                                        && (this.native_webview.is_none()
+                                        && (this
+                                            .tabs
+                                            .get(active_tab)
+                                            .and_then(|tab| tab.native_webview.as_ref())
+                                            .is_none()
                                             || this.native_webview_bounds != Some(native_bounds))
                                     {
                                         this.native_webview_pending = true;
                                         cx.defer_in(window, move |this, window, cx| {
-                                            if this.native_webview.is_none() {
-                                                this.ensure_native_webview(bounds, window, cx);
-                                            } else if let Some(webview) = &this.native_webview {
+                                            let has_webview = this
+                                                .tabs
+                                                .get(active_tab)
+                                                .and_then(|tab| tab.native_webview.as_ref())
+                                                .is_some();
+                                            if !has_webview {
+                                                this.ensure_native_webview(
+                                                    active_tab, bounds, window, cx,
+                                                );
+                                            } else if let Some(webview) = this
+                                                .tabs
+                                                .get(active_tab)
+                                                .and_then(|tab| tab.native_webview.as_ref())
+                                            {
                                                 if let Err(error) = webview.set_bounds(
                                                     native_bounds.0,
                                                     native_bounds.1,
@@ -3194,27 +3318,30 @@ impl Render for BrowserPanel {
                             this.child(img(image).size_full())
                         })
                     })
-                    .when(!native_browser_active && (new_tab || image.is_none()), |this| {
-                        this.child(
-                            v_flex()
-                                .size_full()
-                                .items_center()
-                                .justify_center()
-                                .gap_2()
-                                .child(Icon::new(IconName::Public).size(IconSize::XLarge))
-                                .child(Label::new(if new_tab {
-                                    "Nova aba"
-                                } else {
-                                    status.as_ref()
-                                }))
-                                .when(new_tab, |this| {
-                                    this.child(
-                                        Label::new("Digite uma URL ou pesquise no Google")
-                                            .color(Color::Muted),
-                                    )
-                                }),
-                        )
-                    })
+                    .when(
+                        !native_browser_active && (new_tab || image.is_none()),
+                        |this| {
+                            this.child(
+                                v_flex()
+                                    .size_full()
+                                    .items_center()
+                                    .justify_center()
+                                    .gap_2()
+                                    .child(Icon::new(IconName::Public).size(IconSize::XLarge))
+                                    .child(Label::new(if new_tab {
+                                        "Nova aba"
+                                    } else {
+                                        status.as_ref()
+                                    }))
+                                    .when(new_tab, |this| {
+                                        this.child(
+                                            Label::new("Digite uma URL ou pesquise no Google")
+                                                .color(Color::Muted),
+                                        )
+                                    }),
+                            )
+                        },
+                    )
                     .when(native_browser_active, |this| {
                         // The native WebView2 child owns the pixels; keep this layout child so
                         // GPUI continues reporting the live content bounds.
