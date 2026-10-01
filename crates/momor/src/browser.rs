@@ -5,7 +5,7 @@
 //! external browser window or browser shell is launched.
 
 #[cfg(target_os = "windows")]
-use crate::native_webview::NativeWebView;
+use crate::native_webview::{NativeWebView, debugging_port};
 use anyhow::{Context as _, Result, anyhow};
 use async_tungstenite::tungstenite::Message;
 use base64::Engine as _;
@@ -911,6 +911,8 @@ pub struct BrowserPanel {
     native_webview_bounds: Option<(i32, i32, i32, i32)>,
     #[cfg(target_os = "windows")]
     native_webview_visible: bool,
+    #[cfg(target_os = "windows")]
+    native_capture_task: Option<Task<()>>,
     context_menu: Option<(Entity<ContextMenu>, Point<Pixels>, Subscription)>,
     devtools_open: bool,
     devtools_tab: DevtoolsTab,
@@ -964,6 +966,8 @@ impl BrowserPanel {
             native_webview_bounds: None,
             #[cfg(target_os = "windows")]
             native_webview_visible: false,
+            #[cfg(target_os = "windows")]
+            native_capture_task: None,
             context_menu: None,
             devtools_open: false,
             devtools_tab: DevtoolsTab::Console,
@@ -1015,6 +1019,7 @@ impl BrowserPanel {
             return;
         };
         let text = self.active_url();
+        let text = (text != "about:blank").then_some(text).unwrap_or_default();
         address_bar.update(cx, |field, cx| field.set_text(&text, window, cx));
     }
 
@@ -1024,13 +1029,11 @@ impl BrowserPanel {
         self.viewport_size = None;
         self.viewport_auto = true;
         self.last_mouse_move = None;
-        #[cfg(target_os = "windows")]
-        if let Some(webview) = &self.native_webview {
-            if let Err(error) = webview.navigate(&self.active_url()) {
-                tracing::debug!("falha ao preparar nova aba no WebView2: {error:#}");
-            }
-        }
+        self.set_native_visibility(false, cx);
         self.sync_address_bar(window, cx);
+        if let Some(address_bar) = self.address_bar.clone() {
+            window.focus(&address_bar.read(cx).focus_handle(cx), cx);
+        }
         cx.notify();
     }
 
@@ -1038,14 +1041,24 @@ impl BrowserPanel {
         if index >= self.tabs.len() || index == self.active_tab {
             return;
         }
+        let browser_page = self.tabs.iter().find_map(|tab| tab.page.clone());
         self.active_tab = index;
         self.viewport_size = None;
         self.viewport_auto = true;
         self.last_mouse_move = None;
+        if let Some(mut page) = browser_page {
+            page.url = self.active_url();
+            if let Some(tab) = self.active_tab_mut() {
+                tab.page = Some(page);
+            }
+        }
+        self.set_native_visibility(self.active_url() != "about:blank", cx);
         #[cfg(target_os = "windows")]
         if let Some(webview) = &self.native_webview {
-            if let Err(error) = webview.navigate(&self.active_url()) {
-                tracing::debug!("falha ao ativar aba no WebView2: {error:#}");
+            if self.active_url() != "about:blank" {
+                if let Err(error) = webview.navigate(&self.active_url()) {
+                    tracing::debug!("falha ao ativar aba no WebView2: {error:#}");
+                }
             }
         }
         self.sync_address_bar(window, cx);
@@ -1109,7 +1122,6 @@ impl BrowserPanel {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) {
-        let should_open_google = self.active_url() == "about:blank";
         let scale = window.scale_factor();
         let left = (bounds.origin.x.as_f32() * scale).round() as i32;
         let top = (bounds.origin.y.as_f32() * scale).round() as i32;
@@ -1138,11 +1150,7 @@ impl BrowserPanel {
             };
             let weak = _cx.weak_entity();
             let mut app = _cx.to_async();
-            let initial_url = if should_open_google {
-                "https://www.google.com/".to_string()
-            } else {
-                self.active_url()
-            };
+            let initial_url = self.active_url();
             if let Err(error) = NativeWebView::create(
                 parent,
                 &embedded_storage_dir().join("webview2-profile"),
@@ -1156,24 +1164,20 @@ impl BrowserPanel {
                                         "falha ao dimensionar o WebView2 inicial: {error:#}"
                                     );
                                 }
-                                if let Err(error) = webview.set_visible(this.native_webview_visible) {
+                                let visible = this.active_url() != "about:blank";
+                                this.native_webview_visible = visible;
+                                if let Err(error) = webview.set_visible(visible) {
                                     tracing::debug!(
                                         "falha ao aplicar visibilidade inicial do WebView2: {error:#}"
                                     );
                                 }
-                                if let Err(error) = webview.navigate(&initial_url) {
-                                    tracing::debug!("falha ao abrir a página inicial: {error:#}");
+                                if initial_url != "about:blank" {
+                                    if let Err(error) = webview.navigate(&initial_url) {
+                                        tracing::debug!("falha ao abrir a página inicial: {error:#}");
+                                    }
                                 }
                                 this.native_webview = Some(webview);
                                 this.native_webview_bounds = Some(native_bounds);
-                                if should_open_google {
-                                    if let Some(tab) = this.active_tab_mut() {
-                                        tab.current_url = initial_url.clone();
-                                        tab.title = "Google".to_string();
-                                        tab.status = initial_url.clone();
-                                        tab.loading = false;
-                                    }
-                                }
                             }
                             Err(error) => {
                                 if let Some(tab) = this.active_tab_mut() {
@@ -1196,20 +1200,6 @@ impl BrowserPanel {
             return;
         }
 
-        if should_open_google {
-            let url = "https://www.google.com/";
-            if let Some(webview) = &self.native_webview {
-                if let Err(error) = webview.navigate(url) {
-                    tracing::debug!("falha ao abrir a página inicial: {error:#}");
-                } else if let Some(tab) = self.active_tab_mut() {
-                    tab.current_url = url.to_string();
-                    tab.title = "Google".to_string();
-                    tab.status = url.to_string();
-                    tab.loading = false;
-                }
-            }
-        }
-
         if let Some(webview) = &self.native_webview {
             if let Err(error) = webview.set_bounds(left, top, width, height) {
                 tracing::debug!("falha ao redimensionar WebView2: {error:#}");
@@ -1217,6 +1207,77 @@ impl BrowserPanel {
                 self.native_webview_bounds = Some(native_bounds);
             }
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn start_native_capture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.client.is_some() || self.native_capture_task.is_some() {
+            return;
+        }
+
+        let endpoint = format!(
+            "ws://127.0.0.1:{}/devtools/browser",
+            debugging_port()
+        );
+        let task = gpui_tokio::Tokio::spawn_result(cx, async move {
+            let client = CdpClient::connect(&endpoint).await?;
+            let page = client.active_page().await?;
+            let screenshot = client.capture_screenshot(&page).await?;
+            let screencast = client.start_screencast(&page).await.ok();
+            let download_events = client.subscribe();
+            anyhow::Ok((client, page, screenshot, screencast, download_events))
+        });
+
+        self.native_capture_task = Some(cx.spawn_in(window, async move |this, cx| {
+            match task.await {
+                Ok((client, page, screenshot, screencast, download_events)) => {
+                    if let Err(error) = this.update_in(cx, |this, window, cx| {
+                        this.client = Some(client.clone());
+                        let active_url = this.active_url();
+                        if let Some(tab) = this.active_tab_mut() {
+                            let mut page = page.clone();
+                            if active_url != "about:blank" {
+                                page.url = active_url.clone();
+                                tab.status = active_url;
+                                tab.loading = false;
+                            }
+                            tab.page = Some(page.clone());
+                            tab.image = Some(Arc::new(Image::from_bytes(
+                                ImageFormat::Png,
+                                screenshot,
+                            )));
+                        }
+                        if let Some(screencast) = screencast {
+                            this.start_screencast(
+                                client.clone(),
+                                page,
+                                screencast,
+                                window,
+                                cx,
+                            );
+                        }
+                        if this.download_events_task.is_none() {
+                            this.start_download_events(download_events, window, cx);
+                        }
+                        this.native_capture_task = None;
+                        cx.notify();
+                    }) {
+                        tracing::debug!("native browser capture UI update failed: {error:#}");
+                    }
+                }
+                Err(error) => {
+                    if let Err(update_error) = this.update(cx, |this, cx| {
+                        this.native_capture_task = None;
+                        tracing::debug!("native browser capture unavailable: {error:#}");
+                        cx.notify();
+                    }) {
+                        tracing::debug!(
+                            "native browser capture error UI update failed: {update_error:#}"
+                        );
+                    }
+                }
+            }
+        }));
     }
 
     fn browser_coordinates(&self, position: Point<Pixels>) -> Option<(f32, f32)> {
@@ -2077,7 +2138,13 @@ impl BrowserPanel {
                 cx.notify();
                 return;
             }
+            self.set_native_visibility(true, cx);
+            let browser_page = self.tabs.iter().find_map(|tab| tab.page.clone());
             if let Some(tab) = self.active_tab_mut() {
+                tab.page = browser_page.map(|mut page| {
+                    page.url = url.clone();
+                    page
+                });
                 tab.current_url = url.clone();
                 tab.title = url.clone();
                 tab.status = url;
@@ -2245,11 +2312,13 @@ impl BrowserPanel {
                 }
                 last_frame_at = Instant::now();
                 if let Err(error) = this.update(cx, |this, cx| {
-                    if let Some(tab) = this.tabs.iter_mut().find(|tab| {
-                        tab.page
-                            .as_ref()
-                            .is_some_and(|page| page.target_id == task_target_id)
-                    }) {
+                    let active_matches = this
+                        .tabs
+                        .get(this.active_tab)
+                        .and_then(|tab| tab.page.as_ref())
+                        .is_some_and(|page| page.target_id == task_target_id);
+                    if active_matches {
+                        let tab = &mut this.tabs[this.active_tab];
                         tab.image = Some(Arc::new(Image::from_bytes(ImageFormat::Png, bytes)));
                         tab.status = tab
                             .page
@@ -2535,6 +2604,10 @@ impl EventEmitter<()> for BrowserPanel {}
 impl Render for BrowserPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_address_bar(window, cx);
+        #[cfg(target_os = "windows")]
+        if self.native_webview.is_some() && self.active_url() != "about:blank" {
+            self.start_native_capture(window, cx);
+        }
         let address_bar = self.address_bar.clone();
         let (status, image) = self
             .active_tab()
@@ -2555,8 +2628,10 @@ impl Render for BrowserPanel {
         } else {
             IconName::Star
         };
+        let new_tab = self.active_url() == "about:blank";
         #[cfg(target_os = "windows")]
-        let native_browser_active = self.native_webview.is_some();
+        let native_browser_active =
+            self.native_webview.is_some() && self.native_webview_visible;
         #[cfg(not(target_os = "windows"))]
         let native_browser_active = false;
         let tab_labels = self
@@ -2605,6 +2680,16 @@ impl Render for BrowserPanel {
             .size_full()
             .min_w_0()
             .bg(cx.theme().colors().panel_background)
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                // Keep native WebView2 above the page only while the browser is
+                // the active surface. When the screenshot fallback is clicked,
+                // restore the interactive WebView2 child before dispatching input.
+                if this.active_url() != "about:blank" {
+                    this.set_native_visibility(true, cx);
+                }
+                window.activate_window();
+                cx.stop_propagation();
+            }))
             .child(
                 h_flex()
                     .w_full()
@@ -2629,7 +2714,7 @@ impl Render for BrowserPanel {
                     .p_2()
                     .border_b_1()
                     .border_color(cx.theme().colors().border)
-                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                    .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                         let address_bar_focused =
                             this.address_bar.as_ref().is_some_and(|address_bar| {
                                 address_bar
@@ -2919,12 +3004,12 @@ impl Render for BrowserPanel {
                         window.prevent_default();
                         cx.stop_propagation();
                     }))
-                    .when(!native_browser_active, |this| {
+                    .when(!native_browser_active && !new_tab, |this| {
                         this.when_some(image.clone(), |this, image| {
                             this.child(img(image).size_full())
                         })
                     })
-                    .when(!native_browser_active && image.is_none(), |this| {
+                    .when(!native_browser_active && (new_tab || image.is_none()), |this| {
                         this.child(
                             v_flex()
                                 .size_full()
@@ -2932,7 +3017,17 @@ impl Render for BrowserPanel {
                                 .justify_center()
                                 .gap_2()
                                 .child(Icon::new(IconName::Public).size(IconSize::XLarge))
-                                .child(Label::new(status).color(Color::Muted)),
+                                .child(Label::new(if new_tab {
+                                    "Nova aba"
+                                } else {
+                                    status.as_ref()
+                                }))
+                                .when(new_tab, |this| {
+                                    this.child(
+                                        Label::new("Digite uma URL ou pesquise no Google")
+                                            .color(Color::Muted),
+                                    )
+                                }),
                         )
                     })
                     .when(native_browser_active, |this| {

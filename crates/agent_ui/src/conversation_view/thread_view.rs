@@ -4176,28 +4176,67 @@ impl ThreadView {
     }
 
     fn render_usage_limits_control(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(thread) = self.as_native_thread(cx) else {
-            return Empty.into_any_element();
-        };
-        let thread = thread.read(cx);
-        let Some(model) = thread.model() else {
+        let mut context_usage = self.thread.read(cx).token_usage().cloned();
+        let native_model = self.as_native_thread(cx).and_then(|thread| {
+            let thread = thread.read(cx);
+            context_usage = context_usage.clone().or_else(|| thread.latest_token_usage());
+            thread.model().map(|model| {
+                (
+                    model.provider_id().0.to_string(),
+                    model.provider_name().0.to_string(),
+                    model.name().0.to_string(),
+                    crate::humanize_token_count(model.max_token_count()),
+                    model
+                        .max_output_tokens()
+                        .map(crate::humanize_token_count),
+                )
+            })
+        });
+        let acp_model = self
+            .model_selector
+            .as_ref()
+            .and_then(|selector| selector.read(cx).active_model(cx).cloned())
+            .map(|model| {
+                (
+                    self.agent_id.to_string(),
+                    self.agent_id.to_string(),
+                    model.name.to_string(),
+                    context_usage
+                        .as_ref()
+                        .map(|usage| crate::humanize_token_count(usage.max_tokens))
+                        .unwrap_or_else(|| "não informado".to_string()),
+                    context_usage.as_ref().and_then(|usage| {
+                        usage
+                            .max_output_tokens
+                            .map(crate::humanize_token_count)
+                    }),
+                )
+            });
+        let Some((provider_id, provider_name, model_name, context_limit, output_limit)) =
+            native_model.or(acp_model)
+        else {
             return Empty.into_any_element();
         };
 
-        let provider_id = model.provider_id().0.to_string();
-        let provider_name = model.provider_name().0.to_string();
-        let model_name = model.name().0.to_string();
         let usage_windows = usage_windows_for_provider(&provider_id);
-        let context_limit = crate::humanize_token_count(model.max_token_count());
-        let output_limit = model
-            .max_output_tokens()
-            .map(crate::humanize_token_count);
+        let context_usage = context_usage.map(|usage| {
+            (
+                crate::humanize_token_count(usage.used_tokens),
+                crate::humanize_token_count(usage.max_tokens),
+            )
+        });
+        let context_label = context_usage
+            .as_ref()
+            .map(|(used, max)| format!("Contexto {used}/{max}"))
+            .unwrap_or_else(|| format!("Contexto {context_limit}"));
 
         PopoverMenu::new("usage-limits-menu")
             .trigger_with_tooltip(
-                IconButton::new("usage-limits", IconName::Info)
-                    .icon_size(IconSize::Small)
-                    .icon_color(Color::Muted),
+                ButtonLike::new("usage-limits")
+                    .size(ButtonSize::Compact)
+                    .style(ButtonStyle::Transparent)
+                    .child(Icon::new(IconName::Info).size(IconSize::XSmall).color(Color::Muted))
+                    .child(Label::new(context_label).size(LabelSize::Small).color(Color::Muted)),
                 Tooltip::text("Limites de uso"),
             )
             .anchor(gpui::Anchor::BottomLeft)
@@ -4209,6 +4248,16 @@ impl ThreadView {
             .menu(move |window, cx| {
                 Some(ContextMenu::build(window, cx, |mut menu, _window, _cx| {
                     menu = menu.header(format!("{provider_name} · limites"));
+                    if let Some((used, max)) = context_usage.clone() {
+                        menu = menu.item(
+                            ContextMenuEntry::new(format!(
+                                "Contexto usado: {used}/{max} tokens"
+                            ))
+                            .icon(IconName::TodoProgress)
+                            .icon_color(Color::Muted)
+                            .disabled(true),
+                        );
+                    }
                     menu = menu.item(
                         ContextMenuEntry::new(model_name.clone())
                             .icon(IconName::Server)
