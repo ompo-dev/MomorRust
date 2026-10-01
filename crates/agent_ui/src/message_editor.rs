@@ -291,8 +291,9 @@ fn notebook_badge_render(
     custom_icon: String,
     range: std::ops::Range<Anchor>,
     editor: WeakEntity<Editor>,
-) -> std::sync::Arc<dyn Send + Sync + Fn(FoldId, std::ops::Range<Anchor>, &mut App) -> gpui::AnyElement>
-{
+) -> std::sync::Arc<
+    dyn Send + Sync + Fn(FoldId, std::ops::Range<Anchor>, &mut App) -> gpui::AnyElement,
+> {
     std::sync::Arc::new(move |_fold_id, _fold_range, cx| {
         let kind = kind.clone();
         let id = id.clone();
@@ -338,7 +339,16 @@ fn notebook_badge_render(
             .on_click({
                 let kind = kind.clone();
                 let id = id.clone();
-                move |_e, window, cx| notebook::open_item(&kind, id.clone(), window, cx)
+                move |_e, window, cx| {
+                    if kind == "browser" {
+                        window.dispatch_action(
+                            Box::new(momor_actions::OpenBrowser { url: id.clone() }),
+                            cx,
+                        );
+                    } else {
+                        notebook::open_item(&kind, id.clone(), window, cx);
+                    }
+                }
             })
             .child(
                 div()
@@ -2060,6 +2070,28 @@ impl Render for MessageEditor {
                         item.id.clone(),
                         label,
                         icon,
+                        window,
+                        cx,
+                    );
+                },
+            ))
+            .drag_over::<notebook::DraggedBrowserTab>(|el, _, _, cx| {
+                el.bg(cx.theme().colors().drop_target_background)
+            })
+            .on_drop::<notebook::DraggedBrowserTab>(cx.listener(
+                |this, tab: &notebook::DraggedBrowserTab, window, cx| {
+                    let title = if tab.title.trim().is_empty() {
+                        tab.url.clone()
+                    } else {
+                        tab.title.clone()
+                    };
+                    this.pending_context
+                        .push(format!("[Página do navegador: {title}]\n{}", tab.url));
+                    this.insert_notebook_badge(
+                        "browser".to_string(),
+                        tab.url.clone(),
+                        title,
+                        String::new(),
                         window,
                         cx,
                     );

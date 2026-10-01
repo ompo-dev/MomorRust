@@ -1487,6 +1487,31 @@ pub struct DraggedNotebookItem {
     pub label: String,
 }
 
+/// Payload shared by browser surfaces and the chat composer.
+///
+/// Keeping this beside the existing notebook drag payload avoids a dependency
+/// from the generic chat crate back into Momor's browser implementation.
+#[derive(Clone)]
+pub struct DraggedBrowserTab {
+    pub url: String,
+    pub title: String,
+}
+
+impl Render for DraggedBrowserTab {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .px_2()
+            .py_0p5()
+            .rounded_sm()
+            .bg(cx.theme().colors().elevated_surface_background)
+            .border_1()
+            .border_color(cx.theme().colors().border)
+            .gap_1()
+            .child(Icon::new(IconName::Public).size(IconSize::XSmall))
+            .child(Label::new(self.title.clone()).size(LabelSize::Small))
+    }
+}
+
 /// Conteúdo textual de um item, pra injetar como contexto ao soltar no chat.
 /// Emoji do chip do chat pra um item arrastado: usa o ícone custom da nota/reunião (se for
 /// emoji — caminho de imagem não cabe em texto), senão o padrão por tipo.

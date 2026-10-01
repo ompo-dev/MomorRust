@@ -10,8 +10,9 @@ use async_tungstenite::tungstenite::Message;
 use base64::Engine as _;
 use futures::StreamExt;
 use gpui::{
-    App, Bounds, Context, Entity, EventEmitter, FocusHandle, Focusable, Image, ImageFormat,
-    MouseButton, Pixels, Point, Render, SharedString, Subscription, Task, WeakEntity, Window, img,
+    App, Bounds, ClipboardItem, Context, DismissEvent, Entity, EventEmitter, FocusHandle,
+    Focusable, Image, ImageFormat, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point,
+    Render, SharedString, Subscription, Task, WeakEntity, Window, anchored, deferred, img,
     prelude::*,
 };
 use serde::Deserialize;
@@ -29,7 +30,7 @@ use tokio::{
     sync::{broadcast, mpsc, oneshot},
     time::sleep,
 };
-use ui::{IconName, Label, Tooltip, prelude::*};
+use ui::{ContextMenu, ContextMenuEntry, IconName, Label, Tooltip, prelude::*};
 use ui_input::InputField;
 use url::Url;
 use workspace::Workspace;
@@ -172,6 +173,10 @@ impl CdpClient {
             .await?;
         self.send_with_session("Runtime.enable", json!({}), Some(&session_id))
             .await?;
+        self.send_with_session("Network.enable", json!({}), Some(&session_id))
+            .await?;
+        self.send_with_session("DOM.enable", json!({}), Some(&session_id))
+            .await?;
 
         Ok(BrowserPage {
             target_id,
@@ -262,6 +267,44 @@ impl CdpClient {
         Ok(())
     }
 
+    pub async fn navigation_history(
+        &self,
+        page: &BrowserPage,
+    ) -> Result<(usize, Vec<BrowserHistoryEntry>)> {
+        let history = self
+            .send_with_session(
+                "Page.getNavigationHistory",
+                json!({}),
+                Some(&page.session_id),
+            )
+            .await?;
+        let current_index = history
+            .get("currentIndex")
+            .and_then(Value::as_u64)
+            .context("Obscura did not return the current history index")?
+            as usize;
+        let entries = history
+            .get("entries")
+            .and_then(Value::as_array)
+            .context("Obscura did not return navigation history")?
+            .iter()
+            .filter_map(|entry| {
+                Some(BrowserHistoryEntry {
+                    id: entry.get("id")?.as_i64()?,
+                    url: entry.get("url")?.as_str()?.to_string(),
+                    title: entry
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .filter(|title| !title.is_empty())
+                        .or_else(|| entry.get("userTypedURL").and_then(Value::as_str))
+                        .unwrap_or("")
+                        .to_string(),
+                })
+            })
+            .collect();
+        Ok((current_index, entries))
+    }
+
     pub async fn capture_screenshot(&self, page: &BrowserPage) -> Result<Vec<u8>> {
         let response = self
             .send_with_session(
@@ -319,6 +362,8 @@ impl CdpClient {
         x: f32,
         y: f32,
         click_count: usize,
+        button: &str,
+        modifiers: u8,
     ) -> Result<()> {
         self.send_with_session(
             "Input.dispatchMouseEvent",
@@ -326,9 +371,10 @@ impl CdpClient {
                 "type": event_type,
                 "x": x,
                 "y": y,
-                "button": "left",
+                "button": button,
                 "buttons": if event_type == "mousePressed" { 1 } else { 0 },
                 "clickCount": click_count,
+                "modifiers": modifiers,
             }),
             Some(&page.session_id),
         )
@@ -380,6 +426,42 @@ impl CdpClient {
         )
         .await
         .map(|_| ())
+    }
+
+    pub async fn evaluate(&self, page: &BrowserPage, expression: &str) -> Result<Value> {
+        let response = self
+            .send_with_session(
+                "Runtime.evaluate",
+                json!({
+                    "expression": expression,
+                    "returnByValue": true,
+                    "awaitPromise": true,
+                }),
+                Some(&page.session_id),
+            )
+            .await?;
+        Ok(response
+            .get("result")
+            .and_then(|result| result.get("value"))
+            .cloned()
+            .unwrap_or(Value::Null))
+    }
+
+    pub async fn print_to_pdf(&self, page: &BrowserPage) -> Result<Vec<u8>> {
+        let response = self
+            .send_with_session(
+                "Page.printToPDF",
+                json!({ "printBackground": true, "preferCSSPageSize": true }),
+                Some(&page.session_id),
+            )
+            .await?;
+        let data = response
+            .get("data")
+            .and_then(Value::as_str)
+            .context("Obscura did not return PDF data")?;
+        base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .context("Obscura returned invalid PDF data")
     }
 }
 
@@ -468,6 +550,13 @@ pub struct BrowserPage {
     pub url: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct BrowserHistoryEntry {
+    pub id: i64,
+    pub url: String,
+    pub title: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct ObscuraReadyFile {
     host: String,
@@ -505,6 +594,24 @@ fn browser_download_dir() -> Result<PathBuf> {
         )
     })?;
     Ok(path)
+}
+
+fn read_saved_urls(key: &str, cx: &App) -> Vec<String> {
+    let value = match db::kvp::KeyValueStore::global(cx).read_kvp(key) {
+        Ok(Some(value)) => value,
+        Ok(None) => return Vec::new(),
+        Err(error) => {
+            tracing::debug!("reading browser saved URLs failed: {error:#}");
+            return Vec::new();
+        }
+    };
+    match serde_json::from_str(&value) {
+        Ok(urls) => urls,
+        Err(error) => {
+            tracing::debug!("parsing browser saved URLs failed: {error:#}");
+            Vec::new()
+        }
+    }
 }
 
 fn default_endpoint() -> String {
@@ -577,6 +684,9 @@ struct BrowserTab {
     title: String,
     image: Option<Arc<Image>>,
     status: String,
+    history: Vec<BrowserHistoryEntry>,
+    history_index: usize,
+    loading: bool,
 }
 
 impl BrowserTab {
@@ -586,10 +696,16 @@ impl BrowserTab {
             title: "Nova aba".to_string(),
             image: None,
             status: "Digite uma URL para navegar".to_string(),
+            history: Vec::new(),
+            history_index: 0,
+            loading: false,
         }
     }
 
     fn label(&self) -> SharedString {
+        if !self.title.is_empty() && self.title != "Nova aba" && self.title != "about:blank" {
+            return self.title.clone().into();
+        }
         self.page
             .as_ref()
             .map(|page| page.url.clone())
@@ -613,6 +729,31 @@ pub struct BrowserPanel {
     download_status: Option<String>,
     content_bounds: Option<Bounds<Pixels>>,
     viewport_size: Option<(u32, u32)>,
+    viewport_scale: f32,
+    context_menu: Option<(Entity<ContextMenu>, Point<Pixels>, Subscription)>,
+    devtools_open: bool,
+    devtools_tab: DevtoolsTab,
+    devtools_output: Vec<String>,
+    history_open: bool,
+    favorites: Vec<String>,
+    quick_access: Vec<String>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DevtoolsTab {
+    Console,
+    Network,
+    Dom,
+}
+
+impl DevtoolsTab {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Console => "Console",
+            Self::Network => "Rede",
+            Self::Dom => "DOM",
+        }
+    }
 }
 
 impl BrowserPanel {
@@ -631,6 +772,14 @@ impl BrowserPanel {
             download_status: None,
             content_bounds: None,
             viewport_size: None,
+            viewport_scale: 1.0,
+            context_menu: None,
+            devtools_open: false,
+            devtools_tab: DevtoolsTab::Console,
+            devtools_output: Vec::new(),
+            history_open: false,
+            favorites: read_saved_urls("momor_browser_favorites", cx),
+            quick_access: read_saved_urls("momor_browser_quick_access", cx),
         }
     }
 
@@ -650,10 +799,7 @@ impl BrowserPanel {
         let Some(address_bar) = self.address_bar.clone() else {
             return;
         };
-        let text = self
-            .active_page()
-            .map(|page| page.url)
-            .unwrap_or_default();
+        let text = self.active_page().map(|page| page.url).unwrap_or_default();
         address_bar.update(cx, |field, cx| field.set_text(&text, window, cx));
     }
 
@@ -741,21 +887,602 @@ impl BrowserPanel {
         event_type: &'static str,
         position: Point<Pixels>,
         click_count: usize,
+        button: &'static str,
+        modifiers: u8,
         cx: &mut Context<Self>,
     ) {
-        let (Some(client), Some(page), Some((x, y))) =
-            (self.client.clone(), self.active_page(), self.browser_coordinates(position))
-        else {
+        let (Some(client), Some(page), Some((x, y))) = (
+            self.client.clone(),
+            self.active_page(),
+            self.browser_coordinates(position),
+        ) else {
             return;
         };
         gpui_tokio::Tokio::handle(cx).spawn(async move {
             if let Err(error) = client
-                .dispatch_mouse_event(&page, event_type, x, y, click_count)
+                .dispatch_mouse_event(&page, event_type, x, y, click_count, button, modifiers)
                 .await
             {
                 tracing::debug!("browser mouse event failed: {error:#}");
             }
         });
+    }
+
+    fn sync_history(&mut self, tab_index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(client), Some(page)) = (
+            self.client.clone(),
+            self.tabs.get(tab_index).and_then(|tab| tab.page.clone()),
+        ) else {
+            return;
+        };
+        let task =
+            gpui_tokio::Tokio::spawn_result(
+                cx,
+                async move { client.navigation_history(&page).await },
+            );
+        cx.spawn_in(window, async move |this, cx| {
+            if let Ok((history_index, history)) = task.await {
+                if let Err(error) = this.update(cx, |this, cx| {
+                    if let Some(tab) = this.tabs.get_mut(tab_index) {
+                        tab.history_index = history_index;
+                        tab.history = history;
+                        tab.loading = false;
+                    }
+                    cx.notify();
+                }) {
+                    tracing::debug!("browser history state update failed: {error:#}");
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn push_devtools_output(&mut self, line: impl Into<String>, cx: &mut Context<Self>) {
+        self.devtools_output.push(line.into());
+        if self.devtools_output.len() > 120 {
+            let remove_count = self.devtools_output.len() - 120;
+            self.devtools_output.drain(0..remove_count);
+        }
+        cx.notify();
+    }
+
+    fn toggle_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.history_open = !self.history_open;
+        if self.history_open {
+            self.sync_history(self.active_tab, window, cx);
+        }
+        cx.notify();
+    }
+
+    fn save_current_url(&mut self, key: &'static str, cx: &mut Context<Self>) {
+        let Some(url) = self.active_page().map(|page| page.url) else {
+            return;
+        };
+        let urls = if key == "momor_browser_favorites" {
+            &mut self.favorites
+        } else {
+            &mut self.quick_access
+        };
+        if !urls.iter().any(|saved| saved == &url) {
+            urls.push(url.clone());
+        }
+        let value = match serde_json::to_string(urls) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::debug!("serializing browser saved URLs failed: {error:#}");
+                return;
+            }
+        };
+        let store = db::kvp::KeyValueStore::global(cx).clone();
+        db::write_and_log(cx, move || async move {
+            store.write_kvp(key.into(), value).await
+        });
+        if let Some(tab) = self.active_tab_mut() {
+            tab.status = if key == "momor_browser_favorites" {
+                "Adicionado aos favoritos".to_string()
+            } else {
+                "Adicionado à Discagem Rápida".to_string()
+            };
+        }
+        cx.notify();
+    }
+
+    fn navigate_history_entry(
+        &mut self,
+        history_entry: BrowserHistoryEntry,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let tab_index = self.active_tab;
+        let (Some(client), Some(mut page)) = (self.client.clone(), self.active_page()) else {
+            return;
+        };
+        if let Some(tab) = self.active_tab_mut() {
+            tab.loading = true;
+            tab.status = format!("Navegando para {}...", history_entry.url);
+            tab.image = None;
+        }
+        self.navigation_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = async {
+                client
+                    .send_with_session(
+                        "Page.navigateToHistoryEntry",
+                        json!({ "entryId": history_entry.id }),
+                        Some(&page.session_id),
+                    )
+                    .await?;
+                page.url = history_entry.url;
+                let screenshot = client.capture_screenshot(&page).await?;
+                anyhow::Ok((page, screenshot))
+            }
+            .await;
+            if let Err(error) = this.update_in(cx, |this, window, cx| {
+                if let Some(tab) = this.tabs.get_mut(tab_index) {
+                    match result {
+                        Ok((page, screenshot)) => {
+                            tab.page = Some(page.clone());
+                            tab.image =
+                                Some(Arc::new(Image::from_bytes(ImageFormat::Png, screenshot)));
+                            tab.status = page.url.clone();
+                            tab.loading = false;
+                            this.sync_address_bar(window, cx);
+                            this.sync_history(tab_index, window, cx);
+                        }
+                        Err(error) => {
+                            tab.loading = false;
+                            tab.status = format!("Falha no histórico: {error:#}");
+                        }
+                    }
+                }
+                cx.notify();
+            }) {
+                tracing::debug!("browser history entry UI update failed: {error:#}");
+            }
+        }));
+    }
+
+    fn open_context_menu(
+        &mut self,
+        position: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let focus_handle = self.focus_handle.clone();
+        let weak = cx.weak_entity();
+        let can_back = self.active_tab().is_some_and(|tab| tab.history_index > 0);
+        let can_forward = self
+            .active_tab()
+            .is_some_and(|tab| tab.history_index.saturating_add(1) < tab.history.len());
+        let inspection_position = position;
+        let menu = ContextMenu::build(window, cx, move |menu, _, _| {
+            let back = weak.clone();
+            let forward = weak.clone();
+            let reload = weak.clone();
+            let copy = weak.clone();
+            let screenshot = weak.clone();
+            let pdf = weak.clone();
+            let print = weak.clone();
+            let dark = weak.clone();
+            let quick_access = weak.clone();
+            let favorite = weak.clone();
+            let inspect = weak.clone();
+            let source = weak.clone();
+            let devtools = weak.clone();
+            let history = weak.clone();
+            let scale_down = weak.clone();
+            let scale_reset = weak.clone();
+            let scale_up = weak.clone();
+            menu.context(focus_handle)
+                .item(
+                    ContextMenuEntry::new("Voltar")
+                        .icon(IconName::ArrowLeft)
+                        .disabled(!can_back)
+                        .handler(move |_window, cx| {
+                            if let Err(error) = back.update_in(cx, |this, window, cx| {
+                                this.navigate_history(-1, window, cx);
+                            }) {
+                                tracing::debug!("browser context back failed: {error:#}");
+                            }
+                        }),
+                )
+                .item(
+                    ContextMenuEntry::new("Avançar")
+                        .icon(IconName::ArrowRight)
+                        .disabled(!can_forward)
+                        .handler(move |_window, cx| {
+                            if let Err(error) = forward.update_in(cx, |this, window, cx| {
+                                this.navigate_history(1, window, cx);
+                            }) {
+                                tracing::debug!("browser context forward failed: {error:#}");
+                            }
+                        }),
+                )
+                .item(
+                    ContextMenuEntry::new("Recarregar")
+                        .icon(IconName::RotateCw)
+                        .handler(move |_window, cx| {
+                            if let Err(error) = reload.update_in(cx, |this, window, cx| {
+                                this.reload(window, cx);
+                            }) {
+                                tracing::debug!("browser context reload failed: {error:#}");
+                            }
+                        }),
+                )
+                .item(
+                    ContextMenuEntry::new("Histórico")
+                        .icon(IconName::HistoryRerun)
+                        .handler(move |_window, cx| {
+                            if let Err(error) = history.update_in(cx, |this, window, cx| {
+                                this.toggle_history(window, cx);
+                            }) {
+                                tracing::debug!("opening browser history failed: {error:#}");
+                            }
+                        }),
+                )
+                .separator()
+                .item(
+                    ContextMenuEntry::new("Copiar endereço")
+                        .icon(IconName::Copy)
+                        .handler(move |_, cx| {
+                            if let Err(error) = copy.update(cx, |this, cx| {
+                                if let Some(url) = this.active_page().map(|page| page.url) {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(url));
+                                }
+                            }) {
+                                tracing::debug!("copying browser address failed: {error:#}");
+                            }
+                        }),
+                )
+                .item(
+                    ContextMenuEntry::new("Adicionar à Discagem Rápida")
+                        .icon(IconName::Plus)
+                        .handler(move |_, cx| {
+                            if let Err(error) = quick_access.update(cx, |this, cx| {
+                                this.save_current_url("momor_browser_quick_access", cx);
+                            }) {
+                                tracing::debug!("saving browser quick access failed: {error:#}");
+                            }
+                        }),
+                )
+                .item(
+                    ContextMenuEntry::new("Adicionar aos favoritos")
+                        .icon(IconName::Star)
+                        .handler(move |_, cx| {
+                            if let Err(error) = favorite.update(cx, |this, cx| {
+                                this.save_current_url("momor_browser_favorites", cx);
+                            }) {
+                                tracing::debug!("saving browser favorite failed: {error:#}");
+                            }
+                        }),
+                )
+                .item(
+                    ContextMenuEntry::new("Salvar captura PNG")
+                        .icon(IconName::Download)
+                        .handler(move |_, cx| {
+                            if let Err(error) = screenshot.update(cx, |this, cx| {
+                                this.save_screenshot(cx);
+                            }) {
+                                tracing::debug!("saving browser screenshot failed: {error:#}");
+                            }
+                        }),
+                )
+                .item(
+                    ContextMenuEntry::new("Salvar como PDF")
+                        .icon(IconName::FileDoc)
+                        .handler(move |_, cx| {
+                            if let Err(error) = pdf.update(cx, |this, cx| {
+                                this.save_pdf(cx);
+                            }) {
+                                tracing::debug!("saving browser PDF failed: {error:#}");
+                            }
+                        }),
+                )
+                .item(
+                    ContextMenuEntry::new("Imprimir...")
+                        .icon(IconName::FileDoc)
+                        .handler(move |_, cx| {
+                            if let Err(error) = print.update(cx, |this, cx| {
+                                this.save_pdf(cx);
+                            }) {
+                                tracing::debug!("printing browser page failed: {error:#}");
+                            }
+                        }),
+                )
+                .item(
+                    ContextMenuEntry::new("Transmitir...")
+                        .icon(IconName::Screen)
+                        .disabled(true),
+                )
+                .item(
+                    ContextMenuEntry::new("Forçar página escura")
+                        .icon(IconName::Eye)
+                        .handler(move |_, cx| {
+                            if let Err(error) = dark.update(cx, |this, cx| {
+                                this.toggle_dark_page(cx);
+                            }) {
+                                tracing::debug!("toggling dark page failed: {error:#}");
+                            }
+                        }),
+                )
+                .separator()
+                .item(
+                    ContextMenuEntry::new("Diminuir viewport")
+                        .icon(IconName::Minimize)
+                        .handler(move |_window, cx| {
+                            if let Err(error) = scale_down.update_in(cx, |this, window, cx| {
+                                this.set_viewport_scale(-0.1, window, cx);
+                            }) {
+                                tracing::debug!("decreasing browser viewport failed: {error:#}");
+                            }
+                        }),
+                )
+                .item(
+                    ContextMenuEntry::new("Viewport 100%")
+                        .icon(IconName::Maximize)
+                        .handler(move |_window, cx| {
+                            if let Err(error) = scale_reset.update_in(cx, |this, window, cx| {
+                                this.set_viewport_scale(1.0, window, cx);
+                            }) {
+                                tracing::debug!("resetting browser viewport failed: {error:#}");
+                            }
+                        }),
+                )
+                .item(
+                    ContextMenuEntry::new("Aumentar viewport")
+                        .icon(IconName::MaximizeAlt)
+                        .handler(move |_window, cx| {
+                            if let Err(error) = scale_up.update_in(cx, |this, window, cx| {
+                                this.set_viewport_scale(0.1, window, cx);
+                            }) {
+                                tracing::debug!("increasing browser viewport failed: {error:#}");
+                            }
+                        }),
+                )
+                .separator()
+                .item(
+                    ContextMenuEntry::new("Ver código-fonte")
+                        .icon(IconName::Code)
+                        .handler(move |_, cx| {
+                            if let Err(error) = source.update(cx, |this, cx| {
+                                this.open_devtools_tab(DevtoolsTab::Dom, cx);
+                                this.refresh_dom(cx);
+                            }) {
+                                tracing::debug!("opening browser source failed: {error:#}");
+                            }
+                        }),
+                )
+                .item(
+                    ContextMenuEntry::new("Inspecionar elemento")
+                        .icon(IconName::Crosshair)
+                        .handler(move |_, cx| {
+                            if let Err(error) = inspect.update(cx, |this, cx| {
+                                this.open_devtools_tab(DevtoolsTab::Dom, cx);
+                                this.inspect_element(inspection_position, cx);
+                            }) {
+                                tracing::debug!("inspecting browser element failed: {error:#}");
+                            }
+                        }),
+                )
+                .item(
+                    ContextMenuEntry::new("Ferramentas do desenvolvedor")
+                        .icon(IconName::Debug)
+                        .handler(move |_, cx| {
+                            if let Err(error) = devtools.update(cx, |this, cx| {
+                                this.devtools_open = true;
+                                this.push_devtools_output(
+                                    "DevTools conectado ao alvo Obscura atual.",
+                                    cx,
+                                );
+                            }) {
+                                tracing::debug!("opening browser devtools failed: {error:#}");
+                            }
+                        }),
+                )
+        });
+        window.focus(&menu.focus_handle(cx), cx);
+        let subscription =
+            cx.subscribe_in(&menu, window, |this, _, _: &DismissEvent, window, cx| {
+                if this
+                    .context_menu
+                    .as_ref()
+                    .is_some_and(|(menu, _, _)| menu.focus_handle(cx).contains_focused(window, cx))
+                {
+                    cx.focus_self(window);
+                }
+                this.context_menu.take();
+                cx.notify();
+            });
+        self.context_menu = Some((menu, position, subscription));
+    }
+
+    fn save_screenshot(&mut self, cx: &mut Context<Self>) {
+        let (Some(client), Some(page)) = (self.client.clone(), self.active_page()) else {
+            return;
+        };
+        let tab_index = self.active_tab;
+        let task = gpui_tokio::Tokio::spawn_result(cx, async move {
+            let bytes = client.capture_screenshot(&page).await?;
+            let path =
+                browser_download_dir()?.join(format!("momor-page-{}.png", uuid::Uuid::new_v4()));
+            tokio::fs::write(&path, bytes)
+                .await
+                .with_context(|| format!("failed to save screenshot to {}", path.display()))?;
+            anyhow::Ok(path)
+        });
+        cx.spawn(async move |this, cx| match task.await {
+            Ok(path) => {
+                if let Err(error) = this.update(cx, |this, cx| {
+                    if let Some(tab) = this.tabs.get_mut(tab_index) {
+                        tab.status = format!("Captura salva em {}", path.display());
+                    }
+                    cx.notify();
+                }) {
+                    tracing::debug!("browser screenshot status update failed: {error:#}");
+                }
+            }
+            Err(error) => {
+                tracing::debug!("browser screenshot task failed: {error:#}");
+            }
+        })
+        .detach();
+    }
+
+    fn save_pdf(&mut self, cx: &mut Context<Self>) {
+        let (Some(client), Some(page)) = (self.client.clone(), self.active_page()) else {
+            return;
+        };
+        let tab_index = self.active_tab;
+        let task = gpui_tokio::Tokio::spawn_result(cx, async move {
+            let bytes = client.print_to_pdf(&page).await?;
+            let path =
+                browser_download_dir()?.join(format!("momor-page-{}.pdf", uuid::Uuid::new_v4()));
+            tokio::fs::write(&path, bytes)
+                .await
+                .with_context(|| format!("failed to save PDF to {}", path.display()))?;
+            anyhow::Ok(path)
+        });
+        cx.spawn(async move |this, cx| match task.await {
+            Ok(path) => {
+                if let Err(error) = this.update(cx, |this, cx| {
+                    if let Some(tab) = this.tabs.get_mut(tab_index) {
+                        tab.status = format!("PDF salvo em {}", path.display());
+                    }
+                    cx.notify();
+                }) {
+                    tracing::debug!("browser PDF status update failed: {error:#}");
+                }
+            }
+            Err(error) => tracing::debug!("browser PDF task failed: {error:#}"),
+        })
+        .detach();
+    }
+
+    fn toggle_dark_page(&mut self, cx: &mut Context<Self>) {
+        let (Some(client), Some(page)) = (self.client.clone(), self.active_page()) else {
+            return;
+        };
+        let tab_index = self.active_tab;
+        let task = gpui_tokio::Tokio::spawn_result(cx, async move {
+            client
+                .evaluate(
+                    &page,
+                    r#"(() => { const id = '__momor_dark_mode'; const old = document.getElementById(id); if (old) { old.remove(); return 'off'; } const style = document.createElement('style'); style.id = id; style.textContent = 'html { filter: invert(0.92) hue-rotate(180deg) !important; background: #111 !important; } img, video, canvas, iframe { filter: invert(1) hue-rotate(180deg) !important; }'; document.documentElement.appendChild(style); return 'on'; })()"#,
+                )
+                .await
+        });
+        cx.spawn(async move |this, cx| match task.await {
+            Ok(value) => {
+                if let Err(error) = this.update(cx, |this, cx| {
+                    if let Some(tab) = this.tabs.get_mut(tab_index) {
+                        tab.status = format!("Modo escuro: {}", value.as_str().unwrap_or("ok"));
+                    }
+                    cx.notify();
+                }) {
+                    tracing::debug!("dark page status update failed: {error:#}");
+                }
+            }
+            Err(error) => tracing::debug!("dark page task failed: {error:#}"),
+        })
+        .detach();
+    }
+
+    fn set_viewport_scale(&mut self, change: f32, window: &mut Window, cx: &mut Context<Self>) {
+        self.viewport_scale = if (change - 1.0).abs() < f32::EPSILON {
+            1.0
+        } else {
+            (self.viewport_scale + change).clamp(0.5, 2.0)
+        };
+        let Some(bounds) = self.content_bounds else {
+            return;
+        };
+        let tab_index = self.active_tab;
+        let (Some(client), Some(page)) = (self.client.clone(), self.active_page()) else {
+            return;
+        };
+        let width = (f32::from(bounds.size.width) / self.viewport_scale)
+            .round()
+            .max(1.0) as u32;
+        let height = (f32::from(bounds.size.height) / self.viewport_scale)
+            .round()
+            .max(1.0) as u32;
+        self.viewport_size = Some((width, height));
+        let task = gpui_tokio::Tokio::spawn_result(cx, async move {
+            client.set_viewport(&page, width, height).await
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            if let Err(error) = task.await {
+                tracing::debug!("browser viewport task failed: {error:#}");
+            }
+            if let Err(error) = this.update(cx, |this, cx| {
+                if let Some(tab) = this.tabs.get_mut(tab_index) {
+                    tab.status = format!("Viewport {}%", (this.viewport_scale * 100.0).round());
+                }
+                cx.notify();
+            }) {
+                tracing::debug!("browser viewport status update failed: {error:#}");
+            }
+        })
+        .detach();
+    }
+
+    fn open_devtools_tab(&mut self, tab: DevtoolsTab, cx: &mut Context<Self>) {
+        self.devtools_open = true;
+        self.devtools_tab = tab;
+        cx.notify();
+    }
+
+    fn refresh_dom(&mut self, cx: &mut Context<Self>) {
+        let (Some(client), Some(page)) = (self.client.clone(), self.active_page()) else {
+            return;
+        };
+        let task = gpui_tokio::Tokio::spawn_result(cx, async move {
+            client
+                .evaluate(
+                    &page,
+                    "document.documentElement ? document.documentElement.outerHTML : ''",
+                )
+                .await
+        });
+        cx.spawn(async move |this, cx| match task.await {
+            Ok(value) => {
+                if let Err(error) = this.update(cx, |this, cx| {
+                    this.push_devtools_output(value.as_str().unwrap_or("<empty>"), cx);
+                }) {
+                    tracing::debug!("DOM DevTools update failed: {error:#}");
+                }
+            }
+            Err(error) => tracing::debug!("DOM DevTools request failed: {error:#}"),
+        })
+        .detach();
+    }
+
+    fn inspect_element(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some((x, y)) = self.browser_coordinates(position) else {
+            self.push_devtools_output("Ponto fora da página.", cx);
+            return;
+        };
+        let (Some(client), Some(page)) = (self.client.clone(), self.active_page()) else {
+            return;
+        };
+        let expression = format!(
+            "(() => {{ const el = document.elementFromPoint({x}, {y}); if (!el) return {{ error: 'Nenhum elemento' }}; return {{ tag: el.tagName, id: el.id || '', classes: el.className || '', text: (el.innerText || el.textContent || '').slice(0, 500), html: el.outerHTML.slice(0, 2000) }}; }})()"
+        );
+        let task = gpui_tokio::Tokio::spawn_result(cx, async move {
+            client.evaluate(&page, &expression).await
+        });
+        cx.spawn(async move |this, cx| match task.await {
+            Ok(value) => {
+                let output =
+                    serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string());
+                if let Err(error) = this.update(cx, |this, cx| {
+                    this.push_devtools_output(output, cx);
+                }) {
+                    tracing::debug!("element inspection update failed: {error:#}");
+                }
+            }
+            Err(error) => tracing::debug!("element inspection failed: {error:#}"),
+        })
+        .detach();
     }
 
     fn dispatch_mouse_wheel(
@@ -765,9 +1492,11 @@ impl BrowserPanel {
         delta_y: f32,
         cx: &mut Context<Self>,
     ) {
-        let (Some(client), Some(page), Some((x, y))) =
-            (self.client.clone(), self.active_page(), self.browser_coordinates(position))
-        else {
+        let (Some(client), Some(page), Some((x, y))) = (
+            self.client.clone(),
+            self.active_page(),
+            self.browser_coordinates(position),
+        ) else {
             return;
         };
         gpui_tokio::Tokio::handle(cx).spawn(async move {
@@ -837,6 +1566,7 @@ impl BrowserPanel {
                 format!("Conectando ao Obscura em {endpoint}...")
             };
             tab.image = None;
+            tab.loading = true;
         }
         let task = gpui_tokio::Tokio::spawn_result(cx, async move {
             let client = match existing_client {
@@ -864,7 +1594,13 @@ impl BrowserPanel {
             }
             let screenshot = client.capture_screenshot(&page).await?;
             let screencast = if should_start_screencast {
-                client.start_screencast(&page).await.ok()
+                match client.start_screencast(&page).await {
+                    Ok(events) => Some(events),
+                    Err(error) => {
+                        tracing::debug!("failed to start browser screencast: {error:#}");
+                        None
+                    }
+                }
             } else {
                 None
             };
@@ -890,9 +1626,11 @@ impl BrowserPanel {
                             navigation.screenshot,
                         )));
                         tab.status = page.url.clone();
+                        tab.loading = false;
                     }
                     if this.active_tab == tab_index {
                         this.sync_address_bar(window, cx);
+                        this.sync_history(tab_index, window, cx);
                     }
                     if let Some(events) = navigation.screencast {
                         this.start_screencast(client, page, events, window, cx);
@@ -953,15 +1691,11 @@ impl BrowserPanel {
                     tracing::debug!("browser screencast acknowledgement failed: {error:#}");
                 }
                 if let Err(error) = this.update(cx, |this, cx| {
-                    if let Some(tab) = this
-                        .tabs
-                        .iter_mut()
-                        .find(|tab| {
-                            tab.page
-                                .as_ref()
-                                .is_some_and(|page| page.target_id == task_target_id)
-                        })
-                    {
+                    if let Some(tab) = this.tabs.iter_mut().find(|tab| {
+                        tab.page
+                            .as_ref()
+                            .is_some_and(|page| page.target_id == task_target_id)
+                    }) {
                         tab.image = Some(Arc::new(Image::from_bytes(ImageFormat::Png, bytes)));
                         tab.status = tab
                             .page
@@ -1013,11 +1747,89 @@ impl BrowserPanel {
                     }
                     _ => None,
                 };
-                let Some(status) = status else {
-                    continue;
+                let devtools_line = match event.method.as_str() {
+                    "Runtime.consoleAPICalled" => {
+                        let level = event
+                            .params
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("log");
+                        let text = event
+                            .params
+                            .get("args")
+                            .and_then(Value::as_array)
+                            .map(|args| {
+                                args.iter()
+                                    .filter_map(|arg| {
+                                        arg.get("value").and_then(Value::as_str).or_else(|| {
+                                            arg.get("description").and_then(Value::as_str)
+                                        })
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(" ")
+                            })
+                            .unwrap_or_default();
+                        Some(format!("[{level}] {text}"))
+                    }
+                    "Network.requestWillBeSent" => event
+                        .params
+                        .get("request")
+                        .and_then(|request| request.get("url"))
+                        .and_then(Value::as_str)
+                        .map(|url| format!("-> {url}")),
+                    "Page.frameNavigated" => event
+                        .params
+                        .get("frame")
+                        .and_then(|frame| frame.get("url"))
+                        .and_then(Value::as_str)
+                        .map(|url| format!("Navegou para {url}")),
+                    _ => None,
                 };
-                if let Err(error) = this.update(cx, |this, cx| {
-                    this.download_status = Some(status);
+                if status.is_none() && devtools_line.is_none() {
+                    continue;
+                }
+                let is_main_frame = event
+                    .params
+                    .get("frame")
+                    .and_then(|frame| frame.get("parentId"))
+                    .is_none();
+                let navigated_url = (event.method == "Page.frameNavigated" && is_main_frame)
+                    .then(|| {
+                        event
+                            .params
+                            .get("frame")
+                            .and_then(|frame| frame.get("url"))
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    })
+                    .flatten();
+                let event_session = event.session_id.clone();
+                if let Err(error) = this.update_in(cx, |this, window, cx| {
+                    if let Some(status) = status {
+                        this.download_status = Some(status);
+                    }
+                    if let Some(line) = devtools_line {
+                        this.push_devtools_output(line, cx);
+                    }
+                    if let Some(url) = navigated_url {
+                        if let Some((index, tab)) =
+                            this.tabs.iter_mut().enumerate().find(|(_, tab)| {
+                                tab.page.as_ref().is_some_and(|page| {
+                                    Some(&page.session_id) == event_session.as_ref()
+                                })
+                            })
+                        {
+                            if let Some(page) = tab.page.as_mut() {
+                                page.url = url.clone();
+                            }
+                            tab.title = url;
+                            tab.loading = false;
+                            if this.active_tab == index {
+                                this.sync_address_bar(window, cx);
+                                this.sync_history(index, window, cx);
+                            }
+                        }
+                    }
                     cx.notify();
                 }) {
                     tracing::debug!("browser download UI update failed: {error:#}");
@@ -1039,6 +1851,7 @@ impl BrowserPanel {
                 "Avançando...".to_string()
             };
             tab.image = None;
+            tab.loading = true;
         }
         self.navigation_task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = async {
@@ -1052,13 +1865,13 @@ impl BrowserPanel {
                     match result {
                         Ok((page, screenshot)) => {
                             tab.page = Some(page.clone());
-                            tab.image = Some(Arc::new(Image::from_bytes(
-                                ImageFormat::Png,
-                                screenshot,
-                            )));
+                            tab.image =
+                                Some(Arc::new(Image::from_bytes(ImageFormat::Png, screenshot)));
                             tab.status = page.url.clone();
+                            tab.loading = false;
                             if this.active_tab == tab_index {
                                 this.sync_address_bar(window, cx);
+                                this.sync_history(tab_index, window, cx);
                             }
                         }
                         Err(error) => tab.status = format!("Falha no histórico: {error:#}"),
@@ -1080,6 +1893,7 @@ impl BrowserPanel {
         if let Some(tab) = self.active_tab_mut() {
             tab.status = "Atualizando...".to_string();
             tab.image = None;
+            tab.loading = true;
         }
         self.navigation_task = Some(cx.spawn_in(window, async move |this, cx| {
             let result = async {
@@ -1094,13 +1908,13 @@ impl BrowserPanel {
                     match result {
                         Ok((page, screenshot)) => {
                             tab.page = Some(page.clone());
-                            tab.image = Some(Arc::new(Image::from_bytes(
-                                ImageFormat::Png,
-                                screenshot,
-                            )));
+                            tab.image =
+                                Some(Arc::new(Image::from_bytes(ImageFormat::Png, screenshot)));
                             tab.status = page.url.clone();
+                            tab.loading = false;
                             if this.active_tab == tab_index {
                                 this.sync_address_bar(window, cx);
+                                this.sync_history(tab_index, window, cx);
                             }
                         }
                         Err(error) => tab.status = format!("Falha ao atualizar: {error:#}"),
@@ -1133,6 +1947,14 @@ impl Render for BrowserPanel {
         let download_status = self.download_status.clone().map(SharedString::from);
         let content_bounds_entity = cx.weak_entity();
         let active_tab = self.active_tab;
+        let devtools_open = self.devtools_open;
+        let devtools_tab = self.devtools_tab;
+        let devtools_output = self.devtools_output.clone();
+        let history_open = self.history_open;
+        let history_entries = self
+            .active_tab()
+            .map(|tab| (tab.history.clone(), tab.history_index))
+            .unwrap_or_default();
         let tab_labels = self
             .tabs
             .iter()
@@ -1140,6 +1962,14 @@ impl Render for BrowserPanel {
             .map(|(index, tab)| {
                 let label = tab.label();
                 let active = index == active_tab;
+                let drag = notebook::DraggedBrowserTab {
+                    url: tab
+                        .page
+                        .as_ref()
+                        .map(|page| page.url.clone())
+                        .unwrap_or_default(),
+                    title: tab.title.clone(),
+                };
                 h_flex()
                     .id(("browser-tab", index))
                     .gap_1()
@@ -1154,6 +1984,7 @@ impl Render for BrowserPanel {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.activate_tab(index, window, cx);
                     }))
+                    .on_drag(drag, |tab, _, _, cx| cx.new(|_| tab.clone()))
                     .child(Label::new(label))
                     .child(
                         IconButton::new(("browser-close-tab", index), IconName::Close)
@@ -1213,6 +2044,13 @@ impl Render for BrowserPanel {
                             .tooltip(Tooltip::text("Atualizar"))
                             .on_click(cx.listener(|this, _, window, cx| this.reload(window, cx))),
                     )
+                    .child(
+                        IconButton::new("browser-history", IconName::HistoryRerun)
+                            .tooltip(Tooltip::text("Histórico"))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.toggle_history(window, cx);
+                            })),
+                    )
                     .when_some(address_bar, |this, address_bar| {
                         this.child(div().flex_1().min_w_0().child(address_bar))
                     })
@@ -1228,8 +2066,79 @@ impl Render for BrowserPanel {
                         IconButton::new("browser-go", IconName::ArrowRight)
                             .tooltip(Tooltip::text("Navegar"))
                             .on_click(cx.listener(|this, _, window, cx| this.navigate(window, cx))),
+                    )
+                    .child(
+                        IconButton::new("browser-devtools", IconName::Debug)
+                            .tooltip(Tooltip::text("Ferramentas do desenvolvedor"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.devtools_open = !this.devtools_open;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        IconButton::new("browser-viewport-down", IconName::Minimize)
+                            .tooltip(Tooltip::text("Reduzir viewport"))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.set_viewport_scale(-0.1, window, cx);
+                            })),
+                    )
+                    .child(
+                        IconButton::new("browser-viewport-up", IconName::MaximizeAlt)
+                            .tooltip(Tooltip::text("Aumentar viewport"))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.set_viewport_scale(0.1, window, cx);
+                            })),
                     ),
             )
+            .when(history_open, |this| {
+                let (entries, history_index) = history_entries.clone();
+                let rows = entries.into_iter().enumerate().map(|(index, entry)| {
+                    let selected = index == history_index;
+                    let selected_entry = entry.clone();
+                    h_flex()
+                        .id(("browser-history-entry", index))
+                        .w_full()
+                        .gap_1()
+                        .px_2()
+                        .py_1()
+                        .when(selected, |row| {
+                            row.bg(cx.theme().colors().element_background)
+                        })
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.navigate_history_entry(selected_entry.clone(), window, cx);
+                        }))
+                        .child(
+                            Icon::new(if selected {
+                                IconName::ArrowRight
+                            } else {
+                                IconName::HistoryRerun
+                            })
+                            .size(IconSize::XSmall)
+                            .color(Color::Muted),
+                        )
+                        .child(
+                            v_flex()
+                                .min_w_0()
+                                .child(Label::new(entry.title).size(LabelSize::Small))
+                                .child(
+                                    Label::new(entry.url)
+                                        .size(LabelSize::XSmall)
+                                        .color(Color::Muted),
+                                ),
+                        )
+                });
+                this.child(
+                    v_flex()
+                        .id("browser-history-panel")
+                        .max_h(px(180.))
+                        .w_full()
+                        .flex_none()
+                        .overflow_y_scroll()
+                        .border_b_1()
+                        .border_color(cx.theme().colors().border)
+                        .children(rows),
+                )
+            })
             .child(
                 div()
                     .flex_1()
@@ -1252,6 +2161,8 @@ impl Render for BrowserPanel {
                                 "mousePressed",
                                 event.position,
                                 event.click_count,
+                                "left",
+                                cdp_modifiers(&event.modifiers),
                                 cx,
                             );
                             cx.focus_self(window);
@@ -1264,10 +2175,29 @@ impl Render for BrowserPanel {
                                 "mouseReleased",
                                 event.position,
                                 event.click_count,
+                                "left",
+                                cdp_modifiers(&event.modifiers),
                                 cx,
                             );
                         }),
                     )
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                            this.open_context_menu(event.position, window, cx);
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                        this.dispatch_mouse(
+                            "mouseMoved",
+                            event.position,
+                            0,
+                            "none",
+                            cdp_modifiers(&event.modifiers),
+                            cx,
+                        );
+                    }))
                     .on_scroll_wheel(cx.listener(
                         |this, event: &gpui::ScrollWheelEvent, _window, cx| {
                             let delta = event.delta.pixel_delta(px(16.0));
@@ -1282,8 +2212,8 @@ impl Render for BrowserPanel {
                     ))
                     .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                         let key = event.keystroke.key.to_ascii_lowercase();
-                        let command = event.keystroke.modifiers.control
-                            || event.keystroke.modifiers.platform;
+                        let command =
+                            event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
                         if command && key == "l" {
                             if let Some(address_bar) = this.address_bar.clone() {
                                 window.focus(&address_bar.read(cx).focus_handle(cx), cx);
@@ -1336,6 +2266,64 @@ impl Render for BrowserPanel {
                         )
                     }),
             )
+            .when(devtools_open, |_| {
+                let tabs = [DevtoolsTab::Console, DevtoolsTab::Network, DevtoolsTab::Dom]
+                    .into_iter()
+                    .map(|tab| {
+                        let active = tab == devtools_tab;
+                        h_flex()
+                            .id(SharedString::from(format!(
+                                "browser-devtools-{}",
+                                tab.label()
+                            )))
+                            .px_2()
+                            .py_1()
+                            .border_b_1()
+                            .border_color(if active {
+                                cx.theme().colors().text
+                            } else {
+                                cx.theme().colors().border
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.open_devtools_tab(tab, cx);
+                            }))
+                            .child(Label::new(tab.label()))
+                    })
+                    .collect::<Vec<_>>();
+                let output = devtools_output.into_iter().map(|line| {
+                    Label::new(line)
+                        .size(LabelSize::Small)
+                        .color(Color::Muted)
+                        .into_any_element()
+                });
+                v_flex()
+                    .h(px(220.))
+                    .w_full()
+                    .flex_none()
+                    .border_t_1()
+                    .border_color(cx.theme().colors().border)
+                    .bg(cx.theme().colors().editor_background)
+                    .child(h_flex().gap_1().px_2().children(tabs))
+                    .child(
+                        v_flex()
+                            .id("browser-devtools-output")
+                            .flex_1()
+                            .overflow_y_scroll()
+                            .px_2()
+                            .py_1()
+                            .gap_0p5()
+                            .children(output),
+                    )
+            })
+            .children(self.context_menu.as_ref().map(|(menu, position, _)| {
+                deferred(
+                    anchored()
+                        .position(*position)
+                        .anchor(gpui::Anchor::TopLeft)
+                        .child(menu.clone()),
+                )
+                .with_priority(1)
+            }))
     }
 }
 
