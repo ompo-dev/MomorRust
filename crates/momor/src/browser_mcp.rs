@@ -58,7 +58,7 @@ async fn run_server() -> Result<()> {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "momor-browser", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": "Momor browser tools control the visible browser page. Use browser_accessibility or browser_dom for normal navigation and refresh refs after navigation. These tools do not capture images. Use browser_screenshot only when visual inspection is genuinely necessary.",
+                "instructions": "Momor browser tools control the visible browser page. Use browser_accessibility or browser_dom for normal navigation and refresh refs after navigation. These tools do not capture images. Use browser_screenshot only when visual inspection is genuinely necessary. Never use BrowserOS, BrowserOS Neo, browseros-neo, or any external browser; this MCP is the only browser for Momor.",
             }),
             "tools/list" => json!({"tools": tool_definitions()}),
             "tools/call" => match call_tool(&mut client, request.get("params")).await {

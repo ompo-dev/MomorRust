@@ -269,6 +269,24 @@ impl CdpClient {
             .map(|_| ())
     }
 
+    async fn target_url(&self, page: &BrowserPage) -> Result<Option<String>> {
+        if page.target_id.is_empty() {
+            return Ok(None);
+        }
+        let response = self
+            .send(
+                "Target.getTargetInfo",
+                json!({ "targetId": page.target_id }),
+            )
+            .await?;
+        Ok(response
+            .get("targetInfo")
+            .and_then(|target| target.get("url"))
+            .and_then(Value::as_str)
+            .filter(|url| !url.is_empty())
+            .map(str::to_owned))
+    }
+
     fn page_session<'a>(&self, page: &'a BrowserPage) -> Option<&'a str> {
         (!page.session_id.is_empty()).then_some(page.session_id.as_str())
     }
@@ -2521,11 +2539,18 @@ impl BrowserPanel {
         self.native_url_task = Some(cx.spawn_in(window, async move |this, cx| {
             loop {
                 sleep(Duration::from_millis(250)).await;
-                let url = match client.evaluate(&page, "location.href").await {
-                    Ok(Value::String(url)) if !url.is_empty() => url,
-                    Ok(_) => continue,
+                let url = match client.target_url(&page).await {
+                    Ok(Some(url)) => url,
+                    Ok(None) => match client.evaluate(&page, "location.href").await {
+                        Ok(Value::String(url)) if !url.is_empty() => url,
+                        Ok(_) => continue,
+                        Err(error) => {
+                            tracing::debug!("native browser URL sync failed: {error:#}");
+                            continue;
+                        }
+                    },
                     Err(error) => {
-                        tracing::debug!("native browser URL sync failed: {error:#}");
+                        tracing::debug!("native browser target URL sync failed: {error:#}");
                         continue;
                     }
                 };

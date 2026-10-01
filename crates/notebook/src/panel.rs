@@ -2035,6 +2035,9 @@ fn load_user_skills() -> Vec<(String, String)> {
                 continue;
             }
             let dir_name = e.file_name().to_string_lossy().to_string();
+            if dir_name.eq_ignore_ascii_case("browseros-neo") {
+                continue;
+            }
             if !seen.insert(dir_name.clone()) {
                 continue; // já visto (skills/ tem prioridade sobre .agents/skills)
             }

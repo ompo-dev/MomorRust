@@ -8696,13 +8696,11 @@ impl Render for Workspace {
                         .min_h(px(0.))
                         .w_full()
                         .overflow_hidden()
-                        .on_mouse_down(MouseButton::Left, |_, window, cx| {
-                            // GPUI popovers cannot paint above a native WebView2 child.
-                            // Let the browser fall back to its live screencast while
-                            // another Momor surface, such as the chat, is active.
-                            update_browser_visibility(false, cx);
-                            // A native WebView2 child can retain OS keyboard focus
-                            // after the user returns to the GPUI chat area.
+                        .on_mouse_down(MouseButton::Left, |_, window, _cx| {
+                            // Keep the browser child alive while the user works in
+                            // notes or chat. It is constrained to its own column, so
+                            // hiding it here only exposes a stale fallback surface.
+                            // The editor explicitly takes keyboard focus on click.
                             window.activate_window();
                         })
                         .when_some(notebook, |this, panel| {

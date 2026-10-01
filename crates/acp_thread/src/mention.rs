@@ -750,8 +750,8 @@ mod tests {
     fn test_parse_notebook_uri() {
         let uri = MentionUri::Notebook {
             kind: "skill".to_string(),
-            id: "browseros-neo/tools".to_string(),
-            name: "browseros-neo".to_string(),
+            id: "project-tools/tools".to_string(),
+            name: "project-tools".to_string(),
         };
         let serialized = uri.to_uri().to_string();
         let parsed = MentionUri::parse(&serialized, PathStyle::local()).unwrap();
