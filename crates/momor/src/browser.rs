@@ -913,6 +913,8 @@ pub struct BrowserPanel {
     native_webview_visible: bool,
     #[cfg(target_os = "windows")]
     native_capture_task: Option<Task<()>>,
+    #[cfg(target_os = "windows")]
+    native_url_task: Option<Task<()>>,
     context_menu: Option<(Entity<ContextMenu>, Point<Pixels>, Subscription)>,
     devtools_open: bool,
     devtools_tab: DevtoolsTab,
@@ -968,6 +970,8 @@ impl BrowserPanel {
             native_webview_visible: false,
             #[cfg(target_os = "windows")]
             native_capture_task: None,
+            #[cfg(target_os = "windows")]
+            native_url_task: None,
             context_menu: None,
             devtools_open: false,
             devtools_tab: DevtoolsTab::Console,
@@ -1101,6 +1105,9 @@ impl BrowserPanel {
                 .label_min_width(px(0.))
                 .start_icon(IconName::Public)
         });
+        if self.active_url() == "about:blank" {
+            window.focus(&field.read(cx).focus_handle(cx), cx);
+        }
         let editor = field.read(cx).editor().clone();
         let weak = cx.weak_entity();
         self._address_subscription = Some(editor.subscribe(
@@ -1250,14 +1257,17 @@ impl BrowserPanel {
                         if let Some(screencast) = screencast {
                             this.start_screencast(
                                 client.clone(),
-                                page,
+                                page.clone(),
                                 screencast,
                                 window,
                                 cx,
                             );
                         }
                         if this.download_events_task.is_none() {
-                            this.start_download_events(download_events, window, cx);
+                            this.start_download_events(download_events, page.clone(), window, cx);
+                        }
+                        if this.native_url_task.is_none() {
+                            this.start_native_url_sync(client, page, window, cx);
                         }
                         this.native_capture_task = None;
                         cx.notify();
@@ -2249,10 +2259,15 @@ impl BrowserPanel {
                         this.sync_history(tab_index, window, cx);
                     }
                     if let Some(events) = navigation.screencast {
-                        this.start_screencast(client, page, events, window, cx);
+                        this.start_screencast(client, page.clone(), events, window, cx);
                     }
                     if this.download_events_task.is_none() {
-                        this.start_download_events(navigation.events, window, cx);
+                        this.start_download_events(
+                            navigation.events,
+                            page,
+                            window,
+                            cx,
+                        );
                     }
                     cx.notify();
                 }) {
@@ -2339,9 +2354,11 @@ impl BrowserPanel {
     fn start_download_events(
         &mut self,
         mut events: broadcast::Receiver<CdpEvent>,
+        page: BrowserPage,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let page_session = page.session_id;
         self.download_events_task = Some(cx.spawn_in(window, async move |this, cx| {
             loop {
                 let event = match events.recv().await {
@@ -2400,10 +2417,11 @@ impl BrowserPanel {
                         .and_then(|request| request.get("url"))
                         .and_then(Value::as_str)
                         .map(|url| format!("-> {url}")),
-                    "Page.frameNavigated" => event
+                    "Page.frameNavigated" | "Page.navigatedWithinDocument" => event
                         .params
                         .get("frame")
                         .and_then(|frame| frame.get("url"))
+                        .or_else(|| event.params.get("url"))
                         .and_then(Value::as_str)
                         .map(|url| format!("Navegou para {url}")),
                     _ => None,
@@ -2411,21 +2429,44 @@ impl BrowserPanel {
                 if status.is_none() && devtools_line.is_none() {
                     continue;
                 }
+                let event_belongs_to_page = event
+                    .session_id
+                    .as_deref()
+                    .is_none_or(|session| session == page_session);
                 let is_main_frame = event
                     .params
                     .get("frame")
                     .and_then(|frame| frame.get("parentId"))
                     .is_none();
-                let navigated_url = (event.method == "Page.frameNavigated" && is_main_frame)
-                    .then(|| {
-                        event
+                let navigated_url = if event_belongs_to_page {
+                    match event.method.as_str() {
+                        "Page.frameNavigated" if is_main_frame => event
                             .params
                             .get("frame")
                             .and_then(|frame| frame.get("url"))
                             .and_then(Value::as_str)
-                            .map(str::to_owned)
-                    })
-                    .flatten();
+                            .map(str::to_owned),
+                        "Page.navigatedWithinDocument" => event
+                            .params
+                            .get("url")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                        "Network.requestWillBeSent"
+                            if event
+                                .params
+                                .get("type")
+                                .and_then(Value::as_str)
+                                == Some("Document") => event
+                            .params
+                            .get("request")
+                            .and_then(|request| request.get("url"))
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
                 let event_session = event.session_id.clone();
                 if let Err(error) = this.update_in(cx, |this, window, cx| {
                     if let Some(status) = status {
@@ -2435,16 +2476,22 @@ impl BrowserPanel {
                         this.push_devtools_output(line, cx);
                     }
                     if let Some(url) = navigated_url {
-                        if let Some((index, tab)) =
-                            this.tabs.iter_mut().enumerate().find(|(_, tab)| {
-                                tab.page.as_ref().is_some_and(|page| {
-                                    Some(&page.session_id) == event_session.as_ref()
+                        if let Some((index, tab)) = this
+                            .tabs
+                            .iter_mut()
+                            .enumerate()
+                            .find(|(_, tab)| {
+                                tab.page.as_ref().is_some_and(|tab_page| {
+                                    tab_page.session_id == page_session
+                                        || (event_session.is_none()
+                                            && tab_page.target_id == page.target_id)
                                 })
                             })
                         {
                             if let Some(page) = tab.page.as_mut() {
                                 page.url = url.clone();
                             }
+                            tab.current_url = url.clone();
                             tab.title = url;
                             tab.loading = false;
                             if this.active_tab == index {
@@ -2459,6 +2506,66 @@ impl BrowserPanel {
                     break;
                 }
             }
+        }));
+    }
+
+    #[cfg(target_os = "windows")]
+    fn start_native_url_sync(
+        &mut self,
+        client: CdpClient,
+        page: BrowserPage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let target_id = page.target_id.clone();
+        self.native_url_task = Some(cx.spawn_in(window, async move |this, cx| {
+            loop {
+                sleep(Duration::from_millis(250)).await;
+                let url = match client.evaluate(&page, "location.href").await {
+                    Ok(Value::String(url)) if !url.is_empty() => url,
+                    Ok(_) => continue,
+                    Err(error) => {
+                        tracing::debug!("native browser URL sync failed: {error:#}");
+                        continue;
+                    }
+                };
+
+                let update = this.update_in(cx, |this, window, cx| {
+                    let Some(tab) = this.tabs.get_mut(this.active_tab) else {
+                        return;
+                    };
+                    let same_page = tab
+                        .page
+                        .as_ref()
+                        .is_some_and(|tab_page| tab_page.target_id == target_id);
+                    if !same_page {
+                        return;
+                    }
+                    let changed = tab
+                        .page
+                        .as_ref()
+                        .is_none_or(|tab_page| tab_page.url != url);
+                    if !changed {
+                        return;
+                    }
+                    if let Some(page) = tab.page.as_mut() {
+                        page.url = url.clone();
+                    }
+                    tab.current_url = url.clone();
+                    tab.title = url.clone();
+                    tab.status = url;
+                    tab.loading = false;
+                    this.sync_address_bar(window, cx);
+                    this.sync_history(this.active_tab, window, cx);
+                    cx.notify();
+                });
+                if update.is_err() {
+                    break;
+                }
+            }
+            let _ = this.update(cx, |this, _cx| {
+                this.native_url_task = None;
+            });
         }));
     }
 
@@ -2714,6 +2821,18 @@ impl Render for BrowserPanel {
                     .p_2()
                     .border_b_1()
                     .border_color(cx.theme().colors().border)
+                    .on_action(cx.listener(|this, _: &menu::Confirm, window, cx| {
+                        let address_bar_focused =
+                            this.address_bar.as_ref().is_some_and(|address_bar| {
+                                address_bar
+                                    .read(cx)
+                                    .focus_handle(cx)
+                                    .contains_focused(window, cx)
+                            });
+                        if address_bar_focused {
+                            this.navigate(window, cx);
+                        }
+                    }))
                     .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                         let address_bar_focused =
                             this.address_bar.as_ref().is_some_and(|address_bar| {
@@ -2722,7 +2841,8 @@ impl Render for BrowserPanel {
                                     .focus_handle(cx)
                                     .contains_focused(window, cx)
                             });
-                        if address_bar_focused && event.keystroke.key.eq_ignore_ascii_case("enter")
+                        if address_bar_focused
+                            && event.keystroke.key.eq_ignore_ascii_case("enter")
                         {
                             this.navigate(window, cx);
                             window.prevent_default();

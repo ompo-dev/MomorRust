@@ -28,8 +28,8 @@ use editor::{
 use futures::{FutureExt as _, future::join_all};
 use gpui::{
     AppContext, ClipboardEntry, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, ImageFormat, KeyContext, SharedString, Subscription, Task, TaskExt, TextStyle,
-    WeakEntity,
+    Focusable, ImageFormat, KeyContext, MouseButton, SharedString, Subscription, Task, TaskExt,
+    TextStyle, WeakEntity,
 };
 use language::{Buffer, language_settings::InlayHintKind};
 use parking_lot::RwLock;
@@ -2087,6 +2087,12 @@ impl Render for MessageEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .key_context("MessageEditor")
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                // WebView2 is a native child window. Explicitly restoring the
+                // editor focus prevents it from keeping keyboard ownership after
+                // the user returns to the chat.
+                this.focus_handle(cx).focus(window, cx);
+            }))
             .on_action(cx.listener(Self::chat))
             .on_action(cx.listener(Self::send_immediately))
             .on_action(cx.listener(Self::chat_with_follow))
