@@ -16,7 +16,7 @@ use windows_062::{
         Foundation::{E_POINTER, HWND, RECT},
         System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx},
     },
-    core::{BOOL, PCWSTR},
+    core::{BOOL, Interface, PCWSTR},
 };
 
 pub struct NativeWebView {
@@ -80,6 +80,17 @@ impl NativeWebView {
         let webview =
             unsafe { controller.CoreWebView2() }.context("WebView2 não retornou a página")?;
         unsafe {
+            let controller2: ICoreWebView2Controller2 = controller
+                .cast()
+                .context("WebView2 não expôs o controlador visual")?;
+            controller2
+                .SetDefaultBackgroundColor(COREWEBVIEW2_COLOR {
+                    A: 255,
+                    R: 255,
+                    G: 255,
+                    B: 255,
+                })
+                .context("não foi possível definir o fundo do WebView2")?;
             webview
                 .Settings()?
                 .SetAreDevToolsEnabled(true)

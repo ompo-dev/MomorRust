@@ -1000,6 +1000,7 @@ impl BrowserPanel {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) {
+        let should_open_google = self.active_url() == "about:blank";
         if self.native_webview.is_none() {
             let parent = match window.window_handle() {
                 Ok(handle) => match handle.as_raw() {
@@ -1027,6 +1028,20 @@ impl BrowserPanel {
                         tab.status = format!("WebView2 indisponível: {error:#}");
                     }
                     return;
+                }
+            }
+        }
+
+        if should_open_google {
+            let url = "https://www.google.com/";
+            if let Some(webview) = &self.native_webview {
+                if let Err(error) = webview.navigate(url) {
+                    tracing::debug!("falha ao abrir a página inicial: {error:#}");
+                } else if let Some(tab) = self.active_tab_mut() {
+                    tab.current_url = url.to_string();
+                    tab.title = "Google".to_string();
+                    tab.status = url.to_string();
+                    tab.loading = false;
                 }
             }
         }
