@@ -2,7 +2,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use gpui::{
     Anchor, AnyElement, AnyView, App, Bounds, DismissEvent, DispatchPhase, Element, ElementId,
-    Entity, Focusable as _, GlobalElementId, HitboxBehavior, HitboxId, InteractiveElement,
+    Entity, Focusable as _, Global, GlobalElementId, HitboxBehavior, HitboxId, InteractiveElement,
     IntoElement, LayoutId, Length, ManagedView, MouseDownEvent, ParentElement, Pixels, Point,
     Style, Window, anchored, deferred, div, point, prelude::FluentBuilder, px, size,
 };
@@ -39,6 +39,30 @@ where
 }
 
 pub struct PopoverMenuHandle<M>(Rc<RefCell<Option<PopoverMenuHandleState<M>>>>);
+
+/// Tracks GPUI popovers so native child surfaces can yield their pixels while a
+/// menu is open. A native WebView2 child is composited above GPUI's paint tree,
+/// so without this small bit of coordination a popover could be clipped by it.
+#[derive(Default)]
+pub struct OpenPopoverMenus {
+    count: usize,
+}
+
+impl Global for OpenPopoverMenus {}
+
+pub fn popover_menus_open(cx: &App) -> bool {
+    cx.try_global::<OpenPopoverMenus>()
+        .is_some_and(|state| state.count > 0)
+}
+
+pub fn begin_popover(cx: &mut App) {
+    cx.default_global::<OpenPopoverMenus>().count += 1;
+}
+
+pub fn end_popover(cx: &mut App) {
+    let state = cx.global_mut::<OpenPopoverMenus>();
+    state.count = state.count.saturating_sub(1);
+}
 
 impl<M> Clone for PopoverMenuHandle<M> {
     fn clone(&self) -> Self {
@@ -292,6 +316,7 @@ fn show_menu<M: ManagedView>(
                 window.focus(previous_focus_handle, cx);
             }
             *menu2.borrow_mut() = None;
+            end_popover(cx);
             window.refresh();
         })
         .detach();
@@ -309,6 +334,7 @@ fn show_menu<M: ManagedView>(
         });
     });
     *menu.borrow_mut() = Some(new_menu);
+    begin_popover(cx);
     window.refresh();
 
     if let Some(on_open) = on_open {

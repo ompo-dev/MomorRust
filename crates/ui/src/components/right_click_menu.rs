@@ -1,5 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
+use super::popover_menu::{begin_popover, end_popover};
+
 use gpui::{
     Anchor, AnyElement, App, Bounds, DismissEvent, DispatchPhase, Element, ElementId, Entity,
     Focusable as _, GlobalElementId, Hitbox, HitboxBehavior, InteractiveElement, IntoElement,
@@ -256,6 +258,7 @@ impl<M: ManagedView> Element for RightClickMenu<M> {
                                     window.focus(previous_focus_handle, cx);
                                 }
                                 *menu2.borrow_mut() = None;
+                                end_popover(cx);
                                 window.refresh();
                             })
                             .detach();
@@ -273,6 +276,7 @@ impl<M: ManagedView> Element for RightClickMenu<M> {
                             });
                         });
                         *menu.borrow_mut() = Some(new_menu);
+                        begin_popover(cx);
                         *position.borrow_mut() = if let Some(child_bounds) = child_bounds {
                             if let Some(attach) = attach {
                                 child_bounds.corner(attach)

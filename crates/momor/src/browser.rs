@@ -968,6 +968,8 @@ pub struct BrowserPanel {
     #[cfg(target_os = "windows")]
     native_webview_visible: bool,
     #[cfg(target_os = "windows")]
+    native_webview_hidden_for_popover: bool,
+    #[cfg(target_os = "windows")]
     #[cfg(target_os = "windows")]
     native_capture_task: Option<Task<()>>,
     #[cfg(target_os = "windows")]
@@ -1025,6 +1027,8 @@ impl BrowserPanel {
             #[cfg(target_os = "windows")]
             native_webview_visible: false,
             #[cfg(target_os = "windows")]
+            native_webview_hidden_for_popover: false,
+            #[cfg(target_os = "windows")]
             #[cfg(target_os = "windows")]
             native_capture_task: None,
             #[cfg(target_os = "windows")]
@@ -1074,7 +1078,9 @@ impl BrowserPanel {
             let active_visible = visible && self.active_url() != "about:blank";
             self.native_webview_visible = active_visible;
             for (index, tab) in self.tabs.iter().enumerate() {
-                let should_be_visible = active_visible && index == self.active_tab;
+                let should_be_visible = active_visible
+                    && !self.native_webview_hidden_for_popover
+                    && index == self.active_tab;
                 let Some(webview) = tab.native_webview.as_ref() else {
                     continue;
                 };
@@ -1091,6 +1097,27 @@ impl BrowserPanel {
              */
         }
         cx.notify();
+    }
+
+    #[cfg(target_os = "windows")]
+    fn sync_native_visibility_for_popovers(&mut self, cx: &mut Context<Self>) {
+        let hidden = ui::popover_menus_open(cx);
+        if self.native_webview_hidden_for_popover == hidden {
+            return;
+        }
+
+        self.native_webview_hidden_for_popover = hidden;
+        let should_be_visible = self.native_webview_visible && !hidden;
+        for (index, tab) in self.tabs.iter().enumerate() {
+            if let Some(webview) = tab.native_webview.as_ref()
+                && let Err(error) =
+                    webview.set_visible(should_be_visible && index == self.active_tab)
+            {
+                tracing::debug!(
+                    "falha ao alternar WebView2 para exibir um menu do Momor: {error:#}"
+                );
+            }
+        }
     }
 
     fn sync_address_bar(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1296,9 +1323,12 @@ impl BrowserPanel {
                                         "falha ao dimensionar o WebView2 inicial: {error:#}"
                                     );
                                 }
-                                let visible = this.active_tab == tab_index
+                                let overlay_open = ui::popover_menus_open(cx);
+                                this.native_webview_hidden_for_popover = overlay_open;
+                                let browser_active = this.active_tab == tab_index
                                     && initial_url != "about:blank";
-                                this.native_webview_visible = visible;
+                                this.native_webview_visible = browser_active;
+                                let visible = browser_active && !overlay_open;
                                 if let Err(error) = webview.set_visible(visible) {
                                     tracing::debug!(
                                         "falha ao aplicar visibilidade inicial do WebView2: {error:#}"
@@ -1687,6 +1717,9 @@ impl BrowserPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.context_menu.is_some() {
+            ui::end_popover(cx);
+        }
         let focus_handle = self.focus_handle.clone();
         let weak = cx.weak_entity();
         let can_back = self.active_tab().is_some_and(|tab| tab.history_index > 0);
@@ -1932,8 +1965,10 @@ impl BrowserPanel {
                     cx.focus_self(window);
                 }
                 this.context_menu.take();
+                ui::end_popover(cx);
                 cx.notify();
             });
+        ui::begin_popover(cx);
         self.context_menu = Some((menu, position, subscription));
     }
 
@@ -2878,6 +2913,8 @@ impl Render for BrowserPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_address_bar(window, cx);
         #[cfg(target_os = "windows")]
+        self.sync_native_visibility_for_popovers(cx);
+        #[cfg(target_os = "windows")]
         // Start CDP capture for blank tabs too. An agent can navigate the
         // visible WebView2 before the browser panel has a URL of its own;
         // starting only after a non-blank URL leaves the address bar stale.
@@ -2906,8 +2943,9 @@ impl Render for BrowserPanel {
         };
         let new_tab = self.active_url() == "about:blank";
         #[cfg(target_os = "windows")]
-        let native_browser_active =
-            self.active_native_webview().is_some() && self.native_webview_visible;
+        let native_browser_active = self.active_native_webview().is_some()
+            && self.native_webview_visible
+            && !self.native_webview_hidden_for_popover;
         #[cfg(not(target_os = "windows"))]
         let native_browser_active = false;
         let tab_labels = self
