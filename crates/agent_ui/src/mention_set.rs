@@ -49,6 +49,7 @@ pub enum Mention {
         tracked_buffers: Vec<Entity<Buffer>>,
     },
     Image(MentionImage),
+    Pdf(Arc<crate::document_context::PdfContext>),
     Link,
 }
 
@@ -335,6 +336,19 @@ impl MentionSet {
         let Some(project) = self.project.upgrade() else {
             return Task::ready(Err(anyhow!("project not found")));
         };
+
+        if crate::document_context::is_pdf_path(&abs_path) {
+            let fs = project.read(cx).fs().clone();
+            return cx.background_spawn(async move {
+                let bytes = fs
+                    .load_bytes(&abs_path)
+                    .await
+                    .with_context(|| format!("Nao foi possivel abrir {}", abs_path.display()))?;
+                let document = crate::document_context::extract_pdf_context(&bytes)?;
+                document.ensure_image_support(supports_images)?;
+                Ok(Mention::Pdf(Arc::new(document)))
+            });
+        }
 
         let Some(project_path) = project
             .read(cx)
@@ -1018,13 +1032,14 @@ pub(crate) fn crease_for_mention(
 
     let render_trailer = move |_row, _unfold, _window: &mut Window, _cx: &mut App| Empty.into_any();
 
-    Crease::inline(range, placeholder, fold_toggle("mention"), render_trailer)
-        .with_metadata(CreaseMetadata {
+    Crease::inline(range, placeholder, fold_toggle("mention"), render_trailer).with_metadata(
+        CreaseMetadata {
             icon_path,
             label,
             kind: None,
             uri: None,
-        })
+        },
+    )
 }
 
 fn render_fold_icon_button(

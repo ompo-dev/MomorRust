@@ -1,0 +1,24 @@
+[package]
+name = "momor-session-tests"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[lib]
+path = "tests.rs"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+pdf-extract = "0.12.1"
+agent-client-protocol = { version = "=0.11.1", features = ["unstable"] }
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png"] }
+log = "0.4"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61", features = ["Data_Pdf", "Storage_Streams", "Graphics_Imaging", "UI", "Win32_System_WinRT"] }

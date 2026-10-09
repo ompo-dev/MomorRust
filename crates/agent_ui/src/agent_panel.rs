@@ -36,8 +36,7 @@ use crate::thread_metadata_store::{ThreadId, ThreadMetadataStore, ThreadMetadata
 use crate::{
     AddContextServer, AgentDiffPane, ConversationView, CopyThreadToClipboard, Follow,
     InlineAssistant, LoadThreadFromClipboard, NewThread, OpenActiveThreadAsMarkdown, OpenAgentDiff,
-    ShowAllSidebarThreadMetadata, ShowThreadMetadata,
-    ToggleNewThreadMenu, ToggleOptionsMenu,
+    ShowAllSidebarThreadMetadata, ShowThreadMetadata, ToggleNewThreadMenu, ToggleOptionsMenu,
     agent_configuration::{AgentConfiguration, AssistantConfigurationEvent},
     conversation_view::{AcpThreadViewEvent, ThreadView},
 };
@@ -154,6 +153,8 @@ fn read_legacy_serialized_panel(kvp: &KeyValueStore) -> Option<SerializedAgentPa
 
 #[derive(Serialize, Deserialize, Debug)]
 struct SerializedAgentPanel {
+    #[serde(default)]
+    version: u32,
     selected_agent: Option<Agent>,
     #[serde(default)]
     last_active_thread: Option<SerializedActiveThread>,
@@ -754,17 +755,21 @@ impl AgentPanel {
                     .to_vec(),
             )
         });
+        let previous = self.pending_serialization.take();
         self.pending_serialization = Some(cx.background_spawn(async move {
+            if let Some(previous) = previous {
+                previous.await.log_err();
+            }
             let panel = SerializedAgentPanel {
+                version: 1,
                 selected_agent: Some(selected_agent),
                 last_active_thread,
                 draft_thread_prompt,
             };
             // Chave GLOBAL (independente de workspace): o restore a lê no fallback legado,
             // então a conversa volta mesmo sem workspace_id.
-            if let Ok(json) = serde_json::to_string(&panel) {
-                kvp.write_kvp(AGENT_PANEL_KEY.to_string(), json).await.log_err();
-            }
+            kvp.write_kvp(AGENT_PANEL_KEY.to_string(), serde_json::to_string(&panel)?)
+                .await?;
             if let Some(workspace_id) = workspace_id {
                 save_serialized_panel(workspace_id, panel, kvp).await?;
             }
@@ -803,6 +808,13 @@ impl AgentPanel {
                 })
                 .await;
 
+            let metadata_ready = cx.update(|_, cx| {
+                ThreadMetadataStore::global(cx).read(cx).reload_task()
+            })?;
+            if let Some(metadata_ready) = metadata_ready {
+                metadata_ready.await;
+            }
+
             let was_draft_active = serialized_panel
                 .as_ref()
                 .and_then(|p| p.last_active_thread.as_ref())
@@ -818,10 +830,20 @@ impl AgentPanel {
                         let is_restorable = cx
                             .update(|_window, cx| {
                                 let store = ThreadMetadataStore::global(cx);
-                                store
-                                    .read(cx)
-                                    .entry_by_session(&session_id)
-                                    .is_some_and(|entry| !entry.archived)
+                                store.update(cx, |store, cx| {
+                                    let Some(mut entry) = store.entry_by_session(&session_id).cloned() else {
+                                        return false;
+                                    };
+                                    // Older chat-only builds archived every conversation without a folder.
+                                    // Recover only the saved active session, not intentionally archived history.
+                                    if entry.archived && entry.folder_paths().is_empty()
+                                        && serialized_panel.as_ref().is_some_and(|panel| panel.version == 0)
+                                    {
+                                        entry.archived = false;
+                                        store.save(entry.clone(), cx);
+                                    }
+                                    !entry.archived
+                                })
                             })
                             .unwrap_or(false);
                         if is_restorable {
@@ -941,6 +963,21 @@ impl AgentPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        cx.on_release(|this, cx| {
+            if let Some(task) = this.pending_serialization.take() {
+                task.detach_and_log_err(cx);
+            }
+        })
+        .detach();
+        cx.on_app_quit(|this, _cx| {
+            let task = this.pending_serialization.take();
+            async move {
+                if let Some(task) = task {
+                    task.await.log_err();
+                }
+            }
+        })
+        .detach();
         let fs = workspace.app_state().fs.clone();
         let user_store = workspace.app_state().user_store.clone();
         let project = workspace.project();
@@ -2527,7 +2564,8 @@ impl Panel for AgentPanel {
     }
 
     fn icon(&self, _window: &Window, cx: &App) -> Option<IconName> {
-        (self.enabled(cx) && AgentSettings::get_global(cx).button).then_some(IconName::MomorAssistant)
+        (self.enabled(cx) && AgentSettings::get_global(cx).button)
+            .then_some(IconName::MomorAssistant)
     }
 
     fn icon_tooltip(&self, _window: &Window, _cx: &App) -> Option<&'static str> {
@@ -3886,6 +3924,68 @@ mod tests {
                 panel.active_conversation_view().is_none(),
                 "workspace B should have no active thread when it had no prior conversation"
             );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_chat_only_active_session_survives_panel_reload(cx: &mut TestAppContext) {
+        init_test(cx);
+        cx.update(|cx| {
+            agent::ThreadStore::init_global(cx);
+            language_model::LanguageModelRegistry::test(cx);
+        });
+        let project = Project::test(FakeFs::new(cx.executor()), [], cx).await;
+        let multi_workspace = cx.add_window(|window, cx| {
+            MultiWorkspace::test_new(project.clone(), window, cx)
+        });
+        let workspace = multi_workspace
+            .read_with(cx, |workspace, _| workspace.workspace().clone())
+            .expect("test workspace");
+        let cx = &mut VisualTestContext::from_window(multi_workspace.into(), cx);
+        let panel = workspace.update_in(cx, |workspace, window, cx| {
+            cx.new(|cx| AgentPanel::new(workspace, None, window, cx))
+        });
+        let connection = crate::test_support::set_stub_agent_connection(
+            StubAgentConnection::new().with_supports_load_session(true),
+        );
+        connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
+            acp::ContentChunk::new("Response".into()),
+        )]);
+        panel.update_in(cx, |panel, window, cx| {
+            panel.selected_agent = Agent::Stub;
+            panel.activate_draft(true, "agent_panel", window, cx);
+        });
+        cx.run_until_parked();
+        send_message(&panel, cx);
+        cx.run_until_parked();
+        let session_id = active_session_id(&panel, cx);
+        cx.update(|_, cx| {
+            let store = ThreadMetadataStore::global(cx);
+            let entry = store
+                .read(cx)
+                .entry_by_session(&session_id)
+                .expect("chat metadata must exist");
+            assert!(entry.folder_paths().is_empty());
+            assert!(
+                !entry.archived,
+                "a chat does not need a folder to remain restorable"
+            );
+        });
+        panel.update(cx, |panel, cx| {
+            panel.serialize(cx);
+            panel.serialize(cx);
+        });
+        cx.run_until_parked();
+        let async_cx = cx.update(|window, cx| window.to_async(cx));
+        let loaded = AgentPanel::load(workspace.downgrade(), async_cx)
+            .await
+            .expect("restore chat-only panel");
+        cx.run_until_parked();
+        loaded.read_with(cx, |panel, cx| {
+            let view = panel
+                .active_conversation_view()
+                .expect("restored conversation");
+            assert_eq!(view.read(cx).root_session_id.as_ref(), Some(&session_id));
         });
     }
 

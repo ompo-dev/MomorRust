@@ -32,6 +32,7 @@ use gpui::{
     TextStyle, WeakEntity,
 };
 use language::{Buffer, language_settings::InlayHintKind};
+use momor_actions::agent::{Chat, PasteRaw};
 use parking_lot::RwLock;
 use project::AgentId;
 use project::{
@@ -46,7 +47,6 @@ use ui::{ContextMenu, prelude::*};
 use util::paths::PathStyle;
 use util::{ResultExt, debug_panic};
 use workspace::{CollaboratorId, Workspace};
-use momor_actions::agent::{Chat, PasteRaw};
 
 /// Skills do usuário (~/.claude/skills) como comandos `/` — universais, independem do
 /// provedor. `requires_argument: true` faz o menu inserir `/nome ` SEM auto-enviar, pra
@@ -920,6 +920,7 @@ impl MessageEditor {
         let editor = self.editor.clone();
         let supports_embedded_context =
             self.session_capabilities.read().supports_embedded_context();
+        let supports_images = self.session_capabilities.read().supports_images();
 
         cx.spawn(async move |_, cx| {
             let contents = contents.await?;
@@ -982,6 +983,16 @@ impl MessageEditor {
                                         }
                                     }),
                                 ),
+                                Mention::Pdf(document) => {
+                                    chunks.extend(document.content_blocks(
+                                        &uri.name(),
+                                        &uri.to_uri().to_string(),
+                                        supports_embedded_context,
+                                        supports_images,
+                                    )?);
+                                    ix = crease_range.end.0;
+                                    continue;
+                                }
                                 Mention::Link => acp::ContentBlock::ResourceLink(
                                     acp::ResourceLink::new(uri.name(), uri.to_uri().to_string()),
                                 ),
@@ -1019,7 +1030,8 @@ impl MessageEditor {
                             chunks.push(last_chunk.into());
                         }
                     }
-                });
+                    anyhow::Ok(())
+                })?;
                 anyhow::Ok((chunks, all_tracked_buffers))
             })?;
             Ok(result)
@@ -1844,9 +1856,7 @@ impl MessageEditor {
                 .iter()
                 .find(|(start, _)| *start == range.start)
                 .map(|(_, label)| label.clone());
-            let crease_label = browser_label
-                .clone()
-                .unwrap_or_else(|| mention_uri.name());
+            let crease_label = browser_label.clone().unwrap_or_else(|| mention_uri.name());
             let crease_icon = browser_label
                 .as_ref()
                 .map(|_| IconName::Public.path().into())
@@ -2089,12 +2099,15 @@ impl Render for MessageEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .key_context("MessageEditor")
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
-                // WebView2 is a native child window. Explicitly restoring the
-                // editor focus prevents it from keeping keyboard ownership after
-                // the user returns to the chat.
-                this.focus_handle(cx).focus(window, cx);
-            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    // WebView2 is a native child window. Explicitly restoring the
+                    // editor focus prevents it from keeping keyboard ownership after
+                    // the user returns to the chat.
+                    this.focus_handle(cx).focus(window, cx);
+                }),
+            )
             .on_action(cx.listener(Self::chat))
             .on_action(cx.listener(Self::send_immediately))
             .on_action(cx.listener(Self::chat_with_follow))
@@ -4884,7 +4897,9 @@ mod tests {
             .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
             .expect("decode png");
         let file_name = match extension {
-            Some(extension) => format!("momor-agent-ui-test-{}.{}", uuid::Uuid::new_v4(), extension),
+            Some(extension) => {
+                format!("momor-agent-ui-test-{}.{}", uuid::Uuid::new_v4(), extension)
+            }
             None => format!("momor-agent-ui-test-{}", uuid::Uuid::new_v4()),
         };
         let path = std::env::temp_dir().join(file_name);

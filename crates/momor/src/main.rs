@@ -3,6 +3,7 @@
 
 mod browser;
 mod browser_mcp;
+mod browser_session;
 mod momor;
 #[cfg(target_os = "windows")]
 mod native_webview;
@@ -1273,14 +1274,6 @@ pub(crate) async fn restore_or_create_workspace(
     app_state: Arc<AppState>,
     cx: &mut AsyncApp,
 ) -> Result<()> {
-    // ponytail: chat-only — nunca restaura projeto/sessão anterior; a janela sempre
-    // abre limpa, sem diretório; contexto entra arrastando arquivos/pastas pro chat
-    cx.update(|cx| workspace::open_new(Default::default(), app_state.clone(), cx, |_, _, _| {}))
-        .await?;
-    return Ok(());
-
-    #[allow(unreachable_code)]
-    let kvp = cx.update(|cx| KeyValueStore::global(cx));
     if let Some(multi_workspaces) = restorable_workspaces(cx, &app_state).await {
         let mut error_count = 0;
         for multi_workspace in multi_workspaces {

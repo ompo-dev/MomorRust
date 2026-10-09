@@ -75,6 +75,7 @@ notifications.workspace = true
 ordered-float.workspace = true
 parking_lot.workspace = true
 paths.workspace = true
+pdf-extract.workspace = true
 picker.workspace = true
 platform_title_bar.workspace = true
 postage.workspace = true
@@ -113,6 +114,9 @@ workspace.workspace = true
 momor_actions.workspace = true
 image.workspace = true
 reqwest_client = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = ["Data_Pdf", "Graphics_Imaging", "UI", "Win32_System_WinRT"] }
 
 [dev-dependencies]
 acp_thread = { workspace = true, features = ["test-support"] }

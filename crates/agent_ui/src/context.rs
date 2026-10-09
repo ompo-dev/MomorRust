@@ -55,6 +55,17 @@ pub fn load_context(mention_set: &Entity<MentionSet>, cx: &mut App) -> Task<Opti
                     source: mention_image.data,
                     ..LanguageModelImage::empty()
                 }),
+                Mention::Pdf(document) => {
+                    loaded_context.text.push_str(&document.text_context());
+                    for page in &document.pages {
+                        for image in &page.images {
+                            loaded_context.images.push(LanguageModelImage {
+                                source: image.data.clone().into(),
+                                ..LanguageModelImage::empty()
+                            });
+                        }
+                    }
+                }
                 Mention::Link => {}
             }
         }

@@ -4,6 +4,7 @@
 //! The embedded Obscura engine is used only as the page runtime through CDP; no
 //! external browser window or browser shell is launched.
 
+use crate::browser_session::{BrowserSession, SESSION_KEY, SavedBrowserPage};
 #[cfg(target_os = "windows")]
 use crate::native_webview::{NativeWebView, debugging_port};
 use anyhow::{Context as _, Result, anyhow};
@@ -13,7 +14,7 @@ use futures::StreamExt;
 use gpui::{
     App, Bounds, ClipboardItem, Context, DismissEvent, Entity, EventEmitter, FocusHandle,
     Focusable, Image, ImageFormat, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point,
-    Render, SharedString, Subscription, Task, WeakEntity, Window, anchored, deferred, img,
+    Render, SharedString, Subscription, Task, TaskExt, WeakEntity, Window, anchored, deferred, img,
     prelude::*,
 };
 #[cfg(target_os = "windows")]
@@ -926,6 +927,7 @@ struct BrowserTab {
     history: Vec<BrowserHistoryEntry>,
     history_index: usize,
     loading: bool,
+    last_recorded_url: String,
     #[cfg(target_os = "windows")]
     native_webview: Option<NativeWebView>,
 }
@@ -941,6 +943,7 @@ impl BrowserTab {
             history: Vec::new(),
             history_index: 0,
             loading: false,
+            last_recorded_url: "about:blank".into(),
             #[cfg(target_os = "windows")]
             native_webview: None,
         }
@@ -1002,6 +1005,9 @@ pub struct BrowserPanel {
     history_open: bool,
     favorites: Vec<String>,
     quick_access: Vec<String>,
+    saved_history: Vec<SavedBrowserPage>,
+    last_saved_session: String,
+    pending_session_save: Option<Task<Result<()>>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1023,6 +1029,39 @@ impl DevtoolsTab {
 
 impl BrowserPanel {
     pub fn new(workspace: WeakEntity<Workspace>, cx: &mut Context<Self>) -> Self {
+        let session = match db::kvp::KeyValueStore::global(cx).read_kvp(SESSION_KEY) {
+            Ok(Some(json)) => match BrowserSession::decode(&json) {
+                Ok(session) => session,
+                Err(error) => {
+                    tracing::error!("Failed to restore browser session: {error:#}");
+                    BrowserSession::default()
+                }
+            },
+            Ok(None) => BrowserSession::default(),
+            Err(error) => {
+                tracing::error!("Failed to read browser session: {error:#}");
+                BrowserSession::default()
+            }
+        };
+        cx.observe(&cx.entity(), |this, _, cx| this.save_session(cx))
+            .detach();
+        cx.on_release(|this, cx| {
+            if let Some(task) = this.pending_session_save.take() {
+                task.detach_and_log_err(cx);
+            }
+        })
+        .detach();
+        cx.on_app_quit(|this, _cx| {
+            let task = this.pending_session_save.take();
+            async move {
+                if let Some(task) = task
+                    && let Err(error) = task.await
+                {
+                    tracing::error!("Failed to save browser session on quit: {error:#}");
+                }
+            }
+        })
+        .detach();
         Self {
             focus_handle: cx.focus_handle(),
             _workspace: workspace,
@@ -1030,8 +1069,19 @@ impl BrowserPanel {
             address_bar_synced_text: String::new(),
             _address_subscription: None,
             client: None,
-            tabs: vec![BrowserTab::new()],
-            active_tab: 0,
+            tabs: session
+                .tabs
+                .into_iter()
+                .map(|page| {
+                    let mut tab = BrowserTab::new();
+                    tab.current_url = page.url.clone();
+                    tab.last_recorded_url = page.url.clone();
+                    tab.status = page.url;
+                    tab.title = page.title;
+                    tab
+                })
+                .collect(),
+            active_tab: session.active_tab,
             navigation_task: None,
             screencast_tasks: HashMap::new(),
             download_events_task: None,
@@ -1062,7 +1112,63 @@ impl BrowserPanel {
             history_open: false,
             favorites: read_saved_urls("momor_browser_favorites", cx),
             quick_access: read_saved_urls("momor_browser_quick_access", cx),
+            saved_history: session.history,
+            last_saved_session: String::new(),
+            pending_session_save: None,
         }
+    }
+
+    fn save_session(&mut self, cx: &mut Context<Self>) {
+        for tab in &mut self.tabs {
+            let page = SavedBrowserPage {
+                url: tab.current_url.clone(),
+                title: tab.title.clone(),
+            };
+            if tab.current_url != tab.last_recorded_url {
+                BrowserSession::record_visit(&mut self.saved_history, page);
+                tab.last_recorded_url = tab.current_url.clone();
+            } else if !tab.title.is_empty()
+                && let Some(entry) = self
+                    .saved_history
+                    .iter_mut()
+                    .rev()
+                    .find(|entry| entry.url == tab.current_url)
+            {
+                entry.title = tab.title.clone();
+            }
+        }
+        let session = BrowserSession {
+            tabs: self
+                .tabs
+                .iter()
+                .map(|tab| SavedBrowserPage {
+                    url: tab.current_url.clone(),
+                    title: tab.title.clone(),
+                })
+                .collect(),
+            active_tab: self.active_tab,
+            history: self.saved_history.clone(),
+            ..BrowserSession::default()
+        };
+        let value = match serde_json::to_string(&session) {
+            Ok(value) if value != self.last_saved_session => value,
+            Ok(_) => return,
+            Err(error) => {
+                tracing::error!("Failed to serialize browser session: {error:#}");
+                return;
+            }
+        };
+        self.last_saved_session = value.clone();
+        let store = db::kvp::KeyValueStore::global(cx);
+        let previous = self.pending_session_save.take();
+        self.pending_session_save = Some(cx.background_spawn(async move {
+            if let Some(previous) = previous
+                && let Err(error) = previous.await
+            {
+                tracing::error!("Previous browser session save failed: {error:#}");
+            }
+            store.write_kvp(SESSION_KEY.into(), value).await
+        }));
     }
 
     fn active_tab(&self) -> Option<&BrowserTab> {
@@ -1680,6 +1786,15 @@ impl BrowserPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if history_entry.id < 0 {
+            if let Some(address_bar) = self.address_bar.clone() {
+                address_bar.update(cx, |field, cx| {
+                    field.set_text(&history_entry.url, window, cx)
+                });
+                self.navigate(window, cx);
+            }
+            return;
+        }
         let tab_index = self.active_tab;
         #[cfg(target_os = "windows")]
         if let Some(webview) = self.active_native_webview() {
@@ -2987,9 +3102,16 @@ impl Render for BrowserPanel {
         let devtools_tab = self.devtools_tab;
         let history_open = self.history_open;
         let history_entries = self
-            .active_tab()
-            .map(|tab| (tab.history.clone(), tab.history_index))
-            .unwrap_or_default();
+            .saved_history
+            .iter()
+            .rev()
+            .map(|page| BrowserHistoryEntry {
+                id: -1,
+                url: page.url.clone(),
+                title: page.title.clone(),
+            })
+            .collect::<Vec<_>>();
+        let active_url = self.active_url();
         let favorite_icon = if self.favorites.iter().any(|url| url == &self.active_url()) {
             IconName::StarFilled
         } else {
@@ -3184,42 +3306,45 @@ impl Render for BrowserPanel {
                     ),
             )
             .when(history_open, |this| {
-                let (entries, history_index) = history_entries.clone();
-                let rows = entries.into_iter().enumerate().map(|(index, entry)| {
-                    let selected = index == history_index;
-                    let selected_entry = entry.clone();
-                    h_flex()
-                        .id(("browser-history-entry", index))
-                        .w_full()
-                        .gap_1()
-                        .px_2()
-                        .py_1()
-                        .when(selected, |row| {
-                            row.bg(cx.theme().colors().element_background)
-                        })
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.navigate_history_entry(selected_entry.clone(), window, cx);
-                        }))
-                        .child(
-                            Icon::new(if selected {
-                                IconName::ArrowRight
-                            } else {
-                                IconName::HistoryRerun
+                let rows = history_entries
+                    .clone()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, entry)| {
+                        let selected = entry.url == active_url;
+                        let selected_entry = entry.clone();
+                        h_flex()
+                            .id(("browser-history-entry", index))
+                            .w_full()
+                            .gap_1()
+                            .px_2()
+                            .py_1()
+                            .when(selected, |row| {
+                                row.bg(cx.theme().colors().element_background)
                             })
-                            .size(IconSize::XSmall)
-                            .color(Color::Muted),
-                        )
-                        .child(
-                            v_flex()
-                                .min_w_0()
-                                .child(Label::new(entry.title).size(LabelSize::Small))
-                                .child(
-                                    Label::new(entry.url)
-                                        .size(LabelSize::XSmall)
-                                        .color(Color::Muted),
-                                ),
-                        )
-                });
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.navigate_history_entry(selected_entry.clone(), window, cx);
+                            }))
+                            .child(
+                                Icon::new(if selected {
+                                    IconName::ArrowRight
+                                } else {
+                                    IconName::HistoryRerun
+                                })
+                                .size(IconSize::XSmall)
+                                .color(Color::Muted),
+                            )
+                            .child(
+                                v_flex()
+                                    .min_w_0()
+                                    .child(Label::new(entry.title).size(LabelSize::Small))
+                                    .child(
+                                        Label::new(entry.url)
+                                            .size(LabelSize::XSmall)
+                                            .color(Color::Muted),
+                                    ),
+                            )
+                    });
                 this.child(
                     v_flex()
                         .id("browser-history-panel")

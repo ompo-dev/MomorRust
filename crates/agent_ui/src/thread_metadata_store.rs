@@ -3,7 +3,7 @@ use std::{
     sync::Arc,
 };
 
-use agent::{ThreadStore, MOMOR_AGENT_ID};
+use agent::{MOMOR_AGENT_ID, ThreadStore};
 use agent_client_protocol::schema as acp;
 use anyhow::Context as _;
 use chrono::{DateTime, Utc};
@@ -545,6 +545,10 @@ impl ThreadMetadataStore {
 
     pub fn is_empty(&self) -> bool {
         self.threads.is_empty()
+    }
+
+    pub fn reload_task(&self) -> Option<Shared<Task<()>>> {
+        self.reload_task.clone()
     }
 
     /// Returns all thread IDs.
@@ -1215,13 +1219,7 @@ impl ThreadMetadataStore {
                 (worktree_paths, remote_connection)
             };
 
-        // Threads without a folder path (e.g. started in an empty
-        // window) are archived by default so they don't get lost,
-        // because they won't show up in the sidebar. Users can reload
-        // them from the archive.
-        let archived = existing_thread
-            .map(|t| t.archived)
-            .unwrap_or(worktree_paths.is_empty());
+        let archived = existing_thread.map(|t| t.archived).unwrap_or(false);
 
         let metadata = ThreadMetadata {
             thread_id,
@@ -2507,7 +2505,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn test_threads_without_project_association_are_archived_by_default(
+    async fn test_threads_without_project_association_remain_unarchived(
         cx: &mut TestAppContext,
     ) {
         init_test(cx);
@@ -2559,8 +2557,8 @@ mod tests {
                 .expect("missing metadata for thread without project association");
             assert!(without_worktree.folder_paths().is_empty());
             assert!(
-                without_worktree.archived,
-                "expected thread without project association to be archived"
+                !without_worktree.archived,
+                "expected thread without project association to remain unarchived"
             );
 
             let with_worktree = store
