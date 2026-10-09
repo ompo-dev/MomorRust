@@ -17,10 +17,49 @@ every 250 ms are recorded. Element focus changes and pointer movement are not
 treated as departures. Browser event provenance (`isTrusted`) is recorded too.
 Timer throttling can delay sampled readings when the page is backgrounded.
 
-The most recent 500 events and aggregate counts are stored in this origin's
-localStorage. Reload starts a new live observation without discarding past logs.
-Separate tabs have independent in-memory monitors; the latest persistence write
-wins for this origin. The JSON export includes the current readings and event log.
+The most recent 2,000 events and aggregate counts are stored in localStorage,
+under a per-tab namespace identified through sessionStorage. Reload starts a new
+live observation without discarding past logs. Independently opened tabs do not
+overwrite each other's histories. When BroadcastChannel is available, an initial
+ownership handshake detects duplicated live tab identities and forks their
+namespace before writing. Without that API, use independently opened tabs.
+Legacy v1 logs migrate once without deleting the original copy.
+
+## Evidence
+
+- Direct: visibility, document/window focus, lifecycle, active-frame blur.
+- Hints only: pointer exit, lack of trusted input, timer/RAF/worker delays,
+  long tasks, missed iframe heartbeats and local server heartbeat gaps.
+- Diagnostics: element focus, navigation type, bfcache `persisted`, discard,
+  prerendering, viewport, fullscreen, pointer lock, connectivity and clipboard
+  event names. Clipboard contents and typed text are never collected.
+
+Hints never turn the page red or increment its departure counter. Timing gaps
+can result from CPU load, sleep, browser throttling or network problems, not
+necessarily a tab/app switch. Ordinary movement between input fields and iframe
+focus is distinguished from a page departure. Actual iframe blur is still
+recorded even when the parent document keeps reporting focus.
+
+Timers use monotonic clocks for durations. Exports include wall and monotonic
+timestamps, event provenance, scope, details, current readings and settings.
+JSON and CSV exports cover all retained logs; the table is paginated. Thresholds
+are editable and persist with the tab. APIs that are unavailable are identified.
+
+## Independent probes
+
+The monitor collects main-thread timer drift, animation gaps/FPS, dedicated
+worker timer and delivery latency, and Long Tasks API entries where supported.
+Two cooperative test iframes (127.0.0.1 and localhost) independently report their
+signals. Their messages must match the registered WindowProxy, origin, token,
+frame id, schema and increasing sequence before they are accepted. The fixture
+does not read DOM inside arbitrary third-party iframes.
+
+The `/api/activity-heartbeat` endpoint exists in Vite dev/preview only. A ping
+every two seconds measures server-side intervals with a monotonic Node clock.
+It accepts local same-port origins, JSON POST requests and bounded opaque ids.
+It retains only bounded in-memory session timing counters, not browser content.
+No telemetry is transmitted to an external service. Static hosting without this
+endpoint reports that probe as unavailable.
 
 ```powershell
 npm.cmd test
@@ -37,8 +76,13 @@ npm.cmd run test:e2e
 Alternatively, use an already installed Chromium-based browser without a
 download, for example `$env:ACTIVITY_TEST_BROWSER_CHANNEL = 'msedge'`.
 Browser tests own an isolated context and never connect to existing user tabs.
-The synthetic lifecycle check is explicitly logged as synthetic; navigation
-also verifies a native pagehide event. Generated screenshots stay in `artifacts/`.
+Synthetic signal checks are explicitly logged as synthetic. Real navigation,
+iframe focus transfer, bounded main-thread blocking, isolated-tab persistence,
+message rejection, exports and heartbeat failures are checked independently.
+Generated screenshots stay in `artifacts/`.
 
 This diagnostic only observes web APIs. It cannot verify whether external
 software, extensions, screen capture or server-side signals detect activity.
+Green means no direct departure signal was observed, not that every possible
+external detector was defeated. Unsupported or suppressed APIs, process kills,
+lost network packets and browser interventions can leave gaps in observation.

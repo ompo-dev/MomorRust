@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sonda de iframe</title>
+  </head>
+  <body class="frame-body">
+    <main>
+      <p id="frame-origin" class="frame-origin"></p>
+      <div class="frame-status" id="frame-status">Aguardando</div>
+      <label for="frame-input">Campo do iframe</label>
+      <input class="control" id="frame-input" type="text" autocomplete="off" />
+      <p id="frame-signals" class="frame-signals"></p>
+    </main>
+    <script type="module" src="/src/frame.ts"></script>
+  </body>
+</html>
