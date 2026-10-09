@@ -14,6 +14,61 @@ use tokio::time::{Duration, timeout};
 use crate::browser::CdpClient;
 
 const DEFAULT_CDP_PORT: u16 = 9224;
+const INTERACTIVE_SELECTOR: &str = "a,button,input,textarea,select,[role=button],[role=link],[role=textbox],[contenteditable=true]";
+
+pub fn init(cx: &mut gpui::App) {
+    let registry =
+        project::context_server_store::registry::ContextServerDescriptorRegistry::default_global(
+            cx,
+        );
+    registry.update(cx, |registry, cx| {
+        registry.register_context_server_descriptor(
+            "momor-browser".into(),
+            std::sync::Arc::new(BrowserServerDescriptor),
+            cx,
+        );
+    });
+}
+
+struct BrowserServerDescriptor;
+
+impl project::context_server_store::registry::ContextServerDescriptor for BrowserServerDescriptor {
+    fn command(
+        &self,
+        _worktrees: gpui::Entity<project::worktree_store::WorktreeStore>,
+        _cx: &gpui::AsyncApp,
+    ) -> gpui::Task<Result<context_server::ContextServerCommand>> {
+        gpui::Task::ready(
+            std::env::current_exe()
+                .context("failed to locate Momor browser bridge")
+                .map(|path| context_server::ContextServerCommand {
+                    path,
+                    args: vec!["--browser-mcp".into()],
+                    env: Some(collections::HashMap::from_iter([(
+                        "MOMOR_BROWSER_CDP_PORT".into(),
+                        browser_port().to_string(),
+                    )])),
+                    timeout: None,
+                }),
+        )
+    }
+
+    fn configuration(
+        &self,
+        _worktrees: gpui::Entity<project::worktree_store::WorktreeStore>,
+        _cx: &gpui::AsyncApp,
+    ) -> gpui::Task<Result<Option<extension::ContextServerConfiguration>>> {
+        gpui::Task::ready(Ok(None))
+    }
+}
+
+fn browser_port() -> u16 {
+    std::env::var("MOMOR_BROWSER_CDP_PORT")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|port: &u16| *port != 0)
+        .unwrap_or(DEFAULT_CDP_PORT)
+}
 
 pub fn run() -> Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -28,6 +83,7 @@ async fn run_server() -> Result<()> {
     let mut reader = BufReader::new(stdin).lines();
     let mut stdout = tokio::io::stdout();
     let mut client = None;
+    let mut inspection_only = true;
 
     while let Some(line) = reader.next_line().await? {
         if line.trim().is_empty() {
@@ -58,16 +114,18 @@ async fn run_server() -> Result<()> {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "momor-browser", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": "Momor browser tools control the visible browser page. Use browser_accessibility or browser_dom for normal navigation and refresh refs after navigation. These tools do not capture images. Use browser_screenshot only when visual inspection is genuinely necessary. Never use BrowserOS, BrowserOS Neo, browseros-neo, or any external browser; this MCP is the only browser for Momor.",
+                "instructions": "These tools control Momor's live WebView2 tabs, not BrowserOS or Codex's in-app browser. Start with browser_tabs, match the attached tab, and pass target_id. Inspect DOM/accessibility and browser_frames before acting. Use frame_id to inspect embedded documents. Sessions start in inspection_only mode: use browser_set_mode actions only for user-requested actions, then inspect after each step and refresh refs. Never navigate, reload, or close an existing user activity to diagnose it. browser_navigate requires allow_navigation=true only for an explicitly requested navigation. Screenshots are only for genuinely visual tasks. Do not load browseros-neo or use cua_repl; neither exposes Momor. Report actual errors.",
             }),
             "tools/list" => json!({"tools": tool_definitions()}),
-            "tools/call" => match call_tool(&mut client, request.get("params")).await {
-                Ok(result) => result,
-                Err(error) => json!({
-                    "content": [{"type": "text", "text": error.to_string()}],
-                    "isError": true,
-                }),
-            },
+            "tools/call" => {
+                match call_tool(&mut client, &mut inspection_only, request.get("params")).await {
+                    Ok(result) => result,
+                    Err(error) => json!({
+                        "content": [{"type": "text", "text": error.to_string()}],
+                        "isError": true,
+                    }),
+                }
+            }
             _ => {
                 write_response(
                     &mut stdout,
@@ -90,7 +148,11 @@ async fn run_server() -> Result<()> {
     Ok(())
 }
 
-async fn call_tool(client: &mut Option<CdpClient>, params: Option<&Value>) -> Result<Value> {
+async fn call_tool(
+    client: &mut Option<(String, CdpClient)>,
+    inspection_only: &mut bool,
+    params: Option<&Value>,
+) -> Result<Value> {
     let params = params.context("tools/call requires params")?;
     let name = params
         .get("name")
@@ -100,12 +162,59 @@ async fn call_tool(client: &mut Option<CdpClient>, params: Option<&Value>) -> Re
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let browser = if let Some(existing) = client.as_ref() {
-        existing.clone()
+    if name == "browser_set_mode" {
+        let mode = required_string(&arguments, "mode")?;
+        *inspection_only = match mode.as_str() {
+            "inspection_only" => true,
+            "actions" => false,
+            _ => anyhow::bail!("mode must be inspection_only or actions"),
+        };
+        return Ok(text_result(format!("Browser mode: {mode}")));
+    }
+    anyhow::ensure!(
+        !*inspection_only || read_only_tool(name),
+        "Inspection-only mode blocks this action. Inspect first; use browser_set_mode actions only when the user requested an action."
+    );
+    let targets = timeout(
+        Duration::from_secs(5),
+        discover_page_targets(browser_port()),
+    )
+    .await
+    .context("timed out discovering Momor browser tabs")??;
+    if name == "browser_tabs" {
+        let mut tabs = Vec::new();
+        for target in &targets {
+            let browser = connect_to_target(client, target).await?;
+            let page = browser.active_page().await?;
+            let visible = browser
+                .evaluate(&page, "document.visibilityState === 'visible'")
+                .await?;
+            tabs.push(json!({"target_id": target.id, "url": target.url, "title": target.title, "visible": visible, "ownership": "user", "preserve_state": true, "inspection_only": *inspection_only}));
+        }
+        return Ok(text_result(serde_json::to_string_pretty(&tabs)?));
+    }
+    let browser = if let Some(target_id) = arguments.get("target_id").and_then(Value::as_str) {
+        let target = targets
+            .iter()
+            .find(|target| target.id == target_id)
+            .context("Momor tab is no longer open; call browser_tabs again")?;
+        connect_to_target(client, target).await?
     } else {
-        let connected = connect_to_visible_browser().await?;
-        *client = Some(connected.clone());
-        connected
+        let mut visible_browser = None;
+        for target in &targets {
+            let browser = connect_to_target(client, target).await?;
+            let page = browser.active_page().await?;
+            if browser
+                .evaluate(&page, "document.visibilityState === 'visible'")
+                .await?
+                == Value::Bool(true)
+                || targets.len() == 1
+            {
+                visible_browser = Some(browser);
+                break;
+            }
+        }
+        visible_browser.context("No visible Momor tab; select a target_id from browser_tabs")?
     };
     match execute_tool(&browser, name, &arguments).await {
         Ok(result) => Ok(result),
@@ -118,55 +227,75 @@ async fn call_tool(client: &mut Option<CdpClient>, params: Option<&Value>) -> Re
 
 async fn execute_tool(client: &CdpClient, name: &str, arguments: &Value) -> Result<Value> {
     let page = client.active_page().await?;
+    let frame_id = arguments.get("frame_id").and_then(Value::as_str);
     match name {
+        "browser_frames" => {
+            let tree = client.send("Page.getFrameTree", json!({})).await?;
+            let mut frames = Vec::new();
+            if let Some(tree) = tree.get("frameTree") {
+                collect_frames(tree, &mut frames);
+            }
+            Ok(text_result(serde_json::to_string_pretty(&frames)?))
+        }
+        "browser_state" => {
+            let state = client.evaluate_in_frame(&page, frame_id,
+                "({url:location.href,title:document.title,ready_state:document.readyState,visibility:document.visibilityState,time_origin:performance.timeOrigin,focused:{tag:document.activeElement?.tagName,name:document.activeElement?.getAttribute('aria-label') || document.activeElement?.name || ''},forms:Array.from(document.querySelectorAll('input,textarea,select,button')).slice(0,300).map(element=>({tag:element.tagName,name:element.getAttribute('aria-label') || element.name || element.innerText || '',type:element.type,value:element.type==='password' || element.type==='hidden' ? null : element.value,checked:element.checked,disabled:element.disabled})),media:Array.from(document.querySelectorAll('video,audio')).map(element=>({paused:element.paused,time:element.currentTime,ended:element.ended}))})"
+            ).await?;
+            Ok(text_result(serde_json::to_string_pretty(&state)?))
+        }
         "browser_accessibility" => {
+            let selector = serde_json::to_string(INTERACTIVE_SELECTOR)?;
             let accessibility = client
-                .evaluate(
-                    &page,
-                    "(() => { const name = element => (element.getAttribute('aria-label') || element.getAttribute('aria-labelledby') || element.innerText || element.value || element.getAttribute('title') || '').trim().replace(/\\s+/g, ' ').slice(0, 240); const role = element => element.getAttribute('role') || element.tagName.toLowerCase(); const interactive = Array.from(document.querySelectorAll('a,button,input,textarea,select,[role=button],[role=link],[role=textbox],[contenteditable=true]')).slice(0, 300).map((element, index) => ({ref: 'e' + (index + 1), role: role(element), name: name(element), value: element.value || '', href: element.href || null, disabled: !!element.disabled})); return {url: location.href, title: document.title, text: (document.body?.innerText || '').slice(0, 30000), headings: Array.from(document.querySelectorAll('h1,h2,h3')).slice(0, 100).map(element => ({level: element.tagName.toLowerCase(), name: name(element)})), landmarks: Array.from(document.querySelectorAll('main,nav,header,footer,aside,[role=main],[role=navigation],[role=dialog]')).slice(0, 50).map(element => ({role: role(element), name: name(element)})), interactive}; })()",
+                .evaluate_in_frame(&page, frame_id, &format!("(() => {{ const epoch = globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + '-' + Math.random().toString(36).slice(2); const refs = new Map(); window.__momorBrowserRefs = {{url: location.href, refs}}; const name = element => (element.getAttribute('aria-label') || element.getAttribute('aria-labelledby') || element.innerText || (element.type === 'password' ? '' : element.value) || element.getAttribute('title') || element.querySelector('img')?.alt || '').trim().replace(/\\s+/g, ' ').slice(0, 240); const role = element => element.getAttribute('role') || element.tagName.toLowerCase(); const interactive = Array.from(document.querySelectorAll({selector})).slice(0, 300).map((element, index) => {{ const ref = 'e' + (index + 1) + '-' + epoch; refs.set(ref, element); return {{ref, role: role(element), name: name(element), value: element.type === 'password' ? null : element.value || '', href: element.href || null, disabled: !!element.disabled}}; }}); return {{url: location.href, title: document.title, text: (document.body?.innerText || '').slice(0, 30000), headings: Array.from(document.querySelectorAll('h1,h2,h3')).slice(0, 100).map(element => ({{level: element.tagName.toLowerCase(), name: name(element)}})), landmarks: Array.from(document.querySelectorAll('main,nav,header,footer,aside,[role=main],[role=navigation],[role=dialog]')).slice(0, 50).map(element => ({{role: role(element), name: name(element)}})), iframes: Array.from(document.querySelectorAll('iframe')).map(element => ({{url: element.src, title: element.title, name: element.name, cross_origin: (() => {{try {{return !element.contentDocument;}} catch {{return true;}}}})()}})), interactive}}; }})()"),
                 )
                 .await?;
             Ok(text_result(serde_json::to_string_pretty(&accessibility)?))
         }
         "browser_dom" => {
             let dom = client
-                .evaluate(
-                    &page,
-                    "document.documentElement?.outerHTML || ''",
-                )
+                .evaluate_in_frame(&page, frame_id, "document.documentElement?.outerHTML || ''")
                 .await?;
             Ok(text_result(dom.to_string()))
         }
         "browser_navigate" => {
+            anyhow::ensure!(frame_id.is_none(), "Navigate targets a tab, not a frame");
+            let current_url = client.evaluate(&page, "location.href").await?;
+            anyhow::ensure!(
+                current_url == "about:blank"
+                    || arguments.get("allow_navigation").and_then(Value::as_bool) == Some(true),
+                "This is an existing user activity. Do not navigate for inspection. Set allow_navigation=true only for an explicit user navigation request."
+            );
             let url = required_string(arguments, "url")?;
             let mut page = page;
             client.navigate(&mut page, &url).await?;
             Ok(text_result(format!("Navigated to {url}")))
         }
         "browser_click" => {
-            let index = ref_index(arguments)?;
+            let element = referenced_element(arguments)?;
             let expression = format!(
-                "(() => {{ const elements = Array.from(document.querySelectorAll('a,button,input,textarea,select,[role=button]')); const element = elements[{index}]; if (!element) throw new Error('stale browser ref'); element.scrollIntoView({{block:'center'}}); element.click(); return true; }})()"
+                "(() => {{ {element} element.scrollIntoView({{block:'center'}}); window.__momorBrowserRefs.refs.clear(); element.click(); return true; }})()"
             );
-            client.evaluate(&page, &expression).await?;
+            client
+                .evaluate_in_frame(&page, frame_id, &expression)
+                .await?;
             Ok(text_result("Clicked element"))
         }
         "browser_fill" => {
-            let index = ref_index(arguments)?;
+            let element = referenced_element(arguments)?;
             let value = required_string(arguments, "value")?;
             let value = serde_json::to_string(&value)?;
             let expression = format!(
-                "(() => {{ const elements = Array.from(document.querySelectorAll('a,button,input,textarea,select,[role=button]')); const element = elements[{index}]; if (!element) throw new Error('stale browser ref'); element.focus(); const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), 'value')?.set; if (setter) setter.call(element, {value}); else element.value = {value}; element.dispatchEvent(new Event('input', {{bubbles:true}})); element.dispatchEvent(new Event('change', {{bubbles:true}})); return element.value; }})()"
+                "(() => {{ {element} if (element.disabled || element.readOnly) throw new Error('element is not editable'); element.focus(); window.__momorBrowserRefs.refs.clear(); const setter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), 'value')?.set; if (setter) setter.call(element, {value}); else if (element.isContentEditable) element.textContent = {value}; else throw new Error('element is not an input'); element.dispatchEvent(new Event('input', {{bubbles:true}})); element.dispatchEvent(new Event('change', {{bubbles:true}})); return element.value ?? element.textContent; }})()"
             );
-            let result = client.evaluate(&page, &expression).await?;
+            let result = client
+                .evaluate_in_frame(&page, frame_id, &expression)
+                .await?;
             Ok(text_result(result.to_string()))
         }
         "browser_type" => {
             let text = required_string(arguments, "text")?;
             client
-                .evaluate(
-                    &page,
-                    &format!(
+                .evaluate_in_frame(&page, frame_id, &format!(
                         "document.activeElement && document.activeElement.dispatchEvent(new InputEvent('beforeinput', {{bubbles:true, data:{}, inputType:'insertText'}}))",
                         serde_json::to_string(&text)?
                     ),
@@ -185,25 +314,57 @@ async fn execute_tool(client: &CdpClient, name: &str, arguments: &Value) -> Resu
                 .await?;
             Ok(text_result(format!("Pressed {key}")))
         }
+        "browser_focus" => {
+            let element = referenced_element(arguments)?;
+            let focused = client.evaluate_in_frame(&page, frame_id, &format!(
+                "(() => {{ {element} element.scrollIntoView({{block:'center'}}); element.focus(); return document.activeElement === element; }})()"
+            )).await?;
+            anyhow::ensure!(
+                focused == Value::Bool(true),
+                "the element did not accept focus"
+            );
+            Ok(text_result("Focused element"))
+        }
+        "browser_click_at" => {
+            let x = required_number(arguments, "x")?;
+            let y = required_number(arguments, "y")?;
+            anyhow::ensure!(
+                x >= 0.0 && y >= 0.0,
+                "coordinates must be nonnegative viewport pixels"
+            );
+            for event in ["mousePressed", "mouseReleased"] {
+                client
+                    .send(
+                        "Input.dispatchMouseEvent",
+                        json!({"type":event,"x":x,"y":y,"button":"left","clickCount":1}),
+                    )
+                    .await?;
+            }
+            Ok(text_result(
+                "Clicked viewport coordinates; inspect state before the next action",
+            ))
+        }
         "browser_scroll" => {
             let amount = arguments
                 .get("amount")
                 .and_then(Value::as_f64)
                 .unwrap_or(600.0);
             client
-                .evaluate(&page, &format!("window.scrollBy(0, {amount})"))
+                .evaluate_in_frame(&page, frame_id, &format!("window.scrollBy(0, {amount})"))
                 .await?;
             Ok(text_result(format!("Scrolled by {amount}")))
         }
         "browser_read" => {
             let text = client
-                .evaluate(&page, "document.body?.innerText || ''")
+                .evaluate_in_frame(&page, frame_id, "document.body?.innerText || ''")
                 .await?;
             Ok(text_result(text.to_string()))
         }
         "browser_evaluate" => {
             let expression = required_string(arguments, "expression")?;
-            let result = client.evaluate(&page, &expression).await?;
+            let result = client
+                .evaluate_in_frame(&page, frame_id, &expression)
+                .await?;
             Ok(text_result(result.to_string()))
         }
         "browser_screenshot" => {
@@ -228,37 +389,79 @@ fn required_string(arguments: &Value, field: &str) -> Result<String> {
         .with_context(|| format!("missing string argument: {field}"))
 }
 
-fn ref_index(arguments: &Value) -> Result<usize> {
+fn referenced_element(arguments: &Value) -> Result<String> {
     let reference = required_string(arguments, "ref")?;
-    let index = reference
-        .strip_prefix('e')
-        .context("browser ref must look like e12")?
-        .parse::<usize>()
-        .context("browser ref must contain a numeric index")?;
-    index
-        .checked_sub(1)
-        .context("browser ref index must be greater than zero")
+    let reference = serde_json::to_string(&reference)?;
+    Ok(format!(
+        "const snapshot = window.__momorBrowserRefs; const element = snapshot?.refs.get({reference}); if (!element?.isConnected || snapshot.url !== location.href) throw new Error('stale browser ref: call browser_accessibility again in the same tab/frame');"
+    ))
+}
+
+fn required_number(arguments: &Value, field: &str) -> Result<f64> {
+    arguments
+        .get(field)
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite())
+        .with_context(|| format!("missing finite number argument: {field}"))
+}
+
+fn collect_frames(tree: &Value, frames: &mut Vec<Value>) {
+    if let Some(frame) = tree.get("frame") {
+        frames.push(json!({"frame_id":frame["id"],"parent_id":frame["parentId"],"url":frame["url"],"name":frame["name"],"security_origin":frame["securityOrigin"]}));
+    }
+    if let Some(children) = tree.get("childFrames").and_then(Value::as_array) {
+        for child in children {
+            collect_frames(child, frames);
+        }
+    }
+}
+
+fn read_only_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "browser_tabs"
+            | "browser_frames"
+            | "browser_state"
+            | "browser_accessibility"
+            | "browser_dom"
+            | "browser_read"
+            | "browser_screenshot"
+    )
 }
 
 fn text_result(text: impl Into<String>) -> Value {
     json!({"content": [{"type": "text", "text": text.into()}]})
 }
 
-async fn connect_to_visible_browser() -> Result<CdpClient> {
-    let port = std::env::var("MOMOR_BROWSER_CDP_PORT")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .filter(|port: &u16| *port != 0)
-        .unwrap_or(DEFAULT_CDP_PORT);
-    let endpoint = timeout(Duration::from_secs(5), discover_page_endpoint(port))
-        .await
-        .context("timed out discovering the visible browser page")??;
-    timeout(Duration::from_secs(5), CdpClient::connect_page(&endpoint))
-        .await
-        .context("timed out connecting to the visible browser page")?
+async fn connect_to_target(
+    client: &mut Option<(String, CdpClient)>,
+    target: &BrowserTarget,
+) -> Result<CdpClient> {
+    if let Some((endpoint, browser)) = client.as_ref()
+        && endpoint == &target.endpoint
+    {
+        return Ok(browser.clone());
+    }
+    let browser = timeout(
+        Duration::from_secs(5),
+        CdpClient::connect_page(&target.endpoint),
+    )
+    .await
+    .context("timed out connecting to the Momor browser tab")??;
+    *client = Some((target.endpoint.clone(), browser.clone()));
+    Ok(browser)
 }
 
-async fn discover_page_endpoint(port: u16) -> Result<String> {
+#[derive(serde::Deserialize)]
+struct BrowserTarget {
+    id: String,
+    url: String,
+    title: String,
+    #[serde(rename = "webSocketDebuggerUrl")]
+    endpoint: String,
+}
+
+async fn discover_page_targets(port: u16) -> Result<Vec<BrowserTarget>> {
     let mut stream = TcpStream::connect(("127.0.0.1", port))
         .await
         .with_context(|| format!("Momor browser is not listening on CDP port {port}"))?;
@@ -282,21 +485,19 @@ async fn discover_page_endpoint(port: u16) -> Result<String> {
                 .context("invalid browser CDP response")?;
         }
         response.extend_from_slice(&buffer[..read]);
-        let Some(header_end) = response
-            .windows(4)
-            .position(|window| window == b"\r\n\r\n")
-        else {
+        let Some(header_end) = response.windows(4).position(|window| window == b"\r\n\r\n") else {
             continue;
         };
-        let content_length = std::str::from_utf8(&response[..header_end])
-            .ok()
-            .and_then(|headers| {
-                headers.lines().find_map(|line| {
-                    line.strip_prefix("Content-Length:")
-                        .or_else(|| line.strip_prefix("content-length:"))
-                        .and_then(|value| value.trim().parse::<usize>().ok())
-                })
-            });
+        let content_length =
+            std::str::from_utf8(&response[..header_end])
+                .ok()
+                .and_then(|headers| {
+                    headers.lines().find_map(|line| {
+                        line.strip_prefix("Content-Length:")
+                            .or_else(|| line.strip_prefix("content-length:"))
+                            .and_then(|value| value.trim().parse::<usize>().ok())
+                    })
+                });
         if content_length.is_some_and(|length| response.len() >= header_end + 4 + length) {
             break header_end + 4;
         }
@@ -304,12 +505,16 @@ async fn discover_page_endpoint(port: u16) -> Result<String> {
     let body = response
         .get(body_start..)
         .context("invalid browser CDP response body")?;
-    let targets: Vec<Value> = serde_json::from_slice(body).context("invalid browser CDP target list")?;
-    targets
+    let targets: Vec<Value> =
+        serde_json::from_slice(body).context("invalid browser CDP target list")?;
+    let targets = targets
         .into_iter()
-        .find(|target| target.get("type").and_then(Value::as_str) == Some("page"))
-        .and_then(|target| target.get("webSocketDebuggerUrl").and_then(Value::as_str).map(str::to_owned))
-        .context("browser CDP target list has no visible page")
+        .filter(|target| target.get("type").and_then(Value::as_str) == Some("page"))
+        .map(serde_json::from_value)
+        .collect::<std::result::Result<Vec<BrowserTarget>, _>>()
+        .context("invalid Momor browser page target")?;
+    anyhow::ensure!(!targets.is_empty(), "Momor browser has no open tabs");
+    Ok(targets)
 }
 
 async fn write_response(stdout: &mut tokio::io::Stdout, response: Value) -> Result<()> {
@@ -322,6 +527,36 @@ async fn write_response(stdout: &mut tokio::io::Stdout, response: Value) -> Resu
 fn tool_definitions() -> Vec<Value> {
     vec![
         tool(
+            "browser_set_mode",
+            "Start in inspection_only. Enable actions only for user-requested actions after inspecting the actual tab/frame.",
+            json!({"type":"object","required":["mode"],"properties":{"mode":{"type":"string","enum":["inspection_only","actions"]}}}),
+        ),
+        tool(
+            "browser_frames",
+            "List frame_id, parent, origin and URL for the entire frame tree, including cross-origin iframes. Inspect before acting.",
+            json!({"type":"object"}),
+        ),
+        tool(
+            "browser_state",
+            "Read URL, title, load/focus state, form values, enabled buttons and media state without navigating or taking a screenshot. Passwords/hidden fields are redacted.",
+            json!({"type":"object"}),
+        ),
+        tool(
+            "browser_focus",
+            "Focus an element ref in the selected frame for subsequent browser_type/browser_press.",
+            json!({"type":"object","required":["ref"],"properties":{"ref":{"type":"string"}}}),
+        ),
+        tool(
+            "browser_click_at",
+            "Click viewport coordinates (CSS pixels), including inside inaccessible iframes. Inspect to establish coordinates, then verify state; never navigate as a fallback.",
+            json!({"type":"object","required":["x","y"],"properties":{"x":{"type":"number"},"y":{"type":"number"}}}),
+        ),
+        tool(
+            "browser_tabs",
+            "List Momor's open tabs with target_id, URL, title, and visibility. Match an attached tab before acting.",
+            json!({"type":"object"}),
+        ),
+        tool(
             "browser_accessibility",
             "Read the page's text, headings, landmarks, and interactive refs from DOM/accessibility data. This never captures an image.",
             json!({"type":"object"}),
@@ -333,8 +568,8 @@ fn tool_definitions() -> Vec<Value> {
         ),
         tool(
             "browser_navigate",
-            "Navigate the visible browser page.",
-            json!({"type":"object","required":["url"],"properties":{"url":{"type":"string"}}}),
+            "Navigate a tab only on explicit user request. Never navigate an existing activity for inspection; allow_navigation=true confirms the user's navigation instruction.",
+            json!({"type":"object","required":["url"],"properties":{"url":{"type":"string"},"allow_navigation":{"type":"boolean","default":false}}}),
         ),
         tool(
             "browser_click",
@@ -379,6 +614,22 @@ fn tool_definitions() -> Vec<Value> {
     ]
 }
 
-fn tool(name: &str, description: &str, input_schema: Value) -> Value {
-    json!({"name": name, "description": description, "inputSchema": input_schema})
+fn tool(name: &str, description: &str, mut input_schema: Value) -> Value {
+    input_schema["properties"]["target_id"] = json!({"type":"string", "description":"Momor tab target_id from browser_tabs. Omit to use the currently visible tab."});
+    if matches!(
+        name,
+        "browser_accessibility"
+            | "browser_dom"
+            | "browser_state"
+            | "browser_click"
+            | "browser_fill"
+            | "browser_focus"
+            | "browser_type"
+            | "browser_read"
+            | "browser_evaluate"
+            | "browser_scroll"
+    ) {
+        input_schema["properties"]["frame_id"] = json!({"type":"string","description":"frame_id from browser_frames. Omit for the top document. Use the same frame for inspection and refs."});
+    }
+    json!({"name": name, "description": description, "inputSchema": input_schema, "annotations":{"readOnlyHint":read_only_tool(name),"destructiveHint":matches!(name,"browser_navigate"|"browser_evaluate")}})
 }

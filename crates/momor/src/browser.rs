@@ -587,17 +587,37 @@ impl CdpClient {
     }
 
     pub async fn evaluate(&self, page: &BrowserPage, expression: &str) -> Result<Value> {
-        let response = self
-            .send_with_session(
-                "Runtime.evaluate",
-                json!({
-                    "expression": expression,
-                    "returnByValue": true,
-                    "awaitPromise": true,
-                }),
+        self.evaluate_in_frame(page, None, expression).await
+    }
+
+    pub async fn evaluate_in_frame(
+        &self,
+        page: &BrowserPage,
+        frame_id: Option<&str>,
+        expression: &str,
+    ) -> Result<Value> {
+        let mut params = json!({
+            "expression": expression,
+            "returnByValue": true,
+            "awaitPromise": true,
+        });
+        if let Some(frame_id) = frame_id {
+            let context = self.send_with_session(
+                "Page.createIsolatedWorld",
+                json!({"frameId": frame_id, "worldName": "momor-browser"}),
                 self.page_session(page),
-            )
+            ).await.context("iframe context unavailable; inspect browser_frames and use focus/keyboard or coordinates without navigating the original activity")?;
+            params["contextId"] = context
+                .get("executionContextId")
+                .context("iframe did not expose an execution context")?
+                .clone();
+        }
+        let response = self
+            .send_with_session("Runtime.evaluate", params, self.page_session(page))
             .await?;
+        if let Some(exception) = response.get("exceptionDetails") {
+            anyhow::bail!("browser JavaScript failed: {exception}");
+        }
         Ok(response
             .get("result")
             .and_then(|result| result.get("value"))
@@ -947,6 +967,7 @@ pub struct BrowserPanel {
     focus_handle: FocusHandle,
     _workspace: WeakEntity<Workspace>,
     address_bar: Option<Entity<InputField>>,
+    address_bar_synced_text: String,
     _address_subscription: Option<Subscription>,
     client: Option<CdpClient>,
     tabs: Vec<BrowserTab>,
@@ -968,7 +989,7 @@ pub struct BrowserPanel {
     #[cfg(target_os = "windows")]
     native_webview_visible: bool,
     #[cfg(target_os = "windows")]
-    native_webview_hidden_for_popover: bool,
+    _native_occlusion_subscription: Option<Subscription>,
     #[cfg(target_os = "windows")]
     #[cfg(target_os = "windows")]
     native_capture_task: Option<Task<()>>,
@@ -1006,6 +1027,7 @@ impl BrowserPanel {
             focus_handle: cx.focus_handle(),
             _workspace: workspace,
             address_bar: None,
+            address_bar_synced_text: String::new(),
             _address_subscription: None,
             client: None,
             tabs: vec![BrowserTab::new()],
@@ -1027,7 +1049,7 @@ impl BrowserPanel {
             #[cfg(target_os = "windows")]
             native_webview_visible: false,
             #[cfg(target_os = "windows")]
-            native_webview_hidden_for_popover: false,
+            _native_occlusion_subscription: None,
             #[cfg(target_os = "windows")]
             #[cfg(target_os = "windows")]
             native_capture_task: None,
@@ -1078,9 +1100,7 @@ impl BrowserPanel {
             let active_visible = visible && self.active_url() != "about:blank";
             self.native_webview_visible = active_visible;
             for (index, tab) in self.tabs.iter().enumerate() {
-                let should_be_visible = active_visible
-                    && !self.native_webview_hidden_for_popover
-                    && index == self.active_tab;
+                let should_be_visible = active_visible && index == self.active_tab;
                 let Some(webview) = tab.native_webview.as_ref() else {
                     continue;
                 };
@@ -1100,33 +1120,46 @@ impl BrowserPanel {
     }
 
     #[cfg(target_os = "windows")]
-    fn sync_native_visibility_for_popovers(&mut self, cx: &mut Context<Self>) {
-        let hidden = ui::popover_menus_open(cx);
-        if self.native_webview_hidden_for_popover == hidden {
-            return;
-        }
-
-        self.native_webview_hidden_for_popover = hidden;
-        let should_be_visible = self.native_webview_visible && !hidden;
-        for (index, tab) in self.tabs.iter().enumerate() {
-            if let Some(webview) = tab.native_webview.as_ref()
-                && let Err(error) =
-                    webview.set_visible(should_be_visible && index == self.active_tab)
-            {
-                tracing::debug!(
-                    "falha ao alternar WebView2 para exibir um menu do Momor: {error:#}"
-                );
-            }
+    fn sync_native_occlusions(&self, window: &Window, cx: &App) {
+        let scale = window.scale_factor();
+        let rectangles = ui::native_surface_occlusions(window, cx)
+            .into_iter()
+            .map(|bounds| {
+                (
+                    (bounds.origin.x.as_f32() * scale).floor() as i32,
+                    (bounds.origin.y.as_f32() * scale).floor() as i32,
+                    (bounds.right().as_f32() * scale).ceil() as i32,
+                    (bounds.bottom().as_f32() * scale).ceil() as i32,
+                )
+            })
+            .collect::<Vec<_>>();
+        if let Some(webview) = self.active_native_webview()
+            && let Err(error) = webview.set_occlusions(&rectangles)
+        {
+            tracing::error!("falha ao exibir menus sobre o WebView2: {error:#}");
         }
     }
 
-    fn sync_address_bar(&self, window: &mut Window, cx: &mut Context<Self>) {
+    fn sync_address_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(field) = &self.address_bar
+            && field.read(cx).focus_handle(cx).contains_focused(window, cx)
+            && field.read(cx).text(cx) != self.address_bar_synced_text
+        {
+            return;
+        }
+        self.reset_address_bar(window, cx);
+    }
+
+    fn reset_address_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(address_bar) = self.address_bar.clone() else {
             return;
         };
         let text = self.active_url();
         let text = (text != "about:blank").then_some(text).unwrap_or_default();
-        address_bar.update(cx, |field, cx| field.set_text(&text, window, cx));
+        if address_bar.read(cx).text(cx) != text {
+            address_bar.update(cx, |field, cx| field.set_text(&text, window, cx));
+        }
+        self.address_bar_synced_text = text;
     }
 
     fn add_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1136,7 +1169,7 @@ impl BrowserPanel {
         self.viewport_auto = true;
         self.last_mouse_move = None;
         self.set_native_visibility(false, cx);
-        self.sync_address_bar(window, cx);
+        self.reset_address_bar(window, cx);
         if let Some(address_bar) = self.address_bar.clone() {
             window.focus(&address_bar.read(cx).focus_handle(cx), cx);
         }
@@ -1158,7 +1191,7 @@ impl BrowserPanel {
             self.native_capture_task.take();
         }
         self.set_native_visibility(self.active_url() != "about:blank", cx);
-        self.sync_address_bar(window, cx);
+        self.reset_address_bar(window, cx);
         cx.notify();
     }
 
@@ -1303,11 +1336,6 @@ impl BrowserPanel {
             };
             let weak = _cx.weak_entity();
             let mut app = _cx.to_async();
-            let initial_url = tab
-                .page
-                .as_ref()
-                .map(|page| page.url.clone())
-                .unwrap_or_else(|| tab.current_url.clone());
             if let Err(error) = NativeWebView::create(
                 parent,
                 &embedded_storage_dir().join("webview2-profile"),
@@ -1318,17 +1346,22 @@ impl BrowserPanel {
                         this.native_webview_pending = false;
                         match result {
                             Ok(webview) => {
+                                let Some(tab) = this.tabs.get(tab_index) else {
+                                    return;
+                                };
+                                let initial_url = tab.current_url.clone();
                                 if let Err(error) = webview.set_bounds(left, top, width, height) {
                                     tracing::debug!(
                                         "falha ao dimensionar o WebView2 inicial: {error:#}"
                                     );
                                 }
-                                let overlay_open = ui::popover_menus_open(cx);
-                                this.native_webview_hidden_for_popover = overlay_open;
                                 let browser_active = this.active_tab == tab_index
-                                    && initial_url != "about:blank";
-                                this.native_webview_visible = browser_active;
-                                let visible = browser_active && !overlay_open;
+                                    && initial_url != "about:blank"
+                                    && workspace::browser_open(cx);
+                                if this.active_tab == tab_index {
+                                    this.native_webview_visible = browser_active;
+                                }
+                                let visible = browser_active;
                                 if let Err(error) = webview.set_visible(visible) {
                                     tracing::debug!(
                                         "falha ao aplicar visibilidade inicial do WebView2: {error:#}"
@@ -1717,8 +1750,8 @@ impl BrowserPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.context_menu.is_some() {
-            ui::end_popover(cx);
+        if let Some((menu, _, _)) = self.context_menu.as_ref() {
+            ui::end_popover(menu.entity_id(), window, cx);
         }
         let focus_handle = self.focus_handle.clone();
         let weak = cx.weak_entity();
@@ -1956,7 +1989,7 @@ impl BrowserPanel {
         });
         window.focus(&menu.focus_handle(cx), cx);
         let subscription =
-            cx.subscribe_in(&menu, window, |this, _, _: &DismissEvent, window, cx| {
+            cx.subscribe_in(&menu, window, |this, menu, _: &DismissEvent, window, cx| {
                 if this
                     .context_menu
                     .as_ref()
@@ -1965,10 +1998,10 @@ impl BrowserPanel {
                     cx.focus_self(window);
                 }
                 this.context_menu.take();
-                ui::end_popover(cx);
+                ui::end_popover(menu.entity_id(), window, cx);
                 cx.notify();
             });
-        ui::begin_popover(cx);
+        ui::begin_popover(&menu, window, cx);
         self.context_menu = Some((menu, position, subscription));
     }
 
@@ -2315,15 +2348,17 @@ impl BrowserPanel {
             }
         };
         #[cfg(target_os = "windows")]
-        if let Some(webview) = self.active_native_webview() {
-            if let Err(error) = webview.navigate(&url) {
+        {
+            if let Some(webview) = self.active_native_webview()
+                && let Err(error) = webview.navigate(&url)
+            {
                 if let Some(tab) = self.active_tab_mut() {
                     tab.status = format!("Falha no navegador: {error:#}");
                 }
                 cx.notify();
                 return;
             }
-            self.set_native_visibility(true, cx);
+            let ready = self.active_native_webview().is_some();
             if let Some(tab) = self.active_tab_mut() {
                 if let Some(mut page) = tab.page.clone() {
                     page.url = url.clone();
@@ -2332,128 +2367,135 @@ impl BrowserPanel {
                 tab.current_url = url.clone();
                 tab.title.clear();
                 tab.status = url;
-                tab.loading = false;
+                tab.loading = !ready;
             }
-            self.sync_address_bar(window, cx);
+            self.set_native_visibility(true, cx);
+            self.reset_address_bar(window, cx);
             cx.notify();
             return;
         }
-        let tab_index = self.active_tab;
-        let endpoint = default_endpoint();
-        let existing_client = self.client.clone();
-        let existing_page = self.active_page();
-        let should_start_screencast = existing_page
-            .as_ref()
-            .map(|page| !self.screencast_tasks.contains_key(&page.target_id))
-            .unwrap_or(true);
-        let viewport = self.content_bounds.map(|bounds| {
-            (
-                f32::from(bounds.size.width).round().max(1.0) as u32,
-                f32::from(bounds.size.height).round().max(1.0) as u32,
-            )
-        });
-        if let Some(tab) = self.active_tab_mut() {
-            tab.status = if existing_page.is_some() {
-                "Navegando...".to_string()
-            } else {
-                format!("Iniciando o navegador em {endpoint}...")
-            };
-            tab.loading = true;
-        }
-        let task = gpui_tokio::Tokio::spawn_result(cx, async move {
-            let client = match existing_client {
-                Some(client) => client,
-                None => match CdpClient::connect(&endpoint).await {
-                    Ok(client) => client,
-                    Err(connect_error) => CdpClient::launch_and_connect()
-                        .await
-                        .with_context(|| format!("{connect_error:#}"))?,
-                },
-            };
-            let events = client.subscribe();
-            let download_dir = browser_download_dir()?;
-            client.set_download_behavior(&download_dir).await?;
-            let page = match existing_page {
-                Some(page) => {
-                    let mut page = page;
-                    client.navigate(&mut page, &url).await?;
-                    page
-                }
-                None => client.create_page(&url).await?,
-            };
-            if let Some((width, height)) = viewport {
-                client.set_viewport(&page, width, height).await?;
+        #[cfg(not(target_os = "windows"))]
+        {
+            let tab_index = self.active_tab;
+            let endpoint = default_endpoint();
+            let existing_client = self.client.clone();
+            let existing_page = self.active_page();
+            let should_start_screencast = existing_page
+                .as_ref()
+                .map(|page| !self.screencast_tasks.contains_key(&page.target_id))
+                .unwrap_or(true);
+            let viewport = self.content_bounds.map(|bounds| {
+                (
+                    f32::from(bounds.size.width).round().max(1.0) as u32,
+                    f32::from(bounds.size.height).round().max(1.0) as u32,
+                )
+            });
+            if let Some(tab) = self.active_tab_mut() {
+                tab.status = if existing_page.is_some() {
+                    "Navegando...".to_string()
+                } else {
+                    format!("Iniciando o navegador em {endpoint}...")
+                };
+                tab.loading = true;
             }
-            let screenshot = match client.capture_screenshot(&page).await {
-                Ok(screenshot) => screenshot,
-                Err(initial_error) => {
-                    client.settle_page(&page).await.with_context(|| {
-                        format!("initial browser screenshot failed: {initial_error:#}")
-                    })?;
-                    client.capture_screenshot(&page).await?
+            let task = gpui_tokio::Tokio::spawn_result(cx, async move {
+                let client = match existing_client {
+                    Some(client) => client,
+                    None => match CdpClient::connect(&endpoint).await {
+                        Ok(client) => client,
+                        Err(connect_error) => CdpClient::launch_and_connect()
+                            .await
+                            .with_context(|| format!("{connect_error:#}"))?,
+                    },
+                };
+                let events = client.subscribe();
+                let download_dir = browser_download_dir()?;
+                client.set_download_behavior(&download_dir).await?;
+                let page = match existing_page {
+                    Some(page) => {
+                        let mut page = page;
+                        client.navigate(&mut page, &url).await?;
+                        page
+                    }
+                    None => client.create_page(&url).await?,
+                };
+                if let Some((width, height)) = viewport {
+                    client.set_viewport(&page, width, height).await?;
                 }
-            };
-            let screencast = if should_start_screencast {
-                match client.start_screencast(&page).await {
-                    Ok(events) => Some(events),
+                let screenshot = match client.capture_screenshot(&page).await {
+                    Ok(screenshot) => screenshot,
+                    Err(initial_error) => {
+                        client.settle_page(&page).await.with_context(|| {
+                            format!("initial browser screenshot failed: {initial_error:#}")
+                        })?;
+                        client.capture_screenshot(&page).await?
+                    }
+                };
+                let screencast = if should_start_screencast {
+                    match client.start_screencast(&page).await {
+                        Ok(events) => Some(events),
+                        Err(error) => {
+                            tracing::debug!("failed to start browser screencast: {error:#}");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                Ok(BrowserNavigation {
+                    client,
+                    page,
+                    screenshot,
+                    screencast,
+                    events,
+                })
+            });
+            self.navigation_task =
+                Some(cx.spawn_in(window, async move |this, cx| match task.await {
+                    Ok(navigation) => {
+                        if let Err(error) = this.update_in(cx, |this, window, cx| {
+                            let client = navigation.client.clone();
+                            let page = navigation.page.clone();
+                            this.client = Some(client.clone());
+                            if let Some(tab) = this.tabs.get_mut(tab_index) {
+                                tab.page = Some(page.clone());
+                                tab.title.clear();
+                                tab.image = Some(Arc::new(Image::from_bytes(
+                                    ImageFormat::Png,
+                                    navigation.screenshot,
+                                )));
+                                tab.status = page.url.clone();
+                                tab.loading = false;
+                            }
+                            if this.active_tab == tab_index {
+                                this.sync_address_bar(window, cx);
+                                this.sync_history(tab_index, window, cx);
+                            }
+                            if let Some(events) = navigation.screencast {
+                                this.start_screencast(client, page.clone(), events, window, cx);
+                            }
+                            if this.download_events_task.is_none() {
+                                this.start_download_events(navigation.events, page, window, cx);
+                            }
+                            cx.notify();
+                        }) {
+                            tracing::debug!("browser navigation UI update failed: {error:#}");
+                        }
+                    }
                     Err(error) => {
-                        tracing::debug!("failed to start browser screencast: {error:#}");
-                        None
+                        if let Err(update_error) = this.update(cx, |this, cx| {
+                            if let Some(tab) = this.tabs.get_mut(tab_index) {
+                                tab.status = format!("Falha no navegador: {error:#}");
+                            }
+                            cx.notify();
+                        }) {
+                            tracing::debug!(
+                                "browser navigation error UI update failed: {update_error:#}"
+                            );
+                        }
                     }
-                }
-            } else {
-                None
-            };
-            Ok(BrowserNavigation {
-                client,
-                page,
-                screenshot,
-                screencast,
-                events,
-            })
-        });
-        self.navigation_task = Some(cx.spawn_in(window, async move |this, cx| match task.await {
-            Ok(navigation) => {
-                if let Err(error) = this.update_in(cx, |this, window, cx| {
-                    let client = navigation.client.clone();
-                    let page = navigation.page.clone();
-                    this.client = Some(client.clone());
-                    if let Some(tab) = this.tabs.get_mut(tab_index) {
-                        tab.page = Some(page.clone());
-                        tab.title.clear();
-                        tab.image = Some(Arc::new(Image::from_bytes(
-                            ImageFormat::Png,
-                            navigation.screenshot,
-                        )));
-                        tab.status = page.url.clone();
-                        tab.loading = false;
-                    }
-                    if this.active_tab == tab_index {
-                        this.sync_address_bar(window, cx);
-                        this.sync_history(tab_index, window, cx);
-                    }
-                    if let Some(events) = navigation.screencast {
-                        this.start_screencast(client, page.clone(), events, window, cx);
-                    }
-                    if this.download_events_task.is_none() {
-                        this.start_download_events(navigation.events, page, window, cx);
-                    }
-                    cx.notify();
-                }) {
-                    tracing::debug!("browser navigation UI update failed: {error:#}");
-                }
-            }
-            Err(error) => {
-                if let Err(update_error) = this.update(cx, |this, cx| {
-                    if let Some(tab) = this.tabs.get_mut(tab_index) {
-                        tab.status = format!("Falha no navegador: {error:#}");
-                    }
-                    cx.notify();
-                }) {
-                    tracing::debug!("browser navigation error UI update failed: {update_error:#}");
-                }
-            }
-        }));
+                }));
+        }
     }
 
     fn start_screencast(
@@ -2913,7 +2955,19 @@ impl Render for BrowserPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.ensure_address_bar(window, cx);
         #[cfg(target_os = "windows")]
-        self.sync_native_visibility_for_popovers(cx);
+        {
+            if self._native_occlusion_subscription.is_none() {
+                self._native_occlusion_subscription =
+                    Some(cx.observe_global_in::<ui::NativeSurfaceOcclusions>(
+                        window,
+                        |this, window, cx| {
+                            this.sync_native_occlusions(window, cx);
+                            window.refresh();
+                        },
+                    ));
+            }
+            self.sync_native_occlusions(window, cx);
+        }
         #[cfg(target_os = "windows")]
         // Start CDP capture for blank tabs too. An agent can navigate the
         // visible WebView2 before the browser panel has a URL of its own;
@@ -2943,9 +2997,8 @@ impl Render for BrowserPanel {
         };
         let new_tab = self.active_url() == "about:blank";
         #[cfg(target_os = "windows")]
-        let native_browser_active = self.active_native_webview().is_some()
-            && self.native_webview_visible
-            && !self.native_webview_hidden_for_popover;
+        let native_browser_active =
+            self.active_native_webview().is_some() && self.native_webview_visible;
         #[cfg(not(target_os = "windows"))]
         let native_browser_active = false;
         let tab_labels = self
@@ -2996,14 +3049,13 @@ impl Render for BrowserPanel {
             .bg(cx.theme().colors().panel_background)
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
+                cx.listener(|this, _, _window, cx| {
                     // Keep native WebView2 above the page only while the browser is
                     // the active surface. When the screenshot fallback is clicked,
                     // restore the interactive WebView2 child before dispatching input.
                     if this.active_url() != "about:blank" {
                         this.set_native_visibility(true, cx);
                     }
-                    window.activate_window();
                     cx.stop_propagation();
                 }),
             )
@@ -3031,16 +3083,27 @@ impl Render for BrowserPanel {
                     .p_2()
                     .border_b_1()
                     .border_color(cx.theme().colors().border)
-                    .on_action(cx.listener(|this, _: &menu::Confirm, window, cx| {
-                        let address_bar_focused =
-                            this.address_bar.as_ref().is_some_and(|address_bar| {
-                                address_bar
-                                    .read(cx)
-                                    .focus_handle(cx)
-                                    .contains_focused(window, cx)
-                            });
-                        if address_bar_focused {
+                    .capture_action(cx.listener(
+                        |this, _: &editor::actions::Newline, window, cx| {
+                            let address_bar_focused =
+                                this.address_bar.as_ref().is_some_and(|address_bar| {
+                                    address_bar
+                                        .read(cx)
+                                        .focus_handle(cx)
+                                        .contains_focused(window, cx)
+                                });
+                            if address_bar_focused {
+                                this.navigate(window, cx);
+                                cx.stop_propagation();
+                            }
+                        },
+                    ))
+                    .capture_action(cx.listener(|this, _: &menu::Confirm, window, cx| {
+                        if this.address_bar.as_ref().is_some_and(|field| {
+                            field.read(cx).focus_handle(cx).contains_focused(window, cx)
+                        }) {
                             this.navigate(window, cx);
+                            cx.stop_propagation();
                         }
                     }))
                     .capture_key_down(cx.listener(
@@ -3088,7 +3151,16 @@ impl Render for BrowserPanel {
                             })),
                     )
                     .when_some(address_bar, |this, address_bar| {
-                        this.child(div().flex_1().min_w_0().child(address_bar))
+                        let focus = address_bar.read(cx).focus_handle(cx);
+                        this.child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                    window.focus(&focus, cx);
+                                })
+                                .child(address_bar),
+                        )
                     })
                     .when_some(download_status, |this, status| {
                         this.child(
@@ -3455,7 +3527,7 @@ impl Render for BrowserPanel {
                     anchored()
                         .position(*position)
                         .anchor(gpui::Anchor::TopLeft)
-                        .child(menu.clone()),
+                        .child(ui::native_surface_menu(menu.clone())),
                 )
                 .with_priority(1)
             }))

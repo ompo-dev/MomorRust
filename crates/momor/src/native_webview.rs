@@ -6,7 +6,11 @@
 #![cfg(target_os = "windows")]
 
 use anyhow::{Context as _, Result, anyhow};
-use std::{cell::RefCell, path::Path, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    path::Path,
+    rc::Rc,
+};
 use webview2_com::{
     CoTaskMemPWSTR, CoreWebView2EnvironmentOptions, CreateCoreWebView2ControllerCompletedHandler,
     CreateCoreWebView2EnvironmentCompletedHandler, DocumentTitleChangedEventHandler,
@@ -15,18 +19,65 @@ use webview2_com::{
 use windows_062::{
     Win32::{
         Foundation::{HWND, RECT},
+        Graphics::Gdi::{CombineRgn, CreateRectRgn, DeleteObject, HRGN, RGN_DIFF, SetWindowRgn},
         System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx},
-        UI::Input::KeyboardAndMouse::SetFocus,
+        UI::{
+            Input::KeyboardAndMouse::{GetFocus, SetFocus},
+            WindowsAndMessaging::{
+                CreateWindowExW, DestroyWindow, IsChild, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE,
+                SWP_NOZORDER, SetWindowPos, ShowWindow, WINDOW_EX_STYLE, WS_CHILD, WS_CLIPCHILDREN,
+                WS_CLIPSIBLINGS,
+            },
+        },
     },
-    core::{BOOL, Interface, PCWSTR},
+    core::{BOOL, Interface, PCWSTR, w},
 };
 
 pub struct NativeWebView {
     parent: HWND,
+    host: Rc<ChildHost>,
+    visible: Cell<bool>,
     controller: ICoreWebView2Controller,
     webview: ICoreWebView2,
     source_changed_token: i64,
     title_changed_token: i64,
+}
+
+struct ChildHost {
+    window: HWND,
+    bounds: Cell<(i32, i32, i32, i32)>,
+    occlusions: RefCell<Vec<(i32, i32, i32, i32)>>,
+}
+
+impl Drop for ChildHost {
+    fn drop(&mut self) {
+        if let Err(error) = unsafe { DestroyWindow(self.window) } {
+            tracing::debug!("failed to destroy browser host: {error}");
+        }
+    }
+}
+
+struct OwnedRegion(Option<HRGN>);
+
+impl OwnedRegion {
+    fn rectangle(left: i32, top: i32, right: i32, bottom: i32) -> Result<Self> {
+        let region = unsafe { CreateRectRgn(left, top, right, bottom) };
+        anyhow::ensure!(
+            !region.is_invalid(),
+            "failed to allocate browser clipping region"
+        );
+        Ok(Self(Some(region)))
+    }
+}
+
+impl Drop for OwnedRegion {
+    fn drop(&mut self) {
+        if let Some(region) = self.0.take()
+            && !unsafe { DeleteObject(region.into()) }.as_bool()
+        {
+            tracing::error!("failed to release browser clipping region");
+        }
+    }
 }
 
 pub fn debugging_port() -> u16 {
@@ -48,6 +99,30 @@ impl NativeWebView {
         unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }
             .ok()
             .context("falha ao inicializar COM para o WebView2")?;
+
+        // A dedicated child host gives us HWND clipping without changing the
+        // WebView document's visibility or its media lifecycle for GPUI menus.
+        let host = Rc::new(ChildHost {
+            window: unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE::default(),
+                    w!("STATIC"),
+                    w!("Momor Browser"),
+                    WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+                    0,
+                    0,
+                    1,
+                    1,
+                    Some(parent),
+                    None,
+                    None,
+                    None,
+                )
+            }
+            .context("failed to create browser child host")?,
+            bounds: Cell::new((0, 0, 1, 1)),
+            occlusions: RefCell::new(Vec::new()),
+        });
 
         let on_ready = Rc::new(RefCell::new(Some(
             Box::new(on_ready) as Box<dyn FnOnce(Result<Self>)>
@@ -79,6 +154,8 @@ impl NativeWebView {
                 };
 
                 let controller_ready = environment_ready.clone();
+                let controller_parent = host.window;
+                let host = host.clone();
                 let controller_handler = CreateCoreWebView2ControllerCompletedHandler::create(
                     Box::new(move |error_code, controller| {
                         if let Err(error) = error_code {
@@ -156,12 +233,14 @@ impl NativeWebView {
                                     .Settings()?
                                     .SetAreDevToolsEnabled(true)
                                     .context("não foi possível habilitar o DevTools")?;
-                                controller
-                                    .SetIsVisible(true)
-                                    .context("não foi possível exibir o WebView2")?;
+                                controller.SetIsVisible(false).context(
+                                    "não foi possível inicializar a visibilidade do WebView2",
+                                )?;
                             }
                             Ok(Self {
                                 parent,
+                                host: host.clone(),
+                                visible: Cell::new(false),
                                 controller,
                                 webview,
                                 source_changed_token,
@@ -172,7 +251,9 @@ impl NativeWebView {
                         Ok(())
                     }),
                 );
-                unsafe { environment.CreateCoreWebView2Controller(parent, &controller_handler) }
+                unsafe {
+                    environment.CreateCoreWebView2Controller(controller_parent, &controller_handler)
+                }
             },
         ));
 
@@ -192,30 +273,87 @@ impl NativeWebView {
     }
 
     pub fn set_bounds(&self, left: i32, top: i32, width: i32, height: i32) -> Result<()> {
+        let bounds = (left, top, width.max(1), height.max(1));
         unsafe {
+            SetWindowPos(
+                self.host.window,
+                None,
+                left,
+                top,
+                bounds.2,
+                bounds.3,
+                SWP_NOACTIVATE | SWP_NOZORDER,
+            )
+            .context("failed to position browser host")?;
             self.controller
                 .SetBounds(RECT {
-                    left,
-                    top,
-                    right: left + width.max(1),
-                    bottom: top + height.max(1),
+                    left: 0,
+                    top: 0,
+                    right: bounds.2,
+                    bottom: bounds.3,
                 })
                 .context("não foi possível redimensionar o WebView2")?;
         }
+        self.host.bounds.set(bounds);
+        self.apply_occlusions(&self.host.occlusions.borrow())?;
+        Ok(())
+    }
+
+    pub fn set_occlusions(&self, rectangles: &[(i32, i32, i32, i32)]) -> Result<()> {
+        if self.host.occlusions.borrow().as_slice() == rectangles {
+            return Ok(());
+        }
+        self.apply_occlusions(rectangles)?;
+        *self.host.occlusions.borrow_mut() = rectangles.to_vec();
+        Ok(())
+    }
+
+    fn apply_occlusions(&self, rectangles: &[(i32, i32, i32, i32)]) -> Result<()> {
+        let (left, top, width, height) = self.host.bounds.get();
+        if rectangles.is_empty() {
+            anyhow::ensure!(
+                unsafe { SetWindowRgn(self.host.window, None, true) } != 0,
+                "failed to clear browser clipping region"
+            );
+            return Ok(());
+        }
+        let mut region = OwnedRegion::rectangle(0, 0, width, height)?;
+        for &(x1, y1, x2, y2) in rectangles {
+            let cutout = OwnedRegion::rectangle(x1 - left, y1 - top, x2 - left, y2 - top)?;
+            anyhow::ensure!(
+                unsafe { CombineRgn(region.0, region.0, cutout.0, RGN_DIFF) }.0 != 0,
+                "failed to combine browser clipping regions"
+            );
+        }
+        anyhow::ensure!(
+            unsafe { SetWindowRgn(self.host.window, region.0, true) } != 0,
+            "failed to apply browser clipping region"
+        );
+        // SetWindowRgn owns the region after success.
+        region.0.take();
         Ok(())
     }
 
     pub fn set_visible(&self, visible: bool) -> Result<()> {
+        if self.visible.get() == visible {
+            return Ok(());
+        }
         unsafe {
+            let focus = GetFocus();
+            let browser_focused =
+                focus == self.host.window || IsChild(self.host.window, focus).as_bool();
             self.controller
                 .SetIsVisible(visible)
                 .context("não foi possível alterar a visibilidade do WebView2")?;
-            if !visible {
+            let _previous_visibility =
+                ShowWindow(self.host.window, if visible { SW_SHOWNA } else { SW_HIDE });
+            if !visible && browser_focused {
                 // WebView2 is a native child HWND. Hiding its controller does not
                 // automatically return keyboard focus to GPUI.
                 SetFocus(Some(self.parent)).context("não foi possível devolver o foco ao Momor")?;
             }
         }
+        self.visible.set(visible);
         Ok(())
     }
 
@@ -293,11 +431,18 @@ fn complete(
 impl Drop for NativeWebView {
     fn drop(&mut self) {
         unsafe {
-            let _ = self.webview.remove_SourceChanged(self.source_changed_token);
-            let _ = self
+            if let Err(error) = self.webview.remove_SourceChanged(self.source_changed_token) {
+                tracing::debug!("failed to remove browser source listener: {error}");
+            }
+            if let Err(error) = self
                 .webview
-                .remove_DocumentTitleChanged(self.title_changed_token);
-            let _ = self.controller.Close();
+                .remove_DocumentTitleChanged(self.title_changed_token)
+            {
+                tracing::debug!("failed to remove browser title listener: {error}");
+            }
+            if let Err(error) = self.controller.Close() {
+                tracing::debug!("failed to close browser controller: {error}");
+            }
         }
     }
 }

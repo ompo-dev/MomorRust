@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Momor Browser Regression</title>
+<style>
+  body { margin: 24px; background: #fff; color: #151515; font: 16px system-ui; }
+  video { display: block; width: 100%; max-width: 640px; aspect-ratio: 16/9; background: #111; }
+  input, button { font: inherit; margin: 8px 0; padding: 8px; }
+</style>
+<h1>Momor Browser Regression</h1>
+<div role="link" tabindex="0" aria-label="Custom link" onclick="document.querySelector('#result').textContent = 'custom link clicked'">Custom link</div>
+<form onsubmit="event.preventDefault(); document.querySelector('#result').textContent = document.querySelector('input').value">
+  <input aria-label="Test input" placeholder="Test input">
+  <button type="submit">Submit</button>
+</form>
+<button onclick="document.querySelector('#result').textContent = 'button clicked'">Test button</button>
+<output id="result"></output>
+<iframe title="Embedded form" src="./momor-browser-frame.html"></iframe>
+<video autoplay muted playsinline controls></video>
+<script>
+  const frameUrl = new URL(location.href).searchParams.get('frame');
+  if (frameUrl) document.querySelector('iframe').src = frameUrl;
+  window.visibilityChanges = 0;
+  document.addEventListener('visibilitychange', () => { window.visibilityChanges++; });
+  const canvas = document.createElement('canvas');
+  canvas.width = 640;
+  canvas.height = 360;
+  const context = canvas.getContext('2d');
+  window.framesDrawn = 0;
+  function draw() {
+    context.fillStyle = '#087f5b';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = '#fff';
+    context.font = '32px system-ui';
+    context.fillText('Live frame ' + (++window.framesDrawn), 30, 180);
+    requestAnimationFrame(draw);
+  }
+  draw();
+  document.querySelector('video').srcObject = canvas.captureStream(30);
+</script>
+</html>

@@ -9670,6 +9670,7 @@ dependencies = [
  "collections",
  "command_palette",
  "component",
+ "context_server",
  "copilot_chat",
  "crashes",
  "db",

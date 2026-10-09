@@ -1,10 +1,11 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use gpui::{
     Anchor, AnyElement, AnyView, App, Bounds, DismissEvent, DispatchPhase, Element, ElementId,
-    Entity, Focusable as _, Global, GlobalElementId, HitboxBehavior, HitboxId, InteractiveElement,
-    IntoElement, LayoutId, Length, ManagedView, MouseDownEvent, ParentElement, Pixels, Point,
-    Style, Window, anchored, deferred, div, point, prelude::FluentBuilder, px, size,
+    Entity, EntityId, Focusable as _, Global, GlobalElementId, HitboxBehavior, HitboxId,
+    InteractiveElement, IntoElement, LayoutId, Length, ManagedView, MouseDownEvent, ParentElement,
+    Pixels, Point, Style, Window, WindowId, anchored, deferred, div, point, prelude::FluentBuilder,
+    px, size,
 };
 
 use crate::prelude::*;
@@ -40,28 +41,68 @@ where
 
 pub struct PopoverMenuHandle<M>(Rc<RefCell<Option<PopoverMenuHandleState<M>>>>);
 
-/// Tracks GPUI popovers so native child surfaces can yield their pixels while a
-/// menu is open. A native WebView2 child is composited above GPUI's paint tree,
-/// so without this small bit of coordination a popover could be clipped by it.
+/// Native child windows must yield only the pixels covered by a GPUI menu,
+/// not hide their entire document (which also interrupts video rendering).
 #[derive(Default)]
-pub struct OpenPopoverMenus {
-    count: usize,
+pub struct NativeSurfaceOcclusions {
+    bounds: HashMap<(WindowId, EntityId), Bounds<Pixels>>,
 }
 
-impl Global for OpenPopoverMenus {}
+impl Global for NativeSurfaceOcclusions {}
 
-pub fn popover_menus_open(cx: &App) -> bool {
-    cx.try_global::<OpenPopoverMenus>()
-        .is_some_and(|state| state.count > 0)
+pub fn native_surface_occlusions(window: &Window, cx: &App) -> Vec<Bounds<Pixels>> {
+    cx.try_global::<NativeSurfaceOcclusions>()
+        .map(|state| {
+            state
+                .bounds
+                .iter()
+                .filter(|((window_id, _), _)| *window_id == window.window_handle().window_id())
+                .map(|(_, bounds)| *bounds)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
-pub fn begin_popover(cx: &mut App) {
-    cx.default_global::<OpenPopoverMenus>().count += 1;
+pub fn begin_popover<M: 'static>(menu: &Entity<M>, window: &Window, cx: &mut App) {
+    let key = (window.window_handle().window_id(), menu.entity_id());
+    cx.observe_release(menu, move |_, cx| remove_occlusion(key, cx))
+        .detach();
 }
 
-pub fn end_popover(cx: &mut App) {
-    let state = cx.global_mut::<OpenPopoverMenus>();
-    state.count = state.count.saturating_sub(1);
+pub fn end_popover(menu_id: EntityId, window: &Window, cx: &mut App) {
+    remove_occlusion((window.window_handle().window_id(), menu_id), cx);
+}
+
+fn remove_occlusion(key: (WindowId, EntityId), cx: &mut App) {
+    if cx
+        .try_global::<NativeSurfaceOcclusions>()
+        .is_some_and(|state| state.bounds.contains_key(&key))
+    {
+        cx.global_mut::<NativeSurfaceOcclusions>()
+            .bounds
+            .remove(&key);
+    }
+}
+
+pub fn native_surface_menu<M: ManagedView>(menu: Entity<M>) -> impl IntoElement {
+    let menu_id = menu.entity_id();
+    div()
+        .occlude()
+        .child(menu)
+        .on_children_prepainted(move |children, window, cx| {
+            if let Some(bounds) = children.first().copied() {
+                let key = (window.window_handle().window_id(), menu_id);
+                if cx
+                    .try_global::<NativeSurfaceOcclusions>()
+                    .and_then(|state| state.bounds.get(&key))
+                    != Some(&bounds)
+                {
+                    cx.default_global::<NativeSurfaceOcclusions>()
+                        .bounds
+                        .insert(key, bounds);
+                }
+            }
+        })
 }
 
 impl<M> Clone for PopoverMenuHandle<M> {
@@ -316,7 +357,7 @@ fn show_menu<M: ManagedView>(
                 window.focus(previous_focus_handle, cx);
             }
             *menu2.borrow_mut() = None;
-            end_popover(cx);
+            end_popover(modal.entity_id(), window, cx);
             window.refresh();
         })
         .detach();
@@ -333,8 +374,8 @@ fn show_menu<M: ManagedView>(
             window.focus(&focus_handle, cx);
         });
     });
+    begin_popover(&new_menu, window, cx);
     *menu.borrow_mut() = Some(new_menu);
-    begin_popover(cx);
     window.refresh();
 
     if let Some(on_open) = on_open {
@@ -407,7 +448,7 @@ impl<M: ManagedView> Element for PopoverMenu<M> {
                         anchored =
                             anchored.position(child_bounds.corner(self.resolved_attach()) + offset);
                     }
-                    let mut element = deferred(anchored.child(div().occlude().child(menu.clone())))
+                    let mut element = deferred(anchored.child(native_surface_menu(menu.clone())))
                         .with_priority(1)
                         .into_any();
 

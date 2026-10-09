@@ -613,6 +613,7 @@ fn main() {
         #[cfg(target_os = "macos")]
         momor::move_to_applications::init(cx);
         project::Project::init(&client, cx);
+        browser_mcp::init(cx);
         // ponytail: chat-only — debugger removido
         client::init(&client, cx);
         feature_flags::FeatureFlagStore::init(cx);

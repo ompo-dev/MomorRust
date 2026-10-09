@@ -42,6 +42,54 @@ use crate::GEMINI_ID;
 pub const GEMINI_TERMINAL_AUTH_METHOD_ID: &str = "spawn-gemini-cli";
 const MAX_DEBUG_BACKLOG_MESSAGES: usize = 2000;
 
+const MOMOR_BROWSER_INSTRUCTIONS: &str = "<momor_browser_integration>\n\
+You are running inside Momor. The browser visible beside this chat and any attached browser tab belong to Momor, not Codex's in-app browser or BrowserOS.\n\
+For browser tasks use the momor-browser MCP server supplied to this session. Discover its tools if deferred. Start with browser_tabs, then browser_accessibility or browser_dom. Use the attached tab's URL/title to select its target_id; otherwise use the visible active tab. Pass target_id to subsequent calls when operating an attached tab. Use browser_click, browser_fill, browser_type, browser_press, browser_scroll, browser_navigate, and browser_evaluate to act.\n\
+Do not load the browseros-neo skill, follow its default-browser instruction, call cua_repl/browser control tools, or ask the user to open BrowserOS Neo. Those integrations do not expose Momor's WebView2 tabs. This explicit Momor routing takes precedence over generic browser skill defaults and prior conversation instructions to use Neo.\n\
+DOM/accessibility inspection is text, not a screenshot. Capture browser_screenshot only when visual inspection is necessary (for example identifying an unlabelled thumbnail).\n\
+Preserve the user's live activity: inspect before acting, never reload, close/reopen, or navigate an existing activity just to diagnose it. Navigation requires explicit user authorization and allow_navigation=true. Use browser_frames and frame_id for embedded content; never infer iframe controls from the parent DOM. Reinspect after each action and never reuse stale refs. For quizzes/forms, confirm the current question and entered value after each advance. Tools start in inspection_only; use browser_set_mode actions only for a user-requested action after inspection.\n\
+If Momor tools are not exposed or fail, report the actual missing tool/error. Do not claim that an attachment grants control or silently switch to another browser.\n\
+</momor_browser_integration>";
+
+fn momor_codex_config(existing: Option<&str>, home: &std::path::Path) -> Result<String> {
+    let mut config: serde_json::Value = existing
+        .map(serde_json::from_str)
+        .transpose()
+        .context("invalid CODEX_CONFIG for the Momor agent")?
+        .unwrap_or_else(|| serde_json::json!({}));
+    anyhow::ensure!(config.is_object(), "CODEX_CONFIG must be an object");
+    anyhow::ensure!(
+        config["skills"].is_null() || config["skills"].is_object(),
+        "CODEX_CONFIG.skills must be an object"
+    );
+    anyhow::ensure!(
+        config["skills"]["config"].is_null() || config["skills"]["config"].is_array(),
+        "CODEX_CONFIG.skills.config must be an array"
+    );
+    let instructions = config["developer_instructions"]
+        .as_str()
+        .unwrap_or_default();
+    config["developer_instructions"] = if instructions.contains(MOMOR_BROWSER_INSTRUCTIONS) {
+        instructions.to_string().into()
+    } else {
+        format!("{instructions}\n{MOMOR_BROWSER_INSTRUCTIONS}").into()
+    };
+    let skill_path = home.join(".agents/skills/browseros-neo");
+    let skill_path = skill_path.to_string_lossy().replace('\\', "/");
+    let mut skills = config["skills"]["config"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    skills.retain(|skill| {
+        skill["path"]
+            .as_str()
+            .is_none_or(|path| path.replace('\\', "/").trim_end_matches("/SKILL.md") != skill_path)
+    });
+    skills.push(serde_json::json!({"path": skill_path, "enabled": false}));
+    config["skills"]["config"] = skills.into();
+    serde_json::to_string(&config).context("failed to configure the Momor Codex agent")
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AcpDebugMessageDirection {
     Incoming,
@@ -682,7 +730,7 @@ impl AcpConnection {
     pub async fn stdio(
         agent_id: AgentId,
         project: Entity<Project>,
-        command: AgentServerCommand,
+        mut command: AgentServerCommand,
         agent_server_store: WeakEntity<AgentServerStore>,
         default_mode: Option<acp::SessionModeId>,
         default_model: Option<acp::ModelId>,
@@ -696,6 +744,20 @@ impl AcpConnection {
                 .next()
                 .cloned()
         });
+        if agent_id.as_ref() == crate::CODEX_ID
+            && project.read_with(cx, |project, _cx| project.is_local())
+        {
+            let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+                .context("cannot locate the local Codex skills directory")?;
+            let env = command.env.get_or_insert_with(HashMap::default);
+            let inherited_config = std::env::var("CODEX_CONFIG").ok();
+            let existing = env
+                .get("CODEX_CONFIG")
+                .map(String::as_str)
+                .or(inherited_config.as_deref());
+            let config = momor_codex_config(existing, std::path::Path::new(&home))?;
+            env.insert("CODEX_CONFIG".into(), config);
+        }
         let original_command = command.clone();
         let (path, args, env) = project
             .read_with(cx, |project, cx| {
@@ -1712,12 +1774,15 @@ impl AgentConnection for AcpConnection {
     fn prompt(
         &self,
         _id: acp_thread::UserMessageId,
-        params: acp::PromptRequest,
+        mut params: acp::PromptRequest,
         cx: &mut App,
     ) -> Task<Result<acp::PromptResponse>> {
         let conn = self.connection.clone();
         let sessions = self.sessions.clone();
         let session_id = params.session_id.clone();
+        // Transport-only context: keep the user's visible message and badges
+        // intact while overriding external agents' generic browser defaults.
+        params.prompt.insert(0, MOMOR_BROWSER_INSTRUCTIONS.into());
         cx.foreground_executor().spawn(async move {
             let result = into_foreground_future(conn.send_request(params)).await;
 
@@ -2318,6 +2383,38 @@ pub mod test_support {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn momor_codex_config_preserves_settings_and_disables_only_neo() -> Result<()> {
+        let config: serde_json::Value = serde_json::from_str(&momor_codex_config(
+            Some(
+                r#"{"model":"existing-model","developer_instructions":"Keep existing instructions","skills":{"config":[{"path":"/home/test/.agents/skills/other","enabled":true}]}}"#,
+            ),
+            std::path::Path::new("/home/test"),
+        )?)?;
+        assert_eq!(config["model"], "existing-model");
+        assert!(
+            config["developer_instructions"]
+                .as_str()
+                .is_some_and(|text| text.starts_with("Keep existing instructions")
+                    && text.contains("momor-browser"))
+        );
+        assert_eq!(config["skills"]["config"][0]["enabled"], true);
+        assert_eq!(
+            config["skills"]["config"][1]["path"],
+            "/home/test/.agents/skills/browseros-neo"
+        );
+        assert_eq!(config["skills"]["config"][1]["enabled"], false);
+        let repeated: serde_json::Value = serde_json::from_str(&momor_codex_config(
+            Some(&serde_json::to_string(&config)?),
+            std::path::Path::new("/home/test"),
+        )?)?;
+        assert_eq!(repeated, config);
+        assert!(
+            momor_codex_config(Some("invalid json"), std::path::Path::new("/home/test")).is_err()
+        );
+        Ok(())
+    }
+
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
@@ -3138,13 +3235,16 @@ fn mcp_servers_for_project(project: &Entity<Project>, cx: &App) -> Vec<acp::McpS
         })
         .collect::<Vec<_>>();
 
-    if let Ok(command) = std::env::current_exe() {
+    if !servers.iter().any(
+        |server| matches!(server, acp::McpServer::Stdio(server) if server.name == "momor-browser"),
+    ) && let Ok(command) = std::env::current_exe()
+    {
         servers.push(acp::McpServer::Stdio(
             acp::McpServerStdio::new("momor-browser", command)
                 .args(vec!["--browser-mcp".to_string()])
                 .env(vec![acp::EnvVariable::new(
                     "MOMOR_BROWSER_CDP_PORT",
-                    "9224",
+                    std::env::var("MOMOR_BROWSER_CDP_PORT").unwrap_or_else(|_| "9224".into()),
                 )]),
         ));
     }

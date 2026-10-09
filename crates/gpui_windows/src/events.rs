@@ -454,6 +454,14 @@ impl WindowsWindowInner {
         button: MouseButton,
         lparam: LPARAM,
     ) -> Option<isize> {
+        // Native children can retain keyboard focus after GPUI gains logical
+        // focus. Return it before dispatching this parent's mouse event.
+        unsafe {
+            let focus = GetFocus();
+            if focus != handle && (focus.is_invalid() || IsChild(handle, focus).as_bool()) {
+                SetFocus(Some(handle)).log_err();
+            }
+        }
         unsafe { SetCapture(handle) };
 
         let Some(mut func) = self.state.callbacks.input.take() else {

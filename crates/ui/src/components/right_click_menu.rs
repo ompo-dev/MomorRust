@@ -1,12 +1,11 @@
 use std::{cell::RefCell, rc::Rc};
 
-use super::popover_menu::{begin_popover, end_popover};
+use super::popover_menu::{begin_popover, end_popover, native_surface_menu};
 
 use gpui::{
     Anchor, AnyElement, App, Bounds, DismissEvent, DispatchPhase, Element, ElementId, Entity,
-    Focusable as _, GlobalElementId, Hitbox, HitboxBehavior, InteractiveElement, IntoElement,
-    LayoutId, ManagedView, MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Window,
-    anchored, deferred, div, px,
+    Focusable as _, GlobalElementId, Hitbox, HitboxBehavior, IntoElement, LayoutId, ManagedView,
+    MouseButton, MouseDownEvent, ParentElement, Pixels, Point, Window, anchored, deferred, px,
 };
 
 pub struct RightClickMenu<M: ManagedView> {
@@ -143,7 +142,7 @@ impl<M: ManagedView> Element for RightClickMenu<M> {
                     }
                     anchored = anchored.position(*element_state.position.borrow());
 
-                    let mut element = deferred(anchored.child(div().occlude().child(menu.clone())))
+                    let mut element = deferred(anchored.child(native_surface_menu(menu.clone())))
                         .with_priority(1)
                         .into_any();
 
@@ -258,7 +257,7 @@ impl<M: ManagedView> Element for RightClickMenu<M> {
                                     window.focus(previous_focus_handle, cx);
                                 }
                                 *menu2.borrow_mut() = None;
-                                end_popover(cx);
+                                end_popover(modal.entity_id(), window, cx);
                                 window.refresh();
                             })
                             .detach();
@@ -275,8 +274,8 @@ impl<M: ManagedView> Element for RightClickMenu<M> {
                                 window.focus(&focus_handle, cx);
                             });
                         });
+                        begin_popover(&new_menu, window, cx);
                         *menu.borrow_mut() = Some(new_menu);
-                        begin_popover(cx);
                         *position.borrow_mut() = if let Some(child_bounds) = child_bounds {
                             if let Some(attach) = attach {
                                 child_bounds.corner(attach)

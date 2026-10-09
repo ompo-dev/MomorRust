@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Embedded Momor Form</title>
+<h2 id="question">Question 1</h2>
+<form onsubmit="event.preventDefault(); document.querySelector('output').textContent = document.querySelector('input').value; document.querySelector('#question').textContent = 'Question 2'">
+  <input aria-label="Frame input">
+  <button type="submit">Next question</button>
+</form>
+<output></output>
+</html>

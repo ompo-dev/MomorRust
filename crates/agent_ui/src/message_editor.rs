@@ -1003,7 +1003,9 @@ impl MessageEditor {
                             acp::ContentBlock::ResourceLink(acp::ResourceLink::new(
                                 metadata.label.clone(),
                                 uri,
-                            ))
+                            ).description((kind.as_ref() == "browser").then_some(
+                                "Live Momor browser tab. Use momor-browser.browser_tabs to resolve this URL/title to target_id, then Momor's browser_* tools. This tab is not exposed through BrowserOS Neo or cua_repl.".to_string()
+                            )))
                         } else {
                             continue;
                         };
