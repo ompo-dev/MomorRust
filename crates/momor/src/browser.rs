@@ -1008,6 +1008,11 @@ pub struct BrowserPanel {
     saved_history: Vec<SavedBrowserPage>,
     last_saved_session: String,
     pending_session_save: Option<Task<Result<()>>>,
+    keep_pages_active: bool,
+    #[cfg(target_os = "windows")]
+    activity_policy_pending: usize,
+    #[cfg(target_os = "windows")]
+    activity_policy_error: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1115,6 +1120,11 @@ impl BrowserPanel {
             saved_history: session.history,
             last_saved_session: String::new(),
             pending_session_save: None,
+            keep_pages_active: session.keep_pages_active,
+            #[cfg(target_os = "windows")]
+            activity_policy_pending: 0,
+            #[cfg(target_os = "windows")]
+            activity_policy_error: None,
         }
     }
 
@@ -1148,6 +1158,7 @@ impl BrowserPanel {
                 .collect(),
             active_tab: self.active_tab,
             history: self.saved_history.clone(),
+            keep_pages_active: self.keep_pages_active,
             ..BrowserSession::default()
         };
         let value = match serde_json::to_string(&session) {
@@ -1445,6 +1456,7 @@ impl BrowserPanel {
             if let Err(error) = NativeWebView::create(
                 parent,
                 &embedded_storage_dir().join("webview2-profile"),
+                self.keep_pages_active,
                 on_url_changed,
                 on_title_changed,
                 move |result| {
@@ -1857,6 +1869,43 @@ impl BrowserPanel {
                 tracing::debug!("browser history entry UI update failed: {error:#}");
             }
         }));
+    }
+
+    #[cfg(target_os = "windows")]
+    fn toggle_keep_pages_active(&mut self, cx: &mut Context<Self>) {
+        if self.activity_policy_pending != 0 || self.native_webview_pending {
+            return;
+        }
+        self.keep_pages_active = !self.keep_pages_active;
+        self.activity_policy_error = None;
+        for tab in &self.tabs {
+            let Some(webview) = tab.native_webview.as_ref() else {
+                continue;
+            };
+            self.activity_policy_pending += 1;
+            let weak = cx.weak_entity();
+            let mut app = cx.to_async();
+            if let Err(error) =
+                webview.set_keep_pages_active(self.keep_pages_active, move |result| {
+                    if let Err(error) = weak.update(&mut app, |this, cx| {
+                        this.activity_policy_pending =
+                            this.activity_policy_pending.saturating_sub(1);
+                        if let Err(error) = result {
+                            tracing::error!("Failed to update browser page activity: {error:#}");
+                            this.activity_policy_error = Some(format!("{error:#}"));
+                        }
+                        cx.notify();
+                    }) {
+                        tracing::debug!("Failed to finish browser page activity update: {error:#}");
+                    }
+                })
+            {
+                self.activity_policy_pending = self.activity_policy_pending.saturating_sub(1);
+                tracing::error!("Failed to request browser page activity update: {error:#}");
+                self.activity_policy_error = Some(format!("{error:#}"));
+            }
+        }
+        cx.notify();
     }
 
     fn open_context_menu(
@@ -3117,6 +3166,24 @@ impl Render for BrowserPanel {
         } else {
             IconName::Star
         };
+        #[cfg(target_os = "windows")]
+        let activity_control = Some(
+            IconButton::new("browser-page-activity", IconName::EyeOff)
+                .toggle_state(self.keep_pages_active && self.activity_policy_error.is_none())
+                .disabled(self.activity_policy_pending != 0 || self.native_webview_pending)
+                .tooltip(Tooltip::text(
+                    if let Some(error) = self.activity_policy_error.as_ref() {
+                        format!("Falha ao manter paginas ativas: {error}")
+                    } else if self.keep_pages_active {
+                        "Ocultar mudancas de foco e visibilidade: ativo".into()
+                    } else {
+                        "Ocultar mudancas de foco e visibilidade: desativado".into()
+                    },
+                ))
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_keep_pages_active(cx))),
+        );
+        #[cfg(not(target_os = "windows"))]
+        let activity_control: Option<IconButton> = None;
         let new_tab = self.active_url() == "about:blank";
         #[cfg(target_os = "windows")]
         let native_browser_active =
@@ -3303,7 +3370,8 @@ impl Render for BrowserPanel {
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.toggle_favorite(cx);
                             })),
-                    ),
+                    )
+                    .children(activity_control),
             )
             .when(history_open, |this| {
                 let rows = history_entries

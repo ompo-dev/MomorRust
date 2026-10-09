@@ -8,12 +8,14 @@
 use anyhow::{Context as _, Result, anyhow};
 use std::{
     cell::{Cell, RefCell},
+    collections::HashSet,
     path::Path,
     rc::Rc,
 };
 use webview2_com::{
-    CoTaskMemPWSTR, CoreWebView2EnvironmentOptions, CreateCoreWebView2ControllerCompletedHandler,
-    CreateCoreWebView2EnvironmentCompletedHandler, DocumentTitleChangedEventHandler,
+    CallDevToolsProtocolMethodCompletedHandler, CoTaskMemPWSTR, CoreWebView2EnvironmentOptions,
+    CreateCoreWebView2ControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler,
+    DevToolsProtocolEventReceivedEventHandler, DocumentTitleChangedEventHandler,
     Microsoft::Web::WebView2::Win32::*, SourceChangedEventHandler,
 };
 use windows_062::{
@@ -41,6 +43,13 @@ pub struct NativeWebView {
     webview: ICoreWebView2,
     source_changed_token: i64,
     title_changed_token: i64,
+    frame_activity: Rc<FrameActivity>,
+    frame_receivers: Vec<(ICoreWebView2DevToolsProtocolEventReceiver, i64)>,
+}
+
+struct FrameActivity {
+    enabled: Cell<bool>,
+    sessions: RefCell<HashSet<String>>,
 }
 
 struct ChildHost {
@@ -92,6 +101,7 @@ impl NativeWebView {
     pub fn create(
         parent: HWND,
         profile_dir: &Path,
+        keep_pages_active: bool,
         mut on_url_changed: impl FnMut(String) + 'static,
         mut on_title_changed: impl FnMut(String) + 'static,
         on_ready: impl FnOnce(Result<Self>) + 'static,
@@ -245,9 +255,47 @@ impl NativeWebView {
                                 webview,
                                 source_changed_token,
                                 title_changed_token,
+                                frame_activity: Rc::new(FrameActivity {
+                                    enabled: Cell::new(keep_pages_active),
+                                    sessions: RefCell::new(HashSet::new()),
+                                }),
+                                frame_receivers: Vec::new(),
                             })
                         })();
-                        complete(&controller_ready, result);
+                        match result {
+                            Ok(mut webview) => {
+                                if let Err(error) = webview.observe_iframe_activity() {
+                                    complete(&controller_ready, Err(error));
+                                    return Ok(());
+                                }
+                                let core = webview.webview.clone();
+                                let ready = controller_ready.clone();
+                                // Apply the renderer policy before the caller can navigate to a site.
+                                if let Err(error) = apply_page_activity_policy(
+                                    &core,
+                                    None,
+                                    keep_pages_active,
+                                    move |result| {
+                                        if let Err(error) = result {
+                                            complete(&ready, Err(error));
+                                            return;
+                                        }
+                                        let core = webview.webview.clone();
+                                        let completed = ready.clone();
+                                        if let Err(error) =
+                                            auto_attach_iframes(&core, None, move |result| {
+                                                complete(&completed, result.map(|()| webview));
+                                            })
+                                        {
+                                            complete(&ready, Err(error));
+                                        }
+                                    },
+                                ) {
+                                    complete(&controller_ready, Err(error));
+                                }
+                            }
+                            Err(error) => complete(&controller_ready, Err(error)),
+                        }
                         Ok(())
                     }),
                 );
@@ -367,6 +415,88 @@ impl NativeWebView {
         Ok(())
     }
 
+    pub fn set_keep_pages_active(
+        &self,
+        enabled: bool,
+        on_complete: impl FnOnce(Result<()>) + 'static,
+    ) -> Result<()> {
+        self.frame_activity.enabled.set(enabled);
+        let sessions = self
+            .frame_activity
+            .sessions
+            .borrow()
+            .iter()
+            .cloned()
+            .collect();
+        let core = self.webview.clone();
+        let completion: PolicyCompletion = Rc::new(RefCell::new(Some(Box::new(on_complete))));
+        let pending = completion.clone();
+        let result = apply_page_activity_policy(&self.webview, None, enabled, move |result| {
+            if let Err(error) = result {
+                finish_policy(&pending, Err(error));
+            } else {
+                update_iframe_policies(
+                    core,
+                    Rc::new(RefCell::new(sessions)),
+                    enabled,
+                    Rc::new(RefCell::new(None)),
+                    pending,
+                );
+            }
+        });
+        if result.is_err() {
+            completion.borrow_mut().take();
+        }
+        result
+    }
+
+    fn observe_iframe_activity(&mut self) -> Result<()> {
+        for (event_name, attached) in [
+            ("Target.attachedToTarget", true),
+            ("Target.detachedFromTarget", false),
+        ] {
+            let core = self.webview.clone();
+            let state = self.frame_activity.clone();
+            let handler =
+                DevToolsProtocolEventReceivedEventHandler::create(Box::new(move |_, args| {
+                    let Some(args) = args else {
+                        return Ok(());
+                    };
+                    let result = (|| {
+                        let mut json = windows_062::core::PWSTR::null();
+                        unsafe { args.ParameterObjectAsJson(&mut json) }?;
+                        let parameters: serde_json::Value =
+                            serde_json::from_str(&CoTaskMemPWSTR::from(json).to_string())?;
+                        let session = parameters
+                            .get("sessionId")
+                            .and_then(|value| value.as_str())
+                            .context("Iframe event without session ID")?
+                            .to_string();
+                        if attached {
+                            state.sessions.borrow_mut().insert(session.clone());
+                            prepare_iframe(core.clone(), session, state.clone());
+                        } else {
+                            state.sessions.borrow_mut().remove(&session);
+                        }
+                        anyhow::Ok(())
+                    })();
+                    if let Err(error) = result {
+                        tracing::error!("Failed to track browser iframe activity: {error:#}");
+                    }
+                    Ok(())
+                }));
+            let name = CoTaskMemPWSTR::from(event_name);
+            let receiver = unsafe {
+                self.webview
+                    .GetDevToolsProtocolEventReceiver(*name.as_ref().as_pcwstr())
+            }?;
+            let mut token = 0;
+            unsafe { receiver.add_DevToolsProtocolEventReceived(&handler, &mut token) }?;
+            self.frame_receivers.push((receiver, token));
+        }
+        Ok(())
+    }
+
     pub fn reload(&self) -> Result<()> {
         unsafe {
             self.webview
@@ -418,6 +548,177 @@ impl NativeWebView {
     }
 }
 
+fn apply_page_activity_policy(
+    webview: &ICoreWebView2,
+    session: Option<&str>,
+    enabled: bool,
+    on_complete: impl FnOnce(Result<()>) + 'static,
+) -> Result<()> {
+    call_protocol(
+        webview,
+        session,
+        "Emulation.setFocusEmulationEnabled",
+        serde_json::json!({ "enabled": enabled }),
+        on_complete,
+    )
+}
+
+fn call_protocol(
+    webview: &ICoreWebView2,
+    session: Option<&str>,
+    method: &str,
+    parameters: serde_json::Value,
+    on_complete: impl FnOnce(Result<()>) + 'static,
+) -> Result<()> {
+    let parameters = CoTaskMemPWSTR::from(parameters.to_string().as_str());
+    let method = CoTaskMemPWSTR::from(method);
+    let handler =
+        CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |status, json| {
+            let result = (|| {
+                status.context(
+                    "O WebView2 nao conseguiu aplicar a politica de atividade da pagina",
+                )?;
+                let result: serde_json::Value = serde_json::from_str(&json)?;
+                anyhow::ensure!(
+                    result.get("error").is_none(),
+                    "Falha na politica de atividade: {result}"
+                );
+                Ok(())
+            })();
+            on_complete(result);
+            Ok(())
+        }));
+    let result = unsafe {
+        if let Some(session) = session {
+            let core: ICoreWebView2_11 = webview.cast()?;
+            let session = CoTaskMemPWSTR::from(session);
+            core.CallDevToolsProtocolMethodForSession(
+                *session.as_ref().as_pcwstr(),
+                *method.as_ref().as_pcwstr(),
+                *parameters.as_ref().as_pcwstr(),
+                &handler,
+            )
+        } else {
+            webview.CallDevToolsProtocolMethod(
+                *method.as_ref().as_pcwstr(),
+                *parameters.as_ref().as_pcwstr(),
+                &handler,
+            )
+        }
+    };
+    result.context("Nao foi possivel solicitar a politica de atividade da pagina")?;
+    Ok(())
+}
+
+fn auto_attach_iframes(
+    webview: &ICoreWebView2,
+    session: Option<&str>,
+    on_complete: impl FnOnce(Result<()>) + 'static,
+) -> Result<()> {
+    // Pause only new iframe targets until their native policy is set; never attach to workers.
+    call_protocol(
+        webview,
+        session,
+        "Target.setAutoAttach",
+        serde_json::json!({
+            "autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true,
+            "filter": [{ "type": "iframe", "exclude": false }, { "exclude": true }],
+        }),
+        on_complete,
+    )
+}
+
+type PolicyCompletion = Rc<RefCell<Option<Box<dyn FnOnce(Result<()>)>>>>;
+
+fn finish_policy(completion: &PolicyCompletion, result: Result<()>) {
+    let callback = completion.borrow_mut().take();
+    if let Some(callback) = callback {
+        callback(result);
+    }
+}
+
+fn update_iframe_policies(
+    webview: ICoreWebView2,
+    sessions: Rc<RefCell<Vec<String>>>,
+    enabled: bool,
+    first_error: Rc<RefCell<Option<anyhow::Error>>>,
+    completion: PolicyCompletion,
+) {
+    let session = sessions.borrow_mut().pop();
+    let Some(session) = session else {
+        let result = match first_error.borrow_mut().take() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        };
+        finish_policy(&completion, result);
+        return;
+    };
+    let core = webview.clone();
+    let pending = completion.clone();
+    let remaining = sessions.clone();
+    let errors = first_error.clone();
+    if let Err(error) =
+        apply_page_activity_policy(&webview, Some(&session), enabled, move |result| {
+            if let Err(error) = result {
+                tracing::debug!("Failed to update iframe activity: {error:#}");
+                errors.borrow_mut().get_or_insert(error);
+            }
+            update_iframe_policies(core, remaining, enabled, errors, pending);
+        })
+    {
+        tracing::debug!("Failed to request iframe activity: {error:#}");
+        first_error.borrow_mut().get_or_insert(error);
+        update_iframe_policies(webview, sessions, enabled, first_error, completion);
+    }
+}
+
+fn resume_iframe(webview: &ICoreWebView2, session: &str) {
+    if let Err(error) = call_protocol(
+        webview,
+        Some(session),
+        "Runtime.runIfWaitingForDebugger",
+        serde_json::json!({}),
+        |result| {
+            if let Err(error) = result {
+                tracing::debug!("Failed to resume browser iframe: {error:#}");
+            }
+        },
+    ) {
+        tracing::debug!("Failed to request iframe resume: {error:#}");
+    }
+}
+
+fn prepare_iframe(webview: ICoreWebView2, session: String, state: Rc<FrameActivity>) {
+    let enabled = state.enabled.get();
+    let core = webview.clone();
+    let frame = session.clone();
+    if let Err(error) =
+        apply_page_activity_policy(&webview, Some(&session), enabled, move |result| {
+            if let Err(error) = result {
+                tracing::error!("Failed to configure iframe activity: {error:#}");
+            }
+            if state.enabled.get() != enabled {
+                prepare_iframe(core, frame, state);
+                return;
+            }
+            let nested = core.clone();
+            let nested_frame = frame.clone();
+            if let Err(error) = auto_attach_iframes(&core, Some(&frame), move |result| {
+                if let Err(error) = result {
+                    tracing::error!("Failed to track nested browser iframes: {error:#}");
+                }
+                resume_iframe(&nested, &nested_frame);
+            }) {
+                tracing::error!("Failed to request nested iframe tracking: {error:#}");
+                resume_iframe(&core, &frame);
+            }
+        })
+    {
+        tracing::error!("Failed to request iframe activity: {error:#}");
+        resume_iframe(&webview, &session);
+    }
+}
+
 fn complete(
     callback: &Rc<RefCell<Option<Box<dyn FnOnce(Result<NativeWebView>)>>>>,
     result: Result<NativeWebView>,
@@ -431,6 +732,11 @@ fn complete(
 impl Drop for NativeWebView {
     fn drop(&mut self) {
         unsafe {
+            for (receiver, token) in &self.frame_receivers {
+                if let Err(error) = receiver.remove_DevToolsProtocolEventReceived(*token) {
+                    tracing::debug!("Failed to remove iframe activity listener: {error}");
+                }
+            }
             if let Err(error) = self.webview.remove_SourceChanged(self.source_changed_token) {
                 tracing::debug!("failed to remove browser source listener: {error}");
             }
@@ -444,5 +750,280 @@ impl Drop for NativeWebView {
                 tracing::debug!("failed to close browser controller: {error}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+    use webview2_com::ExecuteScriptCompletedHandler;
+    use windows_062::Win32::UI::WindowsAndMessaging::{
+        DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage, WS_OVERLAPPED,
+    };
+
+    fn wait_for<T>(result: &Rc<RefCell<Option<T>>>) -> Result<T> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(value) = result.borrow_mut().take() {
+                return Ok(value);
+            }
+            anyhow::ensure!(Instant::now() < deadline, "WebView2 test timed out");
+            let mut message = MSG::default();
+            while unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE) }.as_bool() {
+                unsafe {
+                    let _translated = TranslateMessage(&message);
+                    DispatchMessageW(&message);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn evaluate(view: &NativeWebView, source: &str) -> Result<serde_json::Value> {
+        let result = Rc::new(RefCell::new(None));
+        let done = result.clone();
+        let callback = ExecuteScriptCompletedHandler::create(Box::new(move |status, json| {
+            *done.borrow_mut() = Some(status.map(|()| json));
+            Ok(())
+        }));
+        let source = CoTaskMemPWSTR::from(source);
+        unsafe {
+            view.webview
+                .ExecuteScript(*source.as_ref().as_pcwstr(), &callback)
+        }?;
+        Ok(serde_json::from_str(&wait_for(&result)??)?)
+    }
+
+    fn create_view(parent: HWND, profile: &Path, enabled: bool) -> Result<NativeWebView> {
+        let result = Rc::new(RefCell::new(None));
+        let done = result.clone();
+        NativeWebView::create(
+            parent,
+            profile,
+            enabled,
+            |_| {},
+            |_| {},
+            move |view| {
+                *done.borrow_mut() = Some(view);
+            },
+        )?;
+        wait_for(&result)?
+    }
+
+    fn set_policy(view: &NativeWebView, enabled: bool) -> Result<()> {
+        let result = Rc::new(RefCell::new(None));
+        let done = result.clone();
+        view.set_keep_pages_active(enabled, move |status| *done.borrow_mut() = Some(status))?;
+        wait_for(&result)?
+    }
+
+    fn load_fixture(view: &NativeWebView, marker: &str) -> Result<()> {
+        let html = format!(
+            r#"<!doctype html><input id="first"><input id="second">
+            <iframe sandbox="allow-scripts" srcdoc="
+            <input id=target>
+            <script>
+            let departures = 0;
+            addEventListener('blur', () => departures++);
+            document.addEventListener('visibilitychange', () => departures++);
+            addEventListener('message', event => {{
+                if (event.data === 'focus') {{ target.focus(); departures = 0; }}
+                parent.postMessage({{
+                    child: true, hidden: document.hidden, visibility: document.visibilityState,
+                    focused: document.hasFocus(), departures
+                }}, '*');
+            }});
+            </script>"></iframe>
+            <script>
+            window.marker = '{marker}';
+            window.initial = {{ hidden: document.hidden, visibility: document.visibilityState,
+                focused: document.hasFocus() }};
+            window.departures = 0;
+            window.fieldBlurs = 0;
+            document.addEventListener('visibilitychange', () => window.departures++);
+            window.addEventListener('blur', () => window.departures++);
+            first.addEventListener('blur', () => window.fieldBlurs++);
+            first.focus();
+            addEventListener('message', event => {{
+                if (event.data.child) window.childState = event.data;
+            }});
+            window.collectChild = command => document.querySelector('iframe').contentWindow.postMessage(command, '*');
+            </script>"#
+        );
+        let html = CoTaskMemPWSTR::from(html.as_str());
+        unsafe { view.webview.NavigateToString(*html.as_ref().as_pcwstr()) }?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if evaluate(
+                view,
+                "({ marker: window.marker, loaded: document.readyState === 'complete' })",
+            )? == serde_json::json!({ "marker": marker, "loaded": true })
+            {
+                return Ok(());
+            }
+            anyhow::ensure!(Instant::now() < deadline, "Fixture did not load");
+        }
+    }
+
+    fn child_state(view: &NativeWebView, focus: bool) -> Result<serde_json::Value> {
+        evaluate(
+            view,
+            if focus {
+                "window.childState = null; document.querySelector('iframe').focus(); window.collectChild('focus'); true"
+            } else {
+                "window.childState = null; window.collectChild('read'); true"
+            },
+        )?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let state = evaluate(view, "window.childState || null")?;
+            if !state.is_null() {
+                return Ok(state);
+            }
+            anyhow::ensure!(Instant::now() < deadline, "Iframe did not respond");
+        }
+    }
+
+    fn nested_state(view: &NativeWebView, create: bool) -> Result<serde_json::Value> {
+        let nested_html = r#"<script>let departures = 0;
+            addEventListener('blur', () => departures++);
+            document.addEventListener('visibilitychange', () => departures++);
+            addEventListener('message', () => parent.postMessage({ grandchild: true,
+            hidden: document.hidden, visibility: document.visibilityState,
+            focused: document.hasFocus(), departures }, '*'));</script>"#;
+        let nested_json = serde_json::to_string(nested_html)?.replace('<', "\\u003c");
+        let child_html = format!(
+            r#"<iframe id=grandchild sandbox="allow-scripts"></iframe>
+            <script>addEventListener('message', event => {{
+                if (event.data.grandchild) parent.postMessage(event.data, '*');
+                else if (event.data === 'read') grandchild.contentWindow.postMessage('read', '*');
+            }}); grandchild.onload = () => {{ grandchild.focus();
+                grandchild.contentWindow.postMessage('read', '*'); }};
+            grandchild.srcdoc = {nested_json};</script>"#
+        );
+        let child_json = serde_json::to_string(&child_html)?.replace('<', "\\u003c");
+        if create {
+            evaluate(
+                view,
+                &format!(
+                    r#"window.nestedState = null;
+            addEventListener('message', event => {{
+                if (event.data.grandchild) window.nestedState = event.data;
+            }});
+            (() => {{ const frame = document.createElement('iframe');
+                frame.sandbox = 'allow-scripts'; frame.srcdoc = {child_json};
+                window.nestedOwner = frame; document.body.append(frame); }})(); true"#
+                ),
+            )?;
+        } else {
+            evaluate(
+                view,
+                "window.nestedState = null; nestedOwner.contentWindow.postMessage('read', '*'); true",
+            )?;
+        }
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let state = evaluate(view, "window.nestedState || null")?;
+            if !state.is_null() {
+                return Ok(state);
+            }
+            anyhow::ensure!(Instant::now() < deadline, "Nested iframe did not respond");
+        }
+    }
+
+    #[test]
+    fn page_activity_policy_preserves_visibility_forms_and_navigation() -> Result<()> {
+        // The parent stays hidden: this test never takes focus from a user's application.
+        let parent = ChildHost {
+            window: unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE::default(),
+                    w!("STATIC"),
+                    w!("Momor activity test"),
+                    WS_OVERLAPPED,
+                    0,
+                    0,
+                    640,
+                    480,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            }?,
+            bounds: Cell::new((0, 0, 640, 480)),
+            occlusions: RefCell::new(Vec::new()),
+        };
+        let profile = tempfile::tempdir()?;
+        let first = create_view(parent.window, profile.path(), true)?;
+        let second = create_view(parent.window, profile.path(), true)?;
+        load_fixture(&first, "first")?;
+        load_fixture(&second, "second")?;
+        let expected =
+            serde_json::json!({ "hidden": false, "visibility": "visible", "focused": true });
+        assert_eq!(evaluate(&first, "window.initial")?, expected);
+        assert_eq!(evaluate(&second, "window.initial")?, expected);
+        for view in [&first, &second] {
+            view.set_visible(true)?;
+            view.set_visible(false)?;
+            assert_eq!(
+                evaluate(
+                    view,
+                    "({ hidden: document.hidden, visibility: document.visibilityState, focused: document.hasFocus() })"
+                )?,
+                expected
+            );
+            assert_eq!(evaluate(view, "window.departures")?, serde_json::json!(0));
+        }
+        assert!(!unsafe { IsChild(parent.window, GetFocus()) }.as_bool());
+        assert_eq!(
+            evaluate(
+                &first,
+                "second.focus(); first.value = 'kept'; ({ focused: document.activeElement.id, blurs: window.fieldBlurs, value: first.value })"
+            )?,
+            serde_json::json!({ "focused": "second", "blurs": 1, "value": "kept" })
+        );
+        let child_expected = serde_json::json!({ "child": true, "hidden": false, "visibility": "visible", "focused": true, "departures": 0 });
+        assert!(!first.frame_activity.sessions.borrow().is_empty());
+        assert_eq!(child_state(&first, true)?, child_expected);
+        first.set_visible(true)?;
+        second.set_visible(true)?;
+        first.set_visible(false)?;
+        assert_eq!(child_state(&first, false)?, child_expected);
+        let nested_before = nested_state(&first, true)?;
+        assert_eq!(nested_before["hidden"], serde_json::json!(false));
+        assert_eq!(nested_before["visibility"], serde_json::json!("visible"));
+        assert_eq!(nested_before["departures"], serde_json::json!(0));
+        assert!(first.frame_activity.sessions.borrow().len() >= 2);
+        first.set_visible(true)?;
+        first.set_visible(false)?;
+        // A sibling frame can own DOM focus; hiding a tab must not change that internal state.
+        assert_eq!(nested_state(&first, false)?, nested_before);
+        set_policy(&first, false)?;
+        assert_eq!(
+            evaluate(&first, "document.hidden")?,
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            evaluate(&first, "document.hasFocus()")?,
+            serde_json::json!(false)
+        );
+        assert_eq!(evaluate(&first, "first.value")?, serde_json::json!("kept"));
+        assert_eq!(
+            nested_state(&first, true)?,
+            serde_json::json!({ "grandchild": true, "hidden": true, "visibility": "hidden", "focused": false, "departures": 0 })
+        );
+        set_policy(&first, true)?;
+        assert_eq!(
+            evaluate(&first, "document.hidden")?,
+            serde_json::json!(false)
+        );
+        load_fixture(&first, "navigation")?;
+        assert_eq!(evaluate(&first, "window.initial")?, expected);
+        drop(second);
+        drop(first);
+        drop(parent);
+        Ok(())
     }
 }

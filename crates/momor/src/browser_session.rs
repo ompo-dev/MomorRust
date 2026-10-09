@@ -17,6 +17,12 @@ pub struct BrowserSession {
     pub active_tab: usize,
     #[serde(default)]
     pub history: Vec<SavedBrowserPage>,
+    #[serde(default = "keep_pages_active_by_default")]
+    pub keep_pages_active: bool,
+}
+
+fn keep_pages_active_by_default() -> bool {
+    true
 }
 
 impl Default for BrowserSession {
@@ -29,6 +35,7 @@ impl Default for BrowserSession {
             }],
             active_tab: 0,
             history: Vec::new(),
+            keep_pages_active: true,
         }
     }
 }
@@ -128,5 +135,18 @@ mod tests {
         BrowserSession::record_visit(&mut history, page.clone());
         BrowserSession::record_visit(&mut history, page);
         assert_eq!(history.len(), 1);
+    }
+
+    #[test]
+    fn page_activity_preference_survives_restart_and_defaults_for_old_sessions()
+    -> anyhow::Result<()> {
+        let legacy = BrowserSession::decode(r#"{"version":1,"tabs":[],"active_tab":0}"#)?;
+        assert!(legacy.keep_pages_active);
+        let session = BrowserSession {
+            keep_pages_active: false,
+            ..BrowserSession::default()
+        };
+        assert!(!BrowserSession::decode(&serde_json::to_string(&session)?)?.keep_pages_active);
+        Ok(())
     }
 }
