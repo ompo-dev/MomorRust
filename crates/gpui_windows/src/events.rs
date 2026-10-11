@@ -906,6 +906,34 @@ impl WindowsWindowInner {
             return None;
         }
 
+        if self.hide_title_bar
+            && !self.state.is_maximized()
+            && unsafe { GetWindowLongW(handle, GWL_STYLE) } as u32 & WS_THICKFRAME.0 != 0
+        {
+            let mut cursor = POINT {
+                x: lparam.signed_loword().into(),
+                y: lparam.signed_hiword().into(),
+            };
+            let mut client = RECT::default();
+            unsafe { ScreenToClient(handle, &mut cursor) }
+                .ok()
+                .log_err();
+            if unsafe { GetClientRect(handle, &mut client) }
+                .log_err()
+                .is_some()
+            {
+                let dpi = unsafe { GetDpiForWindow(handle) };
+                if let Some(edge) = resize_hit_test(
+                    cursor,
+                    client,
+                    get_frame_thicknessx(dpi),
+                    get_frame_thicknessy(dpi),
+                ) {
+                    return Some(edge as isize);
+                }
+            }
+        }
+
         let callback = self.state.callbacks.hit_test_window_control.take();
         let drag_area = if let Some(mut callback) = callback {
             let area = callback();
@@ -932,35 +960,6 @@ impl WindowsWindowInner {
         if !self.hide_title_bar {
             // If the OS draws the title bar, we don't need to handle hit test messages.
             return drag_area;
-        }
-
-        let dpi = unsafe { GetDpiForWindow(handle) };
-        // We do not use the OS title bar, so the default `DefWindowProcW` will only register a 1px edge for resizes
-        // We need to calculate the frame thickness ourselves and do the hit test manually.
-        let frame_y = get_frame_thicknessx(dpi);
-        let frame_x = get_frame_thicknessy(dpi);
-        let mut cursor_point = POINT {
-            x: lparam.signed_loword().into(),
-            y: lparam.signed_hiword().into(),
-        };
-
-        unsafe { ScreenToClient(handle, &mut cursor_point).ok().log_err() };
-        if !self.state.is_maximized() && 0 <= cursor_point.y && cursor_point.y <= frame_y {
-            // x-axis actually goes from -frame_x to 0
-            return Some(if cursor_point.x <= 0 {
-                HTTOPLEFT
-            } else {
-                let mut rect = Default::default();
-                unsafe { GetWindowRect(handle, &mut rect) }.log_err();
-                // right and bottom bounds of RECT are exclusive, thus `-1`
-                let right = rect.right - rect.left - 1;
-                // the bounds include the padding frames, so accomodate for both of them
-                if right - 2 * frame_x <= cursor_point.x {
-                    HTTOPRIGHT
-                } else {
-                    HTTOP
-                }
-            } as _);
         }
 
         drag_area
@@ -996,6 +995,19 @@ impl WindowsWindowInner {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> Option<isize> {
+        if matches!(
+            wparam.0 as u32,
+            HTLEFT
+                | HTRIGHT
+                | HTTOP
+                | HTBOTTOM
+                | HTTOPLEFT
+                | HTTOPRIGHT
+                | HTBOTTOMLEFT
+                | HTBOTTOMRIGHT
+        ) {
+            return None;
+        }
         if let Some(mut func) = self.state.callbacks.input.take() {
             let scale_factor = self.state.scale_factor.get();
             let mut cursor_point = POINT {
@@ -1667,6 +1679,84 @@ fn get_frame_thicknessy(dpi: u32) -> i32 {
     let resize_frame_thickness = unsafe { GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi) };
     let padding_thickness = unsafe { GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi) };
     resize_frame_thickness + padding_thickness
+}
+
+fn resize_hit_test(cursor: POINT, client: RECT, frame_x: i32, frame_y: i32) -> Option<u32> {
+    let left = cursor.x < client.left + frame_x;
+    let right = cursor.x >= client.right - frame_x;
+    let top = cursor.y < client.top + frame_y;
+    let bottom = cursor.y >= client.bottom - frame_y;
+    match (left, right, top, bottom) {
+        (true, _, true, _) => Some(HTTOPLEFT),
+        (_, true, true, _) => Some(HTTOPRIGHT),
+        (true, _, _, true) => Some(HTBOTTOMLEFT),
+        (_, true, _, true) => Some(HTBOTTOMRIGHT),
+        (true, _, _, _) => Some(HTLEFT),
+        (_, true, _, _) => Some(HTRIGHT),
+        (_, _, true, _) => Some(HTTOP),
+        (_, _, _, true) => Some(HTBOTTOM),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod resize_tests {
+    use super::resize_hit_test;
+    use windows::Win32::{
+        Foundation::{POINT, RECT},
+        UI::WindowsAndMessaging::{
+            HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT,
+        },
+    };
+
+    #[test]
+    fn native_resize_detects_both_side_edges_and_all_corners() {
+        let client = RECT {
+            left: 0,
+            top: 0,
+            right: 1200,
+            bottom: 800,
+        };
+        for (x, y, expected) in [
+            (2, 400, HTLEFT),
+            (1198, 400, HTRIGHT),
+            (600, 2, HTTOP),
+            (600, 798, HTBOTTOM),
+            (2, 2, HTTOPLEFT),
+            (1198, 2, HTTOPRIGHT),
+            (2, 798, HTBOTTOMLEFT),
+            (1198, 798, HTBOTTOMRIGHT),
+            (-2, 400, HTLEFT),
+            (1200, 400, HTRIGHT),
+        ] {
+            assert_eq!(
+                resize_hit_test(POINT { x, y }, client, 8, 8),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            resize_hit_test(POINT { x: 600, y: 400 }, client, 8, 8),
+            None
+        );
+    }
+
+    #[test]
+    fn native_resize_uses_separate_horizontal_and_vertical_thickness() {
+        let client = RECT {
+            left: 0,
+            top: 0,
+            right: 1200,
+            bottom: 800,
+        };
+        assert_eq!(
+            resize_hit_test(POINT { x: 10, y: 400 }, client, 12, 6),
+            Some(HTLEFT)
+        );
+        assert_eq!(
+            resize_hit_test(POINT { x: 600, y: 10 }, client, 12, 6),
+            None
+        );
+    }
 }
 
 fn notify_frame_changed(handle: HWND) {

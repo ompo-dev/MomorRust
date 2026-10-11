@@ -3850,12 +3850,15 @@ impl Render for BrowserPanel {
                             };
                             #[cfg(target_os = "windows")]
                             let native_clip = {
-                                let mask = window.content_mask().bounds;
+                                let mask = bounds.intersect(&window.content_mask().bounds);
+                                // Native child HWNDs otherwise intercept the GPUI divider.
+                                let inset = px(workspace::PANEL_RESIZE_HANDLE_WIDTH / 2.)
+                                    .min(mask.size.width / 2.);
                                 let scale = window.scale_factor();
                                 (
-                                    (mask.left().as_f32() * scale).round() as i32,
+                                    ((mask.left() + inset).as_f32() * scale).round() as i32,
                                     (mask.top().as_f32() * scale).round() as i32,
-                                    (mask.right().as_f32() * scale).round() as i32,
+                                    ((mask.right() - inset).as_f32() * scale).round() as i32,
                                     (mask.bottom().as_f32() * scale).round() as i32,
                                 )
                             };

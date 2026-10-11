@@ -8483,6 +8483,8 @@ impl Render for DraggedBrowserDivider {
     }
 }
 
+pub const PANEL_RESIZE_HANDLE_WIDTH: f32 = 8.;
+
 /// Registra a view do painel Notion (chamado uma vez na inicialização).
 pub fn set_notebook_view(view: gpui::AnyView, cx: &mut App) {
     let slot = cx.default_global::<NotebookSlot>();
@@ -8767,6 +8769,18 @@ impl Render for Workspace {
             browser_open(cx) && browser.is_some(),
             chat_open && agent_panel.is_some(),
         ];
+        if let Some(widths) = self.panel_layout.sync_window_resize(
+            panel_visibility,
+            f32::from(window.bounds().origin.x),
+            f32::from(window.viewport_size().width),
+        ) {
+            if panel_visibility[panel_layout::NOTES] {
+                set_notebook_width(widths[panel_layout::NOTES], cx);
+            }
+            if panel_visibility[panel_layout::BROWSER] {
+                set_browser_width(widths[panel_layout::BROWSER], cx);
+            }
+        }
         if let Some(resize) = self.panel_layout.update(
             panel_visibility,
             [notebook_width(cx), browser_width(cx), 400.],
@@ -9001,21 +9015,22 @@ impl Render for Workspace {
                                     .border_r_1()
                                     .border_color(colors.border)
                                     .on_drag_move(cx.listener(
-                                        move |_this,
+                                        move |this,
                                               event: &DragMoveEvent<DraggedNotebookDivider>,
-                                              window,
+                                              _window,
                                               cx| {
-                                            let viewport_width =
-                                                f32::from(window.viewport_size().width);
-                                            let reserved_width =
-                                                if browser_open { browser_width(cx) } else { 0.0 }
-                                                    + if chat_open { 300.0 } else { 0.0 };
-                                            let max_width =
-                                                (viewport_width - reserved_width).max(280.0);
-                                            let width = f32::from(event.event.position.x)
-                                                .clamp(280.0, max_width);
-                                            set_notebook_width(width, cx);
-                                            cx.notify();
+                                            let width = f32::from(
+                                                event.event.position.x - event.bounds.left(),
+                                            );
+                                            if let Some(widths) = this.panel_layout.resize_divider(
+                                                panel_layout::NOTES, width,
+                                            ) {
+                                                set_notebook_width(widths[panel_layout::NOTES], cx);
+                                                if browser_open {
+                                                    set_browser_width(widths[panel_layout::BROWSER], cx);
+                                                }
+                                                cx.notify();
+                                            }
                                         },
                                     ))
                                     .child(
@@ -9036,8 +9051,8 @@ impl Render for Workspace {
                                             .id("notebook-chat-resize")
                                             .absolute()
                                             .top_0()
-                                            .right(px(-3.))
-                                            .w(px(6.))
+                                            .right(px(-PANEL_RESIZE_HANDLE_WIDTH / 2.))
+                                            .w(px(PANEL_RESIZE_HANDLE_WIDTH))
                                             .h_full()
                                             .cursor_col_resize()
                                             .on_drag(DraggedNotebookDivider, |d, _, _, cx| {
@@ -9066,23 +9081,19 @@ impl Render for Workspace {
                                     .border_r_1()
                                     .border_color(colors.border)
                                     .on_drag_move(cx.listener(
-                                        move |_this,
+                                        move |this,
                                               event: &DragMoveEvent<DraggedBrowserDivider>,
-                                              window,
+                                              _window,
                                               cx| {
-                                            let viewport_width =
-                                                f32::from(window.viewport_size().width);
-                                            let browser_left = f32::from(event.bounds.left());
-                                            let chat_width = if chat_open { 300.0 } else { 0.0 };
-                                            let max_width =
-                                                (viewport_width - browser_left - chat_width)
-                                                    .max(50.0);
                                             let width = f32::from(
                                                 event.event.position.x - event.bounds.left(),
-                                            )
-                                            .clamp(50.0, max_width);
-                                            set_browser_width(width, cx);
-                                            cx.notify();
+                                            );
+                                            if let Some(widths) = this.panel_layout.resize_divider(
+                                                panel_layout::BROWSER, width,
+                                            ) {
+                                                set_browser_width(widths[panel_layout::BROWSER], cx);
+                                                cx.notify();
+                                            }
                                         },
                                     ))
                                     .child(
@@ -9104,8 +9115,8 @@ impl Render for Workspace {
                                                 .id("browser-chat-resize")
                                                 .absolute()
                                                 .top_0()
-                                                .right(px(-3.))
-                                                .w(px(6.))
+                                                .right(px(-PANEL_RESIZE_HANDLE_WIDTH / 2.))
+                                                .w(px(PANEL_RESIZE_HANDLE_WIDTH))
                                                 .h_full()
                                                 .cursor_col_resize()
                                                 .on_drag(DraggedBrowserDivider, |d, _, _, cx| {

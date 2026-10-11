@@ -1135,6 +1135,56 @@ mod tests {
     }
 
     #[test]
+    fn resize_gutters_yield_both_edges_without_reloading_the_page() -> Result<()> {
+        let parent = ChildHost {
+            window: unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE::default(),
+                    w!("STATIC"),
+                    w!("Momor edge resize test"),
+                    WS_OVERLAPPED,
+                    0,
+                    0,
+                    900,
+                    600,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            }?,
+            bounds: Cell::new((0, 0, 900, 600)),
+            occlusions: RefCell::new(Vec::new()),
+        };
+        let profile = tempfile::tempdir()?;
+        let view = create_view(parent.window, profile.path(), false)?;
+        view.set_bounds(20, 80, 640, 480)?;
+        view.set_visible(true)?;
+        load_fixture(&view, "resize")?;
+        evaluate(
+            &view,
+            "first.value = 'unsaved'; window.sessionMarker = Math.random(); true",
+        )?;
+        let state = "({ url: location.href, marker: window.marker, session: window.sessionMarker, value: first.value })";
+        let before = evaluate(&view, state)?;
+        for width in [640, 320, 50, 800, 50, 640] {
+            let inset = workspace::PANEL_RESIZE_HANDLE_WIDTH as i32 / 2;
+            view.set_bounds(20, 80, width, 480)?;
+            view.set_clip_bounds(Some((20 + inset, 80, 20 + width - inset, 560)))?;
+            let region = OwnedRegion::rectangle(0, 0, 1, 1)?;
+            let handle = region.0.expect("region allocated");
+            assert!(unsafe { GetWindowRgn(view.host.window, handle) }.0 > 0);
+            assert!(!unsafe { PtInRegion(handle, inset - 1, 60) }.as_bool());
+            assert!(!unsafe { PtInRegion(handle, width - inset, 60) }.as_bool());
+            assert!(unsafe { PtInRegion(handle, width / 2, 60) }.as_bool());
+            assert!(view.visible.get());
+            assert_eq!(evaluate(&view, state)?, before);
+        }
+        assert!(!unsafe { IsChild(parent.window, GetFocus()) }.as_bool());
+        Ok(())
+    }
+
+    #[test]
     fn native_autofill_and_explicit_payment_fill_preserve_the_page() -> Result<()> {
         let parent = ChildHost {
             window: unsafe {

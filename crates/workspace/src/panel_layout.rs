@@ -1,6 +1,7 @@
 pub(crate) const NOTES: usize = 0;
 pub(crate) const BROWSER: usize = 1;
 pub(crate) const CHAT: usize = 2;
+const MIN_WIDTHS: [f32; 3] = [280., 50., 300.];
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PanelResize {
@@ -71,6 +72,7 @@ pub(crate) struct PanelLayout {
     overhead: f32,
     pending_width: Option<f32>,
     pending_origin: Option<f32>,
+    window_bounds: Option<(f32, f32)>,
 }
 
 impl Default for PanelLayout {
@@ -82,6 +84,7 @@ impl Default for PanelLayout {
             overhead: 0.,
             pending_width: None,
             pending_origin: None,
+            window_bounds: None,
         }
     }
 }
@@ -93,6 +96,73 @@ impl PanelLayout {
 
     pub fn resizing(&self) -> bool {
         self.pending_width.is_some()
+    }
+
+    pub fn sync_window_resize(
+        &mut self,
+        visible: [bool; 3],
+        origin: f32,
+        width: f32,
+    ) -> Option<[f32; 3]> {
+        let (previous_origin, previous_width) = self.window_bounds.replace((origin, width))?;
+        if self.resizing() || self.visible != Some(visible) || (width - previous_width).abs() < 0.5
+        {
+            return None;
+        }
+        let panels = (0..3).filter(|&index| visible[index]).collect::<Vec<_>>();
+        if panels.is_empty() {
+            return None;
+        }
+        // A left-edge resize must not consume the chat's width on the right.
+        self.resize_edge(&panels, previous_origin - origin);
+        self.resize_edge(
+            &panels.iter().rev().copied().collect::<Vec<_>>(),
+            origin + width - previous_origin - previous_width,
+        );
+        Some(self.widths)
+    }
+
+    fn resize_edge(&mut self, panels: &[usize], mut delta: f32) {
+        for &index in panels {
+            let previous = self.widths[index];
+            self.widths[index] = (previous + delta).max(MIN_WIDTHS[index].min(previous));
+            delta -= self.widths[index] - previous;
+            if delta.abs() < 0.5 {
+                return;
+            }
+        }
+        // The native window can be narrower than the sum of the panel minima.
+        for index in [CHAT, NOTES, BROWSER] {
+            if !panels.contains(&index) {
+                continue;
+            }
+            let previous = self.widths[index];
+            let minimum = if index == BROWSER {
+                MIN_WIDTHS[BROWSER]
+            } else {
+                0.
+            };
+            let minimum = minimum.min(previous);
+            self.widths[index] = (previous + delta).max(minimum);
+            delta -= self.widths[index] - previous;
+            if delta.abs() < 0.5 {
+                break;
+            }
+        }
+    }
+
+    pub fn resize_divider(&mut self, panel: usize, width: f32) -> Option<[f32; 3]> {
+        let visible = self.visible?;
+        if self.resizing() || !visible[panel] {
+            return None;
+        }
+        let neighbor = (panel + 1..3).find(|&index| visible[index])?;
+        let available = self.widths[panel] + self.widths[neighbor];
+        let minimum = MIN_WIDTHS[panel].min(available);
+        let maximum = (available - MIN_WIDTHS[neighbor]).max(minimum);
+        self.widths[panel] = width.clamp(minimum, maximum);
+        self.widths[neighbor] = available - self.widths[panel];
+        Some(self.widths)
     }
 
     pub fn update(
@@ -314,6 +384,128 @@ mod tests {
             .update([false, true, true], [420., 700., 386.], 900.)
             .expect("resize");
         assert_eq!(resize.width, 1400.);
+    }
+
+    #[test]
+    fn left_window_edge_resizes_browser_without_compressing_chat() {
+        let visible = [false, true, true];
+        let mut layout = seeded(visible);
+        assert!(layout.sync_window_resize(visible, 100., 1316.).is_none());
+        let widths = layout
+            .sync_window_resize(visible, 980., 436.)
+            .expect("resize");
+        assert_eq!(widths[BROWSER], 50.);
+        assert_eq!(widths[CHAT], 386.);
+        layout.update(visible, widths, 436.);
+        let widths = layout
+            .sync_window_resize(visible, 100., 1316.)
+            .expect("resize");
+        assert_eq!(widths[BROWSER], 930.);
+        assert_eq!(widths[CHAT], 386.);
+    }
+
+    #[test]
+    fn right_window_edge_does_not_resize_browser_or_notes() {
+        let visible = [true, true, true];
+        let mut layout = seeded(visible);
+        layout.sync_window_resize(visible, 100., 1736.);
+        let widths = layout
+            .sync_window_resize(visible, 100., 1936.)
+            .expect("resize");
+        assert_eq!(widths, [420., 930., 586.]);
+    }
+
+    #[test]
+    fn browser_alone_resizes_from_either_window_edge() {
+        let visible = [false, true, false];
+        let mut layout = seeded(visible);
+        layout.sync_window_resize(visible, 100., 930.);
+        let widths = layout
+            .sync_window_resize(visible, 500., 530.)
+            .expect("left resize");
+        assert_eq!(widths[BROWSER], 530.);
+        layout.update(visible, widths, 530.);
+        let widths = layout
+            .sync_window_resize(visible, 500., 750.)
+            .expect("right resize");
+        assert_eq!(widths[BROWSER], 750.);
+    }
+
+    #[test]
+    fn either_browser_divider_can_reduce_browser_to_fifty_pixels() {
+        let mut left = seeded([true, true, true]);
+        let widths = left.resize_divider(NOTES, 1300.).expect("left divider");
+        assert_eq!(widths, [1300., 50., 386.]);
+        let widths = left
+            .resize_divider(NOTES, 420.)
+            .expect("reverse left divider");
+        assert_eq!(widths, [420., 930., 386.]);
+        let mut right = seeded([true, true, true]);
+        let widths = right.resize_divider(BROWSER, 50.).expect("right divider");
+        assert_eq!(widths, [420., 50., 1266.]);
+        let widths = right
+            .resize_divider(BROWSER, 930.)
+            .expect("reverse right divider");
+        assert_eq!(widths, [420., 930., 386.]);
+    }
+
+    #[test]
+    fn divider_moves_preserve_the_other_columns_and_respect_minima() {
+        let mut layout = seeded([true, true, true]);
+        assert_eq!(
+            layout.resize_divider(NOTES, 10000.),
+            Some([1300., 50., 386.])
+        );
+        assert_eq!(
+            layout.resize_divider(NOTES, -100.),
+            Some([280., 1070., 386.])
+        );
+        assert_eq!(
+            layout.resize_divider(BROWSER, 10000.),
+            Some([280., 1156., 300.])
+        );
+        assert_eq!(
+            layout.resize_divider(BROWSER, -100.),
+            Some([280., 50., 1406.])
+        );
+    }
+
+    #[test]
+    fn small_windows_keep_the_browser_minimum_when_resizing_either_edge() {
+        let visible = [false, true, true];
+        for origin in [100., 1186.] {
+            let mut layout = seeded(visible);
+            layout.sync_window_resize(visible, 100., 1316.);
+            let widths = layout
+                .sync_window_resize(visible, origin, 230.)
+                .expect("shrink");
+            assert_eq!(widths[BROWSER], 50.);
+            assert_eq!(widths[CHAT], 180.);
+            layout.update(visible, widths, 230.);
+            let widths = layout
+                .sync_window_resize(visible, origin, 280.)
+                .expect("grow");
+            assert_eq!(widths[BROWSER], 50.);
+            assert_eq!(widths[CHAT], 230.);
+        }
+    }
+
+    #[test]
+    fn native_animation_bounds_and_window_moves_are_not_manual_resizes() {
+        let visible = [false, true, true];
+        let mut layout = seeded(visible);
+        layout.sync_window_resize(visible, 100., 1316.);
+        assert!(layout.sync_window_resize(visible, 300., 1316.).is_none());
+        assert_eq!(layout.width(BROWSER), 930.);
+        layout.update([false, false, true], [420., 930., 386.], 1316.);
+        assert!(
+            layout
+                .sync_window_resize([false, false, true], 1230., 386.)
+                .is_none()
+        );
+        assert_eq!(layout.width(BROWSER), 930.);
+        assert_eq!(layout.width(CHAT), 386.);
+        assert!(layout.resize_divider(BROWSER, 50.).is_none());
     }
 
     #[test]
