@@ -653,7 +653,19 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
             let weak = cx.entity().downgrade();
             let browser_panel = cx.new(|cx| crate::browser::BrowserPanel::new(weak.clone(), cx));
             let browser_visibility = browser_panel.downgrade();
+            let browser_screenshot = browser_panel.downgrade();
             workspace::set_browser_view(browser_panel.into(), cx);
+            workspace::set_browser_screenshot_callback(
+                std::rc::Rc::new(move |cx| {
+                    match browser_screenshot
+                        .update(cx, |browser, cx| browser.capture_screenshot(cx))
+                    {
+                        Ok(task) => task,
+                        Err(error) => gpui::Task::ready(Err(error)),
+                    }
+                }),
+                cx,
+            );
             workspace::set_browser_visibility_callback(
                 std::rc::Rc::new(move |visible, cx| {
                     if let Err(error) = browser_visibility.update(cx, |browser, cx| {
@@ -682,7 +694,15 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
                 .flatten()
                 .is_some_and(|v| v == "true");
             workspace::set_notebook_open(sidebar_open, cx);
-            workspace.focus_panel::<agent_ui::AgentPanel>(window, cx);
+            let chat_open = db::kvp::KeyValueStore::global(cx)
+                .read_kvp("momor_chat_open")
+                .log_err()
+                .flatten()
+                .is_none_or(|value| value != "false");
+            workspace::set_chat_open(chat_open, cx);
+            if chat_open {
+                workspace.focus_panel::<agent_ui::AgentPanel>(window, cx);
+            }
         })?;
 
         anyhow::Ok(())

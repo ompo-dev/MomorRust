@@ -1101,6 +1101,12 @@ impl AcpConnection {
             }
         }
 
+        let work_dirs = if work_dirs.is_empty() {
+            project.read(cx).default_path_list(cx)
+        } else {
+            work_dirs
+        };
+
         // TODO: remove this once ACP supports multiple working directories
         let Some(cwd) = work_dirs.ordered_paths().next().cloned() else {
             return Task::ready(Err(anyhow!("Working directory cannot be empty")));
@@ -1397,6 +1403,12 @@ impl AgentConnection for AcpConnection {
         work_dirs: PathList,
         cx: &mut App,
     ) -> Task<Result<Entity<AcpThread>>> {
+        let work_dirs = if work_dirs.is_empty() {
+            project.read(cx).default_path_list(cx)
+        } else {
+            work_dirs
+        };
+
         // TODO: remove this once ACP supports multiple working directories
         let Some(cwd) = work_dirs.ordered_paths().next().cloned() else {
             return Task::ready(Err(anyhow!("Working directory cannot be empty")));
@@ -2829,6 +2841,84 @@ mod tests {
             load_session_gate,
             keep_agent_alive,
         )
+    }
+
+    #[gpui::test]
+    async fn test_sessions_with_empty_work_dirs_use_project_defaults(cx: &mut gpui::TestAppContext) {
+        let (connection, project, load_count, _, _, _, _keep_agent_alive) =
+            connect_fake_agent(cx).await;
+        let projectless = project::Project::test(fs::FakeFs::new(cx.executor()), [], cx).await;
+
+        for (index, project) in [project, projectless].into_iter().enumerate() {
+            let expected = project.read_with(cx, |project, cx| project.default_path_list(cx));
+            assert!(!expected.is_empty());
+
+            let new_thread = cx
+                .update(|cx| {
+                    connection
+                        .clone()
+                        .new_session(project.clone(), PathList::default(), cx)
+                })
+                .await
+                .expect("new session should accept empty work dirs");
+            new_thread.read_with(cx, |thread, _| {
+                assert_eq!(thread.work_dirs(), Some(&expected));
+            });
+
+            let session_id = acp::SessionId::new(format!("empty-work-dirs-{index}"));
+            let restored_thread = cx
+                .update(|cx| {
+                    connection.clone().load_session(
+                        session_id.clone(),
+                        project,
+                        PathList::default(),
+                        None,
+                        cx,
+                    )
+                })
+                .await
+                .expect("restored session should accept empty work dirs");
+            restored_thread.read_with(cx, |thread, _| {
+                assert_eq!(thread.session_id(), &session_id);
+                assert_eq!(thread.work_dirs(), Some(&expected));
+            });
+        }
+
+        assert_eq!(load_count.load(Ordering::SeqCst), 2);
+    }
+
+    #[gpui::test]
+    async fn test_sessions_preserve_explicit_work_dirs(cx: &mut gpui::TestAppContext) {
+        let (connection, project, _, _, _, _, _keep_agent_alive) = connect_fake_agent(cx).await;
+        let work_dirs = PathList::new(&[std::path::Path::new("/a/subdir")]);
+
+        let new_thread = cx
+            .update(|cx| {
+                connection
+                    .clone()
+                    .new_session(project.clone(), work_dirs.clone(), cx)
+            })
+            .await
+            .expect("new session failed");
+        new_thread.read_with(cx, |thread, _| {
+            assert_eq!(thread.work_dirs(), Some(&work_dirs));
+        });
+
+        let restored_thread = cx
+            .update(|cx| {
+                connection.clone().load_session(
+                    acp::SessionId::new("explicit-work-dirs"),
+                    project,
+                    work_dirs.clone(),
+                    None,
+                    cx,
+                )
+            })
+            .await
+            .expect("restored session failed");
+        restored_thread.read_with(cx, |thread, _| {
+            assert_eq!(thread.work_dirs(), Some(&work_dirs));
+        });
     }
 
     #[gpui::test]

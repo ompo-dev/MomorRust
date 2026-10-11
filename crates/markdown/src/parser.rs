@@ -5,7 +5,7 @@ pub use pulldown_cmark::TagEnd as MarkdownTagEnd;
 use pulldown_cmark::{
     Alignment, CowStr, HeadingLevel, LinkType, MetadataBlockKind, Options, Parser,
 };
-use std::{ops::Range, sync::Arc};
+use std::{borrow::Cow, ops::Range, sync::Arc};
 use util::markdown::generate_heading_slug;
 
 use crate::{html, path_range::PathWithRange};
@@ -19,6 +19,7 @@ pub const PARSE_OPTIONS: Options = Options::ENABLE_TABLES
     .union(Options::ENABLE_PLUSES_DELIMITED_METADATA_BLOCKS)
     .union(Options::ENABLE_OLD_FOOTNOTES)
     .union(Options::ENABLE_GFM)
+    .union(Options::ENABLE_MATH)
     .union(Options::ENABLE_SUPERSCRIPT)
     .union(Options::ENABLE_SUBSCRIPT);
 
@@ -63,7 +64,7 @@ impl ParseState {
                     }
                 }
             }
-            MarkdownEvent::Rule => {
+            MarkdownEvent::Rule | MarkdownEvent::Math { display: true, .. } => {
                 if self.depth == 0 && !range.is_empty() {
                     self.root_block_starts.push(range.start);
                     let root_block_index = self.root_block_starts.len() - 1;
@@ -83,6 +84,118 @@ impl ParseState {
 }
 
 const MAX_DUPLICATE_HEADING_SLUGS: usize = 128;
+
+struct MathNormalizedSource<'a> {
+    text: Cow<'a, str>,
+    source_offsets: Vec<usize>,
+}
+
+impl<'a> MathNormalizedSource<'a> {
+    fn new(source: &'a str) -> Self {
+        if !source.contains(r"\(") && !source.contains(r"\[") {
+            return Self {
+                text: Cow::Borrowed(source),
+                source_offsets: Vec::new(),
+            };
+        }
+        // Normalize TeX delimiters before Markdown can consume their backslashes, but
+        // keep byte offsets into the original message for selection, copying and links.
+        let protected: Vec<_> = Parser::new_ext(source, PARSE_OPTIONS)
+            .into_offset_iter()
+            .filter_map(|(event, range)| match event {
+                pulldown_cmark::Event::Code(_)
+                | pulldown_cmark::Event::Start(pulldown_cmark::Tag::CodeBlock(_)) => {
+                    Some((range, true))
+                }
+                pulldown_cmark::Event::Html(_)
+                | pulldown_cmark::Event::InlineHtml(_)
+                | pulldown_cmark::Event::InlineMath(_)
+                | pulldown_cmark::Event::DisplayMath(_)
+                | pulldown_cmark::Event::Start(
+                    pulldown_cmark::Tag::HtmlBlock
+                    | pulldown_cmark::Tag::Link { .. }
+                    | pulldown_cmark::Tag::Image { .. },
+                ) => Some((range, false)),
+                _ => None,
+            })
+            .collect();
+        let mut normalized = Self {
+            text: Cow::Owned(String::with_capacity(source.len())),
+            source_offsets: Vec::with_capacity(source.len() + 1),
+        };
+        let mut offset = 0;
+        while offset < source.len() {
+            let tail = &source[offset..];
+            let delimiter = if tail.starts_with(r"\(") {
+                Some((r"\)", "$"))
+            } else if tail.starts_with(r"\[") {
+                Some((r"\]", "$$"))
+            } else {
+                None
+            };
+            let escaped = source[..offset]
+                .bytes()
+                .rev()
+                .take_while(|byte| *byte == b'\\')
+                .count()
+                % 2
+                != 0;
+            if let Some((closing, replacement)) = delimiter
+                && !escaped
+                && !protected.iter().any(|(range, _)| range.contains(&offset))
+                && let Some(end) = tail[2..].match_indices(closing).find_map(|(index, _)| {
+                    let end = offset + 2 + index;
+                    let escaped = source[..end]
+                        .bytes()
+                        .rev()
+                        .take_while(|byte| *byte == b'\\')
+                        .count()
+                        % 2
+                        != 0;
+                    (!escaped
+                        && !protected.iter().any(|(range, code)| {
+                            *code && range.start < end + 2 && range.end > offset
+                        }))
+                    .then_some(end)
+                })
+            {
+                normalized.text.to_mut().push_str(replacement);
+                normalized
+                    .source_offsets
+                    .extend((0..replacement.len()).map(|index| offset + index));
+                let raw_body = &source[offset + 2..end];
+                let body = raw_body.trim();
+                let body_start = offset + 2 + raw_body.len() - raw_body.trim_start().len();
+                normalized.text.to_mut().push_str(body);
+                normalized
+                    .source_offsets
+                    .extend(body_start..body_start + body.len());
+                normalized.text.to_mut().push_str(replacement);
+                normalized
+                    .source_offsets
+                    .extend((0..replacement.len()).map(|index| end + index));
+                offset = end + 2;
+            } else if let Some(character) = tail.chars().next() {
+                normalized.text.to_mut().push(character);
+                normalized
+                    .source_offsets
+                    .extend(offset..offset + character.len_utf8());
+                offset += character.len_utf8();
+            } else {
+                break;
+            }
+        }
+        normalized.source_offsets.push(source.len());
+        normalized
+    }
+
+    fn original_range(&self, range: Range<usize>) -> Range<usize> {
+        if self.source_offsets.is_empty() {
+            return range;
+        }
+        self.source_offsets[range.start]..self.source_offsets[range.end]
+    }
+}
 
 fn build_heading_slugs(
     source: &str,
@@ -161,8 +274,10 @@ pub(crate) fn parse_markdown_with_options(
     let mut within_link = false;
     let mut within_code_block = false;
     let mut within_metadata = false;
-    let mut parser = Parser::new_ext(text, PARSE_OPTIONS)
+    let normalized = MathNormalizedSource::new(text);
+    let mut parser = Parser::new_ext(&normalized.text, PARSE_OPTIONS)
         .into_offset_iter()
+        .map(|(event, range)| (event, normalized.original_range(range)))
         .peekable();
     while let Some((pulldown_event, range)) = parser.next() {
         if within_metadata {
@@ -175,6 +290,32 @@ pub(crate) fn parse_markdown_with_options(
         }
         match pulldown_event {
             pulldown_cmark::Event::Start(tag) => {
+                if let pulldown_cmark::Tag::CodeBlock(pulldown_cmark::CodeBlockKind::Fenced(info)) =
+                    &tag
+                    && matches!(
+                        info.split_whitespace().next(),
+                        Some("math" | "latex" | "tex")
+                    )
+                {
+                    let content = extract_code_block_content_range(&text[range.clone()]);
+                    let source = text[range.start + content.start..range.start + content.end]
+                        .trim()
+                        .to_owned()
+                        .into();
+                    state.push_event(
+                        range.clone(),
+                        MarkdownEvent::Math {
+                            source,
+                            display: true,
+                        },
+                    );
+                    for (event, _) in parser.by_ref() {
+                        if matches!(event, pulldown_cmark::Event::End(MarkdownTagEnd::CodeBlock)) {
+                            break;
+                        }
+                    }
+                    continue;
+                }
                 if let pulldown_cmark::Tag::HtmlBlock = &tag {
                     state.push_event(range.clone(), MarkdownEvent::Start(MarkdownTag::HtmlBlock));
 
@@ -510,7 +651,20 @@ pub(crate) fn parse_markdown_with_options(
             pulldown_cmark::Event::TaskListMarker(checked) => {
                 state.push_event(range, MarkdownEvent::TaskListMarker(checked))
             }
-            pulldown_cmark::Event::InlineMath(_) | pulldown_cmark::Event::DisplayMath(_) => {}
+            pulldown_cmark::Event::InlineMath(source) => state.push_event(
+                range,
+                MarkdownEvent::Math {
+                    source: source.into_string().into(),
+                    display: false,
+                },
+            ),
+            pulldown_cmark::Event::DisplayMath(source) => state.push_event(
+                range,
+                MarkdownEvent::Math {
+                    source: source.into_string().into(),
+                    display: true,
+                },
+            ),
         }
     }
 
@@ -599,6 +753,10 @@ pub fn parse_links_only(text: &str) -> Vec<(Range<usize>, MarkdownEvent)> {
 /// parse result for rendering without resorting to unsafe lifetime coercion.
 #[derive(Clone, Debug, PartialEq)]
 pub enum MarkdownEvent {
+    Math {
+        source: SharedString,
+        display: bool,
+    },
     /// Start of a tagged element. Events that are yielded after this event
     /// and before its corresponding `End` event are inside this element.
     /// Start and end events are guaranteed to be balanced.
@@ -784,9 +942,97 @@ mod tests {
     use super::*;
 
     const UNWANTED_OPTIONS: Options = Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
-        .union(Options::ENABLE_MATH)
         .union(Options::ENABLE_DEFINITION_LIST)
         .union(Options::ENABLE_WIKILINKS);
+
+    #[test]
+    fn math_delimiters_preserve_tex_and_original_offsets() {
+        let source = r"A equacao \(y=\frac{3}{2}x\) e $x^2+y_1$ termina aqui.";
+        let parsed = parse_markdown_with_options(source, false, false);
+        let formulas: Vec<_> = parsed
+            .events
+            .iter()
+            .filter_map(|(range, event)| {
+                if let Math {
+                    source: formula,
+                    display,
+                } = event
+                {
+                    Some((&source[range.clone()], formula.as_ref(), *display))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            formulas,
+            vec![
+                (r"\(y=\frac{3}{2}x\)", r"y=\frac{3}{2}x", false),
+                ("$x^2+y_1$", "x^2+y_1", false),
+            ]
+        );
+        assert!(parsed.events.iter().any(|(range, event)| {
+            matches!(event, Text) && source[range.clone()].contains("termina aqui")
+        }));
+    }
+
+    #[test]
+    fn math_display_and_fences_are_root_blocks() {
+        let source = "\\[\\sqrt{x^2+y^2}\\]\n\n$$\\sum_{i=1}^n i$$\n\n```latex\n\\begin{matrix}a&b\\\\c&d\\end{matrix}\n```";
+        let parsed = parse_markdown_with_options(source, false, false);
+        let formulas: Vec<_> = parsed
+            .events
+            .iter()
+            .filter_map(|(_, event)| {
+                if let Math { source, display } = event {
+                    Some((source.as_ref(), *display))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(
+            formulas,
+            vec![
+                (r"\sqrt{x^2+y^2}", true),
+                (r"\sum_{i=1}^n i", true),
+                (r"\begin{matrix}a&b\\c&d\end{matrix}", true),
+            ]
+        );
+        assert_eq!(parsed.root_block_starts.len(), 3);
+    }
+
+    #[test]
+    fn math_keeps_code_escaped_delimiters_and_currency_literal() {
+        let source = "`\\(x^2\\)`\n\n```rust\nlet formula = \"$x^2$\";\n```\n\n\\\\(literal\\\\) and $5 or $10 and \\(unfinished";
+        let parsed = parse_markdown_with_options(source, false, false);
+        assert!(
+            !parsed
+                .events
+                .iter()
+                .any(|(_, event)| matches!(event, Math { .. }))
+        );
+    }
+
+    #[test]
+    fn math_preserves_unicode_source_and_surrounding_formatting() {
+        let source = "**Solução:** \\(α+β=\\pi\\), então [ação](https://example.com).";
+        let parsed = parse_markdown_with_options(source, false, true);
+        assert!(parsed.events.iter().any(|(range, event)| {
+            matches!(event, Math { source, .. } if source.as_ref() == "α+β=\\pi")
+                && &source[range.clone()] == "\\(α+β=\\pi\\)"
+        }));
+        assert!(parsed.events.iter().any(|(_, event)| matches!(event, Start(Link { dest_url, .. }) if dest_url.as_ref() == "https://example.com")));
+    }
+
+    #[test]
+    fn math_tex_body_is_not_interpreted_as_markdown_or_html() {
+        let source = r"Antes \( x<y>z+\text{[a](b)} \) depois.";
+        let parsed = parse_markdown_with_options(source, false, false);
+        assert!(parsed.events.iter().any(|(_, event)| {
+            matches!(event, Math { source, display: false } if source.trim() == r"x<y>z+\text{[a](b)}")
+        }));
+    }
 
     #[test]
     fn all_options_considered() {

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 
 pub const SESSION_KEY: &str = "momor_browser_session";
 const SESSION_VERSION: u32 = 1;
@@ -80,6 +81,126 @@ impl BrowserSession {
             }
         }
     }
+
+    pub fn saved_links(urls: &[String], history: &[SavedBrowserPage]) -> Vec<SavedBrowserPage> {
+        urls.iter()
+            .filter(|url| url.as_str() != "about:blank" && restorable_url(url))
+            .map(|url| {
+                history
+                    .iter()
+                    .rev()
+                    .find(|page| &page.url == url)
+                    .cloned()
+                    .unwrap_or_else(|| SavedBrowserPage {
+                        url: url.clone(),
+                        title: url::Url::parse(url)
+                            .ok()
+                            .and_then(|url| url.host_str().map(str::to_owned))
+                            .unwrap_or_else(|| url.clone()),
+                    })
+            })
+            .collect()
+    }
+
+    pub fn suggestions(
+        query: &str,
+        favorites: &[String],
+        history: &[SavedBrowserPage],
+    ) -> Vec<SavedBrowserPage> {
+        let query = query.trim().to_lowercase();
+        let words: Vec<_> = query.split_whitespace().collect();
+        let mut seen = HashSet::new();
+        let mut candidates: Vec<_> = Self::saved_links(favorites, history)
+            .into_iter()
+            .chain(history.iter().rev().cloned())
+            .enumerate()
+            .filter_map(|(recency, page)| {
+                if !restorable_url(&page.url)
+                    || page.url == "about:blank"
+                    || !seen.insert(page.url.clone())
+                {
+                    return None;
+                }
+                let url = page.url.to_lowercase();
+                let text = format!("{url} {}", page.title.to_lowercase());
+                if !words.iter().all(|word| text.contains(word)) {
+                    return None;
+                }
+                let host_and_path = url
+                    .trim_start_matches("https://")
+                    .trim_start_matches("http://")
+                    .trim_start_matches("www.");
+                let rank = if !query.is_empty() && host_and_path.starts_with(&query) {
+                    0
+                } else if favorites.contains(&page.url) {
+                    1
+                } else {
+                    2
+                };
+                Some((rank, recency, page))
+            })
+            .collect();
+        candidates.sort_by_key(|(rank, recency, _)| (*rank, *recency));
+        candidates
+            .into_iter()
+            .take(8)
+            .map(|(_, _, page)| page)
+            .collect()
+    }
+
+    pub fn frequent_sites(history: &[SavedBrowserPage]) -> Vec<SavedBrowserPage> {
+        let mut sites = HashMap::new();
+        for (recency, page) in history.iter().enumerate() {
+            let Ok(url) = url::Url::parse(&page.url) else {
+                continue;
+            };
+            if !restorable_url(&page.url) || url.host_str().is_none() {
+                continue;
+            }
+            let origin = format!("{}/", url.origin().ascii_serialization());
+            let entry = sites.entry(origin.clone()).or_insert((
+                0usize,
+                recency,
+                SavedBrowserPage {
+                    url: origin,
+                    title: url
+                        .host_str()
+                        .unwrap_or_default()
+                        .trim_start_matches("www.")
+                        .to_owned(),
+                },
+            ));
+            entry.0 += 1;
+            entry.1 = recency;
+        }
+        let mut sites: Vec<_> = sites.into_values().collect();
+        sites.sort_by_key(|(visits, recency, _)| {
+            (std::cmp::Reverse(*visits), std::cmp::Reverse(*recency))
+        });
+        sites
+            .into_iter()
+            .take(12)
+            .map(|(_, _, page)| page)
+            .collect()
+    }
+}
+
+pub fn reorder_tabs<T>(tabs: &mut Vec<T>, active: &mut usize, from: usize, to: usize) -> bool {
+    if from >= tabs.len() || to >= tabs.len() || from == to {
+        return false;
+    }
+    let tab = tabs.remove(from);
+    tabs.insert(to, tab);
+    *active = if *active == from {
+        to
+    } else if from < *active && *active <= to {
+        *active - 1
+    } else if to <= *active && *active < from {
+        *active + 1
+    } else {
+        *active
+    };
+    true
 }
 
 fn restorable_url(value: &str) -> bool {
@@ -135,6 +256,97 @@ mod tests {
         BrowserSession::record_visit(&mut history, page.clone());
         BrowserSession::record_visit(&mut history, page);
         assert_eq!(history.len(), 1);
+    }
+
+    #[test]
+    fn suggestions_match_urls_titles_and_bookmarks_without_duplicates() {
+        let history = vec![
+            SavedBrowserPage {
+                url: "https://github.com/example/repo".into(),
+                title: "Rust project".into(),
+            },
+            SavedBrowserPage {
+                url: "https://example.com/guide".into(),
+                title: "Git guide".into(),
+            },
+            SavedBrowserPage {
+                url: "https://github.com/example/repo".into(),
+                title: "Updated Rust project".into(),
+            },
+        ];
+        let favorites = vec!["https://github.com/".into()];
+        let suggestions = BrowserSession::suggestions("git", &favorites, &history);
+        assert_eq!(suggestions.len(), 3);
+        assert_eq!(suggestions[0].url, "https://github.com/");
+        assert_eq!(suggestions[1].title, "Updated Rust project");
+        assert_eq!(
+            BrowserSession::suggestions("rust project", &favorites, &history).len(),
+            1
+        );
+        assert!(BrowserSession::suggestions("does not match", &favorites, &history).is_empty());
+    }
+
+    #[test]
+    fn quick_links_rank_frequency_then_recency_and_keep_ports() {
+        let history = vec![
+            SavedBrowserPage {
+                url: "https://example.com/old".into(),
+                title: "old".into(),
+            },
+            SavedBrowserPage {
+                url: "http://localhost:5173/test".into(),
+                title: "test".into(),
+            },
+            SavedBrowserPage {
+                url: "https://example.com/new".into(),
+                title: "new".into(),
+            },
+            SavedBrowserPage {
+                url: "https://other.example/new".into(),
+                title: "other".into(),
+            },
+            SavedBrowserPage {
+                url: "about:blank".into(),
+                title: "blank".into(),
+            },
+        ];
+        let sites = BrowserSession::frequent_sites(&history);
+        assert_eq!(
+            sites
+                .iter()
+                .map(|page| page.url.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "https://example.com/",
+                "https://other.example/",
+                "http://localhost:5173/"
+            ]
+        );
+    }
+
+    #[test]
+    fn dragging_in_both_directions_preserves_the_active_tab() -> anyhow::Result<()> {
+        for active in 0..4 {
+            for from in 0..4 {
+                for to in 0..4 {
+                    let mut tabs = vec![0, 1, 2, 3];
+                    let mut selected = active;
+                    reorder_tabs(&mut tabs, &mut selected, from, to);
+                    assert_eq!(tabs[selected], active);
+                    assert_eq!(tabs[to], from);
+                }
+            }
+        }
+        let mut session = BrowserSession::default();
+        session.tabs.push(SavedBrowserPage {
+            url: "https://example.com/".into(),
+            title: "Example".into(),
+        });
+        reorder_tabs(&mut session.tabs, &mut session.active_tab, 1, 0);
+        let restored = BrowserSession::decode(&serde_json::to_string(&session)?)?;
+        assert_eq!(restored.tabs, session.tabs);
+        assert_eq!(restored.active_tab, 1);
+        Ok(())
     }
 
     #[test]

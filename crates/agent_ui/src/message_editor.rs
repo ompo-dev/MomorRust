@@ -1630,6 +1630,32 @@ impl MessageEditor {
         }
     }
 
+    pub fn add_image(
+        &mut self,
+        image: gpui::Image,
+        name: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<()>> {
+        if !self.session_capabilities.read().supports_images() {
+            return Task::ready(Err(anyhow!("Este agente nao aceita anexos de imagem.")));
+        }
+        let editor = self.editor.clone();
+        let mention_set = self.mention_set.clone();
+        let workspace = self.workspace.clone();
+        window.spawn(cx, async move |cx| {
+            crate::mention_set::insert_images_as_context(
+                vec![(image, name)],
+                editor,
+                mention_set,
+                workspace,
+                cx,
+            )
+            .await;
+            Ok(())
+        })
+    }
+
     pub fn add_images_from_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.session_capabilities.read().supports_images() {
             return;
@@ -4794,6 +4820,58 @@ mod tests {
                 } if content == "content"
             )
         }));
+    }
+
+    #[gpui::test]
+    async fn test_add_browser_image_preserves_draft_and_clipboard(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (message_editor, editor, mut cx) =
+            setup_paste_test_message_editor(json!({}), cx).await;
+        message_editor.update(&mut cx, |editor, _cx| {
+            editor.session_capabilities.write()
+                .set_prompt_capabilities(acp::PromptCapabilities::new().image(true));
+        });
+        cx.simulate_input("Meu rascunho ");
+        cx.write_to_clipboard(ClipboardItem::new_string("nao alterar".into()));
+        let bytes = base64::prelude::BASE64_STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+            .expect("decode png");
+        let task = message_editor.update_in(&mut cx, |editor, window, cx| {
+            editor.add_image(
+                gpui::Image::from_bytes(gpui::ImageFormat::Png, bytes),
+                "Captura.png".into(), window, cx,
+            )
+        });
+        task.await.expect("attach screenshot");
+        let contents = mention_contents(&message_editor, &mut cx).await;
+        assert_eq!(contents.len(), 1);
+        assert!(matches!(&contents[0].1, Mention::Image(image) if !image.data.is_empty()));
+        editor.read_with(&cx, |editor, cx| {
+            assert!(editor.text(cx).starts_with("Meu rascunho "));
+            assert!(editor.text(cx).contains("Captura.png"));
+        });
+        assert_eq!(cx.read_from_clipboard().and_then(|item| item.text()), Some("nao alterar".into()));
+    }
+
+    #[gpui::test]
+    async fn test_add_browser_image_rejects_unsupported_agent_without_editing(cx: &mut TestAppContext) {
+        init_test(cx);
+        let (message_editor, editor, mut cx) =
+            setup_paste_test_message_editor(json!({}), cx).await;
+        message_editor.update(&mut cx, |editor, _cx| {
+            editor.session_capabilities.write()
+                .set_prompt_capabilities(acp::PromptCapabilities::new().image(false));
+        });
+        cx.simulate_input("Manter texto");
+        let task = message_editor.update_in(&mut cx, |editor, window, cx| {
+            editor.add_image(
+                gpui::Image::from_bytes(gpui::ImageFormat::Png, Vec::new()),
+                "Captura.png".into(), window, cx,
+            )
+        });
+        assert!(task.await.is_err());
+        assert_eq!(editor.read_with(&cx, |editor, cx| editor.text(cx)), "Manter texto");
+        assert!(mention_contents(&message_editor, &mut cx).await.is_empty());
     }
 
     async fn setup_paste_test_message_editor(

@@ -192,8 +192,11 @@ impl Tooltip {
 }
 
 impl Render for Tooltip {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        tooltip_container(cx, |el, _| {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Tooltip views live only while visible, so release removes their native clipping region.
+        crate::begin_popover(&cx.entity(), window, cx);
+        let id = cx.entity_id();
+        let content = tooltip_container(cx, |el, _| {
             el.child(
                 h_flex()
                     .gap_4()
@@ -209,7 +212,8 @@ impl Render for Tooltip {
                         .child(Label::new(meta).size(LabelSize::Small).color(Color::Muted)),
                 )
             })
-        })
+        });
+        crate::native_surface_overlay(id, content)
     }
 }
 

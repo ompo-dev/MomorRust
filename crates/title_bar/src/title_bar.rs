@@ -348,7 +348,7 @@ impl Render for TitleBar {
 
         // ponytail: chat-only — titlebar sem menu de projeto, git, collab, status,
         // sign-in e user menu; ficam só os controles de janela + o toggle ghost mode
-        let mut children = <ArrayVec<gpui::AnyElement, 4>>::new();
+        let mut children = <ArrayVec<gpui::AnyElement, 5>>::new();
 
         let ghost_on = self.capture_protected;
         let stt = stt::Stt::global(cx);
@@ -361,6 +361,7 @@ impl Render for TitleBar {
         // + reuniões) AO LADO do chat. Client area + stop_propagation pra não virar arraste.
         let notebook_open = workspace::notebook_open(cx);
         let browser_open = workspace::browser_open(cx);
+        let chat_open = workspace::chat_open(cx);
         children.push(
             div()
                 .window_control_area(gpui::WindowControlArea::Client)
@@ -393,14 +394,38 @@ impl Render for TitleBar {
                             IconName::ThreadsSidebarLeftClosed
                         },
                     )
+                    .icon_size(IconSize::Small)
+                    .toggle_state(notebook_open)
+                    .selected_icon_color(Color::Accent)
+                    .tooltip(Tooltip::text("Notas e reuniões"))
+                    // ponytail: alterna o slot do Notion e re-renderiza o workspace.
+                    .on_click(cx.listener(|this, _, _window, cx| {
+                        workspace::toggle_notebook(cx);
+                        this.workspace.update(cx, |_, cx| cx.notify()).ok();
+                        cx.notify();
+                    })),
+                )
+                .into_any_element(),
+        );
+
+        children.push(
+            div()
+                .window_control_area(gpui::WindowControlArea::Client)
+                .pl_1()
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    IconButton::new("toggle-chat", IconName::Chat)
                         .icon_size(IconSize::Small)
-                        .toggle_state(notebook_open)
+                        .toggle_state(chat_open)
                         .selected_icon_color(Color::Accent)
-                        .tooltip(Tooltip::text("Notas e reuniões"))
-                        // ponytail: alterna o slot do Notion e re-renderiza o workspace.
+                        .tooltip(Tooltip::text(if chat_open {
+                            "Ocultar chat"
+                        } else {
+                            "Mostrar chat"
+                        }))
                         .on_click(cx.listener(|this, _, _window, cx| {
-                            workspace::toggle_notebook(cx);
-                            this.workspace.update(cx, |_, cx| cx.notify()).ok();
+                            workspace::toggle_chat(cx);
+                            this.workspace.update(cx, |_, cx| cx.notify()).log_err();
                             cx.notify();
                         })),
                 )

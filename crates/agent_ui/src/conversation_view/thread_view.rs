@@ -19,6 +19,7 @@ use language_model::{LanguageModelEffortLevel, Speed};
 use settings::{SidebarSide, update_settings_file};
 use ui::{ButtonLike, SpinnerLabel, SpinnerVariant, SplitButton, SplitButtonStyle, Tab};
 use workspace::SERIALIZATION_THROTTLE_TIME;
+use workspace::notifications::NotifyResultExt as _;
 
 use super::*;
 
@@ -345,6 +346,7 @@ pub struct ThreadView {
     pub _cancel_task: Option<Task<()>>,
     _save_task: Option<Task<()>>,
     _draft_resolve_task: Option<Task<()>>,
+    browser_screenshot_task: Option<Task<()>>,
     pub skip_queue_processing_count: usize,
     pub user_interrupted_generation: bool,
     pub can_fast_track_queue: bool,
@@ -590,6 +592,7 @@ impl ThreadView {
             _cancel_task: None,
             _save_task: None,
             _draft_resolve_task: None,
+            browser_screenshot_task: None,
             skip_queue_processing_count: 0,
             user_interrupted_generation: false,
             can_fast_track_queue: false,
@@ -3382,6 +3385,7 @@ impl ThreadView {
                                     .child(self.render_add_context_button(cx))
                                     .child(self.render_usage_limits_control(cx))
                                     .child(self.render_follow_toggle(cx))
+                                    .child(self.render_browser_screenshot_button(cx))
                                     .children(self.render_fast_mode_control(cx))
                                     .children(self.render_thinking_control(cx)),
                             )
@@ -4173,6 +4177,60 @@ impl ThreadView {
                     .update(cx, |this, cx| this.build_add_context_menu(window, cx))
                     .ok()
             })
+    }
+
+    fn render_browser_screenshot_button(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let supports_images = self.session_capabilities.read().supports_images();
+        let capturing = self.browser_screenshot_task.is_some();
+        let browser_open = workspace::browser_open(cx);
+        IconButton::new("capture-browser-to-chat", IconName::Image)
+            .icon_size(IconSize::Small)
+            .icon_color(if capturing {
+                Color::Accent
+            } else {
+                Color::Muted
+            })
+            .disabled(capturing || !supports_images || !browser_open)
+            .tooltip(Tooltip::text(if capturing {
+                "Capturando navegador..."
+            } else if !supports_images {
+                "Este agente nao aceita imagens"
+            } else if !browser_open {
+                "Abra o navegador para capturar"
+            } else {
+                "Capturar navegador e anexar ao chat"
+            }))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.capture_browser_to_chat(window, cx);
+            }))
+    }
+
+    fn capture_browser_to_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.browser_screenshot_task.is_some() {
+            return;
+        }
+        let editor = self.active_editor(cx).clone();
+        editor.focus_handle(cx).focus(window, cx);
+        let workspace = self.workspace.clone();
+        let capture = workspace::capture_browser_screenshot(cx);
+        self.browser_screenshot_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let result: Result<()> = async {
+                let (image, name) = capture.await?;
+                let insertion = editor.update_in(cx, |editor, window, cx| {
+                    editor.add_image(image, name, window, cx)
+                })?;
+                insertion.await
+            }
+            .await;
+            result.notify_workspace_async_err(workspace, cx);
+            if let Err(error) = this.update(cx, |this, cx| {
+                this.browser_screenshot_task = None;
+                cx.notify();
+            }) {
+                log::debug!("Browser screenshot view was closed: {error:#}");
+            }
+        }));
+        cx.notify();
     }
 
     fn render_usage_limits_control(&mut self, cx: &mut Context<Self>) -> AnyElement {

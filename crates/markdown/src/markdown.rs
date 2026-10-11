@@ -1,4 +1,5 @@
 pub mod html;
+mod math;
 mod mermaid;
 pub mod parser;
 mod path_range;
@@ -329,6 +330,7 @@ pub struct Markdown {
     fallback_code_block_language: Option<LanguageName>,
     options: MarkdownOptions,
     mermaid_state: MermaidState,
+    math_state: math::MathState,
     copied_code_blocks: HashSet<ElementId>,
     code_block_scroll_handles: BTreeMap<usize, ScrollHandle>,
     context_menu_link: Option<SharedString>,
@@ -501,6 +503,7 @@ impl Markdown {
             fallback_code_block_language,
             options,
             mermaid_state: MermaidState::default(),
+            math_state: math::MathState::default(),
             copied_code_blocks: HashSet::default(),
             code_block_scroll_handles: BTreeMap::default(),
             context_menu_link: None,
@@ -749,6 +752,7 @@ impl Markdown {
             self.active_root_block = None;
             self.images_by_source_offset.clear();
             self.mermaid_state.clear();
+            self.math_state.clear();
             cx.notify();
             cx.refresh_windows();
             return;
@@ -877,6 +881,7 @@ impl Markdown {
             this.update(cx, |this, cx| {
                 this.parsed_markdown = parsed;
                 this.images_by_source_offset = images_by_source_offset;
+                this.math_state.retain(&this.parsed_markdown.events);
                 if this.active_root_block.is_some_and(|block_index| {
                     block_index >= this.parsed_markdown.root_block_starts.len()
                 }) {
@@ -2121,6 +2126,38 @@ impl Element for MarkdownElement {
                     }
                     _ => log::debug!("unsupported markdown tag end: {:?}", tag),
                 },
+                MarkdownEvent::Math { source, display } => {
+                    let mut style = self.style.clone();
+                    style.base_text_style = builder.text_style();
+                    let font_size = style.base_text_style.font_size.to_pixels(window.rem_size());
+                    let image = self.markdown.update(cx, |markdown, cx| {
+                        markdown.math_state.image(
+                            source.clone(),
+                            *display,
+                            &style,
+                            font_size,
+                            window.scale_factor(),
+                            cx,
+                        )
+                    });
+                    let formula = if let Some(image) = image {
+                        img(ImageSource::Render(image.image))
+                            .w(image.width)
+                            .h_auto()
+                            .max_w_full()
+                            .into_any_element()
+                    } else {
+                        StyledText::new(source.clone())
+                            .with_runs(vec![style.base_text_style.to_run(source.len())])
+                            .into_any_element()
+                    };
+                    builder.push_formula(
+                        range.clone(),
+                        formula,
+                        parsed_markdown.source[range.clone()].to_owned().into(),
+                        *display,
+                    );
+                }
                 MarkdownEvent::Text => {
                     builder.push_text(&parsed_markdown.source[range.clone()], range.clone());
                 }
@@ -2420,6 +2457,7 @@ struct MarkdownElementBuilder {
     div_stack: Vec<AnyDiv>,
     rendered_lines: Vec<RenderedLine>,
     pending_line: PendingLine,
+    inline_parts: Vec<InlinePart>,
     rendered_links: Vec<RenderedLink>,
     rendered_footnote_refs: Vec<RenderedFootnoteRef>,
     current_source_index: usize,
@@ -2440,6 +2478,11 @@ struct PendingLine {
     source_mappings: Vec<SourceMapping>,
 }
 
+enum InlinePart {
+    Text(PendingLine, usize),
+    Formula(Range<usize>, AnyElement, SharedString),
+}
+
 struct ListStackEntry {
     bullet_index: Option<u64>,
 }
@@ -2458,6 +2501,7 @@ impl MarkdownElementBuilder {
             }],
             rendered_lines: Vec::new(),
             pending_line: PendingLine::default(),
+            inline_parts: Vec::new(),
             rendered_links: Vec::new(),
             rendered_footnote_refs: Vec::new(),
             current_source_index: 0,
@@ -2581,6 +2625,42 @@ impl MarkdownElementBuilder {
                 .child(element.into())
                 .into_any_element()
         }]);
+    }
+
+    fn push_formula(
+        &mut self,
+        range: Range<usize>,
+        element: AnyElement,
+        source: SharedString,
+        display: bool,
+    ) {
+        if display {
+            self.flush_text();
+            let anchor = self.render_source_anchor(range);
+            if let Some(line) = self.rendered_lines.last_mut() {
+                line.copy_text = Some(source);
+            }
+            if let Some(parent) = self.div_stack.last_mut() {
+                parent.extend([div()
+                    .relative()
+                    .w_full()
+                    .min_w_0()
+                    .py_2()
+                    .child(anchor)
+                    .child(element)
+                    .into_any_element()]);
+            }
+            return;
+        }
+        if !self.pending_line.text.is_empty() {
+            self.inline_parts.push(InlinePart::Text(
+                mem::take(&mut self.pending_line),
+                self.current_source_index,
+            ));
+        }
+        self.current_source_index = range.end;
+        self.inline_parts
+            .push(InlinePart::Formula(range, element, source));
     }
 
     fn push_list(&mut self, bullet_index: Option<u64>) {
@@ -2731,6 +2811,8 @@ impl MarkdownElementBuilder {
             }],
             source_end: source_range.end,
             language: None,
+            copy_text: None,
+            newline_after: true,
         });
         div()
             .absolute()
@@ -2743,6 +2825,98 @@ impl MarkdownElementBuilder {
 
     fn flush_text(&mut self) {
         let line = mem::take(&mut self.pending_line);
+        if !self.inline_parts.is_empty() {
+            if !line.text.is_empty() {
+                self.inline_parts
+                    .push(InlinePart::Text(line, self.current_source_index));
+            }
+            let mut row = div().flex().flex_wrap().items_center().min_w_0().gap_y_1();
+            for part in mem::take(&mut self.inline_parts) {
+                match part {
+                    InlinePart::Formula(range, element, source) => {
+                        let anchor = self.render_source_anchor(range);
+                        if let Some(line) = self.rendered_lines.last_mut() {
+                            line.copy_text = Some(source);
+                            line.newline_after = false;
+                        }
+                        row = row.child(div().relative().max_w_full().child(anchor).child(element));
+                    }
+                    InlinePart::Text(line, source_end) => {
+                        let mut offset = 0;
+                        // Word-sized text fragments let native math images participate in
+                        // wrapping without changing layout or selection for ordinary paragraphs.
+                        for chunk in line.text.split_inclusive(char::is_whitespace) {
+                            let end = offset + chunk.trim_end_matches('\n').len();
+                            if end > offset {
+                                let mut runs = Vec::new();
+                                let mut run_offset = 0;
+                                for run in &line.runs {
+                                    let run_end = run_offset + run.len;
+                                    let length =
+                                        end.min(run_end).saturating_sub(offset.max(run_offset));
+                                    if length > 0 {
+                                        let mut run = run.clone();
+                                        run.len = length;
+                                        runs.push(run);
+                                    }
+                                    run_offset = run_end;
+                                }
+                                let text = StyledText::new(chunk.trim_end_matches('\n').to_owned())
+                                    .with_runs(runs);
+                                let mut mappings = Vec::new();
+                                if let Some(source_index) =
+                                    source_index_for_rendered(&line.source_mappings, offset)
+                                {
+                                    mappings.push(SourceMapping {
+                                        rendered_index: 0,
+                                        source_index,
+                                    });
+                                }
+                                mappings.extend(line.source_mappings.iter().filter_map(
+                                    |mapping| {
+                                        (mapping.rendered_index > offset
+                                            && mapping.rendered_index < end)
+                                            .then(|| SourceMapping {
+                                                rendered_index: mapping.rendered_index - offset,
+                                                source_index: mapping.source_index,
+                                            })
+                                    },
+                                ));
+                                let end_source = if end == line.text.len() {
+                                    source_end
+                                } else {
+                                    source_index_for_rendered(&line.source_mappings, end)
+                                        .unwrap_or(source_end)
+                                };
+                                self.rendered_lines.push(RenderedLine {
+                                    layout: text.layout().clone(),
+                                    source_mappings: mappings,
+                                    source_end: end_source,
+                                    language: None,
+                                    copy_text: None,
+                                    newline_after: false,
+                                });
+                                row = row.child(text);
+                            }
+                            if chunk.ends_with('\n') {
+                                if let Some(line) = self.rendered_lines.last_mut() {
+                                    line.newline_after = true;
+                                }
+                                row = row.child(div().w_full().h_0());
+                            }
+                            offset += chunk.len();
+                        }
+                    }
+                }
+            }
+            if let Some(parent) = self.div_stack.last_mut() {
+                parent.extend([row.into_any_element()]);
+            }
+            if let Some(line) = self.rendered_lines.last_mut() {
+                line.newline_after = true;
+            }
+            return;
+        }
         if line.text.is_empty() {
             return;
         }
@@ -2753,6 +2927,8 @@ impl MarkdownElementBuilder {
             source_mappings: line.source_mappings,
             source_end: self.current_source_index,
             language: self.code_block_stack.last().cloned().flatten(),
+            copy_text: None,
+            newline_after: true,
         });
         self.div_stack.last_mut().unwrap().extend([text.into_any()]);
     }
@@ -2776,6 +2952,8 @@ struct RenderedLine {
     source_mappings: Vec<SourceMapping>,
     source_end: usize,
     language: Option<Arc<Language>>,
+    copy_text: Option<SharedString>,
+    newline_after: bool,
 }
 
 impl RenderedLine {
@@ -3110,9 +3288,30 @@ impl RenderedText {
             if range.start > line.source_end {
                 continue;
             }
-            let line_source_start = line.source_mappings.first().unwrap().source_index;
+            let Some(mapping) = line.source_mappings.first() else {
+                continue;
+            };
+            let line_source_start = mapping.source_index;
             if range.end < line_source_start {
                 break;
+            }
+
+            if let Some(source) = &line.copy_text {
+                let start = range
+                    .start
+                    .saturating_sub(line_source_start)
+                    .min(source.len());
+                let end = range
+                    .end
+                    .saturating_sub(line_source_start)
+                    .min(source.len());
+                if let Some(selected) = source.get(start..end) {
+                    accumulator.push_str(selected);
+                }
+                if line.newline_after {
+                    accumulator.push('\n');
+                }
+                continue;
             }
 
             let text = line.layout.text();
@@ -3130,10 +3329,14 @@ impl RenderedText {
             .min(text.len());
 
             accumulator.push_str(&text[start..end]);
-            accumulator.push('\n');
+            if line.newline_after {
+                accumulator.push('\n');
+            }
         }
         // Remove trailing newline
-        accumulator.pop();
+        if accumulator.ends_with('\n') {
+            accumulator.pop();
+        }
         accumulator
     }
 
@@ -3216,6 +3419,34 @@ mod tests {
                 (5, 83),
                 (6, 84),
             ]],
+        );
+    }
+
+    #[gpui::test]
+    fn math_inline_copy_preserves_formula_and_sentence(cx: &mut TestAppContext) {
+        let source = r"Antes \(\frac{1}{2}\) depois de $x^2$.";
+        let rendered = render_markdown(source, cx);
+        assert_eq!(rendered.text_for_range(0..source.len()), source);
+        let start = source.find("depois").expect("sentence suffix");
+        assert_eq!(
+            rendered.text_for_range(start..source.len()),
+            &source[start..]
+        );
+        assert!(
+            rendered
+                .lines
+                .iter()
+                .all(|line| line.layout.bounds().size.width <= px(600.0))
+        );
+    }
+
+    #[gpui::test]
+    fn math_block_copy_preserves_delimiters_and_adjacent_paragraphs(cx: &mut TestAppContext) {
+        let source = "Antes\n\n\\[\\sqrt{x^2+y^2}\\]\n\nDepois";
+        let rendered = render_markdown(source, cx);
+        assert_eq!(
+            rendered.text_for_range(0..source.len()),
+            "Antes\n\\[\\sqrt{x^2+y^2}\\]\nDepois"
         );
     }
 

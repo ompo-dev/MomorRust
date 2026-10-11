@@ -48,6 +48,7 @@ pub struct WindowsWindowState {
     pub min_size: Option<Size<Pixels>>,
     pub fullscreen_restore_bounds: Cell<Bounds<Pixels>>,
     pub border_offset: WindowBorderOffset,
+    clip: WindowClip,
     pub appearance: Cell<WindowAppearance>,
     pub background_appearance: Cell<WindowBackgroundAppearance>,
     pub scale_factor: Cell<f32>,
@@ -109,9 +110,7 @@ impl WindowsWindowState {
         use windows::Win32::UI::Shell::{
             NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
         };
-        use windows::Win32::UI::WindowsAndMessaging::{
-            GCLP_HICON, GetClassLongPtrW, HICON,
-        };
+        use windows::Win32::UI::WindowsAndMessaging::{GCLP_HICON, GetClassLongPtrW, HICON};
 
         let mut nid = NOTIFYICONDATAW {
             cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
@@ -184,6 +183,7 @@ impl WindowsWindowState {
             logical_size: Cell::new(logical_size),
             fullscreen_restore_bounds: Cell::new(fullscreen_restore_bounds),
             border_offset,
+            clip: WindowClip::default(),
             appearance: Cell::new(appearance),
             background_appearance: Cell::new(WindowBackgroundAppearance::Opaque),
             scale_factor: Cell::new(scale_factor),
@@ -658,16 +658,19 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn set_window_bounds(&mut self, new_bounds: gpui::Bounds<gpui::Pixels>) {
-        let hwnd = self.0.hwnd;
+        let weak = Rc::downgrade(&self.0);
         let bounds = new_bounds.to_device_pixels(self.scale_factor());
         let rect = calculate_window_rect(bounds, &self.state.border_offset);
         self.0
             .executor
             .spawn(async move {
                 use windows::Win32::UI::WindowsAndMessaging::{SWP_NOACTIVATE, SWP_NOZORDER};
-                unsafe {
+                let Some(this) = weak.upgrade() else {
+                    return;
+                };
+                if unsafe {
                     SetWindowPos(
-                        hwnd,
+                        this.hwnd,
                         None,
                         rect.left,
                         rect.top,
@@ -676,7 +679,43 @@ impl PlatformWindow for WindowsWindow {
                         SWP_NOZORDER | SWP_NOACTIVATE,
                     )
                     .context("unable to set window bounds")
-                    .log_err();
+                    .log_err()
+                }
+                .is_some()
+                {
+                    this.state
+                        .clip
+                        .apply(
+                            this.hwnd,
+                            this.state.scale_factor.get(),
+                            &this.state.border_offset,
+                        )
+                        .log_err();
+                    // Bounds callbacks have completed; present the matching scene
+                    // before the event loop exposes the resized swap chain.
+                    this.draw_window(this.hwnd, true);
+                }
+            })
+            .detach();
+    }
+
+    fn set_window_clip(&mut self, bounds: Option<Bounds<Pixels>>) {
+        if self.state.clip.requested.replace(bounds) == bounds {
+            return;
+        }
+        let weak = Rc::downgrade(&self.0);
+        self.0
+            .executor
+            .spawn(async move {
+                if let Some(this) = weak.upgrade() {
+                    this.state
+                        .clip
+                        .apply(
+                            this.hwnd,
+                            this.state.scale_factor.get(),
+                            &this.state.border_offset,
+                        )
+                        .log_err();
                 }
             })
             .detach();
@@ -691,7 +730,11 @@ impl PlatformWindow for WindowsWindow {
                     HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
                     SetWindowPos,
                 };
-                let after = if always_on_top { HWND_TOPMOST } else { HWND_NOTOPMOST };
+                let after = if always_on_top {
+                    HWND_TOPMOST
+                } else {
+                    HWND_NOTOPMOST
+                };
                 unsafe {
                     SetWindowPos(
                         hwnd,
@@ -1347,10 +1390,63 @@ struct AccentPolicy {
 
 type Color = (u8, u8, u8, u8);
 
+#[derive(Default)]
+struct WindowClip {
+    requested: Cell<Option<Bounds<Pixels>>>,
+    applied: Cell<Option<(i32, i32, i32, i32)>>,
+}
+
+impl WindowClip {
+    fn apply(&self, hwnd: HWND, scale_factor: f32, border: &WindowBorderOffset) -> Result<()> {
+        let rectangle = if let Some(bounds) = self.requested.get() {
+            let bounds = bounds.to_device_pixels(scale_factor);
+            let mut outer = RECT::default();
+            unsafe { GetWindowRect(hwnd, &mut outer) }
+                .context("failed to locate clipped window")?;
+            let left = bounds.left().0 - outer.left - border.left_offset.get();
+            let top = bounds.top().0 - outer.top - border.top_offset.get();
+            Some((
+                left,
+                top,
+                left + bounds.size.width.0 + border.width_offset.get(),
+                top + bounds.size.height.0 + border.height_offset.get(),
+            ))
+        } else {
+            None
+        };
+        if self.applied.get() == rectangle {
+            return Ok(());
+        }
+        let region = rectangle
+            .map(|(left, top, right, bottom)| unsafe { CreateRectRgn(left, top, right, bottom) });
+        anyhow::ensure!(
+            region.is_none_or(|region| !region.is_invalid()),
+            "failed to allocate window clipping region"
+        );
+        if unsafe { SetWindowRgn(hwnd, region, false) } == 0 {
+            if let Some(region) = region {
+                unsafe { DeleteObject(region.into()) }
+                    .ok()
+                    .context("failed to release window clipping region")
+                    .log_err();
+            }
+            anyhow::bail!(
+                "failed to apply window clipping region: {}",
+                Error::from_win32()
+            );
+        }
+        // Windows owns the region after SetWindowRgn succeeds.
+        self.applied.set(rectangle);
+        Ok(())
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub(crate) struct WindowBorderOffset {
     pub(crate) width_offset: Cell<i32>,
     pub(crate) height_offset: Cell<i32>,
+    left_offset: Cell<i32>,
+    top_offset: Cell<i32>,
 }
 
 impl WindowBorderOffset {
@@ -1365,6 +1461,14 @@ impl WindowBorderOffset {
             GetClientRect(hwnd, &mut rect)?;
             rect
         };
+        let mut client_origin = POINT::default();
+        unsafe { ClientToScreen(hwnd, &mut client_origin) }
+            .ok()
+            .context("failed to locate window client origin")?;
+        // A custom title bar removes the top frame, not the bottom frame.
+        // Splitting the total border evenly drifts WM_MOVE's client origin.
+        self.left_offset.set(client_origin.x - window_rect.left);
+        self.top_offset.set(client_origin.y - window_rect.top);
         self.width_offset
             .set((window_rect.right - window_rect.left) - (client_rect.right - client_rect.left));
         self.height_offset
@@ -1503,8 +1607,8 @@ fn calculate_window_rect(bounds: Bounds<DevicePixels>, border_offset: &WindowBor
         right: bounds.right().0,
         bottom: bounds.bottom().0,
     };
-    let left_offset = border_offset.width_offset.get() / 2;
-    let top_offset = border_offset.height_offset.get() / 2;
+    let left_offset = border_offset.left_offset.get();
+    let top_offset = border_offset.top_offset.get();
     let right_offset = border_offset.width_offset.get() - left_offset;
     let bottom_offset = border_offset.height_offset.get() - top_offset;
     rect.left -= left_offset;
@@ -1519,8 +1623,8 @@ fn calculate_client_rect(
     border_offset: &WindowBorderOffset,
     scale_factor: f32,
 ) -> Bounds<Pixels> {
-    let left_offset = border_offset.width_offset.get() / 2;
-    let top_offset = border_offset.height_offset.get() / 2;
+    let left_offset = border_offset.left_offset.get();
+    let top_offset = border_offset.top_offset.get();
     let right_offset = border_offset.width_offset.get() - left_offset;
     let bottom_offset = border_offset.height_offset.get() - top_offset;
     let left = rect.left + left_offset;
@@ -1637,9 +1741,225 @@ fn set_non_rude_hwnd(hwnd: HWND, non_rude: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::ClickState;
-    use gpui::{DevicePixels, MouseButton, point};
-    use std::time::Duration;
+    use super::{
+        ClickState, WindowBorderOffset, WindowClip, calculate_client_rect, calculate_window_rect,
+    };
+    use anyhow::Result;
+    use gpui::{Bounds, DevicePixels, MouseButton, point, px, size};
+    use std::{cell::Cell, time::Duration};
+    use windows::{
+        Win32::{
+            Foundation::{HWND, POINT, RECT},
+            Graphics::Gdi::{ClientToScreen, CreateRectRgn, DeleteObject, GetRgnBox, GetWindowRgn},
+            UI::WindowsAndMessaging::{
+                CreateWindowExW, DestroyWindow, GetClientRect, SWP_NOACTIVATE, SWP_NOZORDER,
+                SetWindowPos, WINDOW_EX_STYLE, WS_OVERLAPPEDWINDOW,
+            },
+        },
+        core::w,
+    };
+
+    #[test]
+    fn custom_titlebar_resize_preserves_client_origin_and_dimensions() {
+        for scale in [1., 1.25, 1.5, 2.] {
+            let border = WindowBorderOffset {
+                width_offset: Cell::new((16. * scale) as i32),
+                height_offset: Cell::new((8. * scale) as i32),
+                left_offset: Cell::new((8. * scale) as i32),
+                top_offset: Cell::new(0),
+            };
+            for origin in [point(px(100.), px(160.)), point(px(-1200.), px(-100.))] {
+                let mut bounds = Bounds::new(origin, size(px(1316.), px(700.)));
+                for cycle in 0..40 {
+                    bounds.size.width = px(if cycle % 2 == 0 { 386. } else { 1316. });
+                    let physical = bounds.to_device_pixels(scale);
+                    let rect = calculate_window_rect(physical, &border);
+                    assert_eq!(rect.top, physical.top().0);
+                    assert_eq!(rect.left, physical.left().0 - border.left_offset.get());
+                    assert_eq!(
+                        rect.bottom,
+                        physical.bottom().0 + border.height_offset.get()
+                    );
+                    bounds = calculate_client_rect(rect, &border, scale);
+                    assert_eq!(bounds.origin, origin, "cycle {cycle}, scale {scale}");
+                    assert_eq!(bounds.size.height, px(700.));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_native_resizes_preserve_the_measured_client_origin() -> Result<()> {
+        struct TestWindow(HWND);
+        impl Drop for TestWindow {
+            fn drop(&mut self) {
+                if let Err(error) = unsafe { DestroyWindow(self.0) } {
+                    log::error!("failed to destroy resize test window: {error}");
+                }
+            }
+        }
+        // Never show this window or take focus from the user's application.
+        let window = TestWindow(unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!("Momor resize test"),
+                WS_OVERLAPPEDWINDOW,
+                100,
+                150,
+                1316,
+                700,
+                None,
+                None,
+                None,
+                None,
+            )?
+        });
+        let border = WindowBorderOffset::default();
+        border.update(window.0)?;
+        let mut origin = POINT::default();
+        unsafe { ClientToScreen(window.0, &mut origin) }.ok()?;
+        for cycle in 0..40 {
+            let width = if cycle % 2 == 0 { 386 } else { 1316 };
+            let bounds = Bounds::new(
+                point(DevicePixels(origin.x), DevicePixels(origin.y)),
+                size(DevicePixels(width), DevicePixels(700)),
+            );
+            let rect = calculate_window_rect(bounds, &border);
+            unsafe {
+                SetWindowPos(
+                    window.0,
+                    None,
+                    rect.left,
+                    rect.top,
+                    rect.right - rect.left,
+                    rect.bottom - rect.top,
+                    SWP_NOACTIVATE | SWP_NOZORDER,
+                )?;
+            }
+            border.update(window.0)?;
+            let mut observed = POINT::default();
+            let mut client = RECT::default();
+            unsafe {
+                ClientToScreen(window.0, &mut observed).ok()?;
+                GetClientRect(window.0, &mut client)?;
+            }
+            assert_eq!(
+                (observed.x, observed.y),
+                (origin.x, origin.y),
+                "cycle {cycle}"
+            );
+            assert_eq!((client.right, client.bottom), (width, 700));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn animated_window_clip_preserves_the_surface_and_survives_the_final_resize() -> Result<()> {
+        struct TestWindow(HWND);
+        impl Drop for TestWindow {
+            fn drop(&mut self) {
+                if let Err(error) = unsafe { DestroyWindow(self.0) } {
+                    log::error!("failed to destroy clipping test window: {error}");
+                }
+            }
+        }
+        let window = TestWindow(unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!("Momor clipping test"),
+                WS_OVERLAPPEDWINDOW,
+                100,
+                150,
+                1316,
+                700,
+                None,
+                None,
+                None,
+                None,
+            )?
+        });
+        let border = WindowBorderOffset::default();
+        border.update(window.0)?;
+        let mut origin = POINT::default();
+        let mut client = RECT::default();
+        unsafe {
+            ClientToScreen(window.0, &mut origin).ok()?;
+            GetClientRect(window.0, &mut client)?;
+        }
+        let clip = WindowClip::default();
+        let width = client.right - client.left;
+        let height = client.bottom - client.top;
+        for step in 0..=40 {
+            let offset = ((width - 386) as f32 * (step as f32 / 40.)) as i32;
+            let bounds = Bounds::new(
+                point(px((origin.x + offset) as f32), px(origin.y as f32)),
+                size(px((width - offset) as f32), px(height as f32)),
+            );
+            clip.requested.set(Some(bounds));
+            clip.apply(window.0, 1., &border)?;
+            clip.apply(window.0, 1., &border)?;
+            let region = unsafe { CreateRectRgn(0, 0, 0, 0) };
+            anyhow::ensure!(!region.is_invalid(), "failed to allocate test region");
+            let region_type = unsafe { GetWindowRgn(window.0, region) };
+            let mut observed = RECT::default();
+            unsafe {
+                GetRgnBox(region, &mut observed);
+                DeleteObject(region.into()).ok()?;
+            }
+            assert!(region_type.0 > 0);
+            assert_eq!(observed.left, offset);
+            assert_eq!(observed.top, 0);
+            assert_eq!(observed.right, width + border.width_offset.get());
+            assert_eq!(observed.bottom, height + border.height_offset.get());
+            let mut observed_origin = POINT::default();
+            let mut observed_client = RECT::default();
+            unsafe {
+                ClientToScreen(window.0, &mut observed_origin).ok()?;
+                GetClientRect(window.0, &mut observed_client)?;
+            }
+            assert_eq!((observed_origin.x, observed_origin.y), (origin.x, origin.y));
+            assert_eq!(
+                (observed_client.right, observed_client.bottom),
+                (width, height)
+            );
+        }
+        let final_bounds = clip.requested.get().expect("final clipping bounds");
+        let rect = calculate_window_rect(final_bounds.to_device_pixels(1.), &border);
+        unsafe {
+            SetWindowPos(
+                window.0,
+                None,
+                rect.left,
+                rect.top,
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+                SWP_NOACTIVATE | SWP_NOZORDER,
+            )?;
+        }
+        clip.apply(window.0, 1., &border)?;
+        assert_eq!(
+            clip.applied.get(),
+            Some((
+                0,
+                0,
+                386 + border.width_offset.get(),
+                height + border.height_offset.get()
+            ))
+        );
+        clip.requested.set(None);
+        clip.apply(window.0, 1., &border)?;
+        assert_eq!(clip.applied.get(), None);
+        let region = unsafe { CreateRectRgn(0, 0, 0, 0) };
+        anyhow::ensure!(!region.is_invalid(), "failed to allocate test region");
+        let region_type = unsafe { GetWindowRgn(window.0, region) };
+        unsafe {
+            DeleteObject(region.into()).ok()?;
+        }
+        assert_eq!(region_type.0, 0, "full native window must be restored");
+        Ok(())
+    }
 
     #[test]
     fn test_double_click_interval() {

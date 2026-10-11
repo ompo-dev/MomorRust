@@ -4,7 +4,8 @@
 //! The embedded Obscura engine is used only as the page runtime through CDP; no
 //! external browser window or browser shell is launched.
 
-use crate::browser_session::{BrowserSession, SESSION_KEY, SavedBrowserPage};
+use crate::browser_payments::{BrowserPayments, PaymentCard};
+use crate::browser_session::{BrowserSession, SESSION_KEY, SavedBrowserPage, reorder_tabs};
 #[cfg(target_os = "windows")]
 use crate::native_webview::{NativeWebView, debugging_port};
 use anyhow::{Context as _, Result, anyhow};
@@ -42,6 +43,7 @@ use workspace::Workspace;
 const DEFAULT_CDP_ENDPOINT: &str = "ws://127.0.0.1:9222/devtools/browser";
 const BROWSER_SETTLE_MAX_MS: u64 = 5_000;
 const DEFAULT_SEARCH_ENGINE: &str = "https://www.google.com/search";
+static NEXT_TAB_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug)]
 pub struct CdpEvent {
@@ -919,6 +921,7 @@ struct BrowserNavigation {
 }
 
 struct BrowserTab {
+    id: u64,
     page: Option<BrowserPage>,
     current_url: String,
     title: String,
@@ -935,6 +938,7 @@ struct BrowserTab {
 impl BrowserTab {
     fn new() -> Self {
         Self {
+            id: NEXT_TAB_ID.fetch_add(1, Ordering::Relaxed),
             page: None,
             current_url: "about:blank".to_string(),
             title: "Nova aba".to_string(),
@@ -972,6 +976,11 @@ pub struct BrowserPanel {
     address_bar: Option<Entity<InputField>>,
     address_bar_synced_text: String,
     _address_subscription: Option<Subscription>,
+    address_suggestions: Vec<SavedBrowserPage>,
+    selected_suggestion: Option<usize>,
+    address_suggestion_scroll: gpui::ScrollHandle,
+    suggestions_open: bool,
+    address_bounds: Option<Bounds<Pixels>>,
     client: Option<CdpClient>,
     tabs: Vec<BrowserTab>,
     active_tab: usize,
@@ -1073,6 +1082,11 @@ impl BrowserPanel {
             address_bar: None,
             address_bar_synced_text: String::new(),
             _address_subscription: None,
+            address_suggestions: Vec::new(),
+            selected_suggestion: None,
+            address_suggestion_scroll: gpui::ScrollHandle::default(),
+            suggestions_open: false,
+            address_bounds: None,
             client: None,
             tabs: session
                 .tabs
@@ -1190,6 +1204,94 @@ impl BrowserPanel {
         self.tabs.get_mut(self.active_tab)
     }
 
+    fn tab_index(&self, id: u64) -> Option<usize> {
+        self.tabs.iter().position(|tab| tab.id == id)
+    }
+
+    fn reorder_tab(&mut self, id: u64, target: u64, cx: &mut Context<Self>) {
+        if let (Some(from), Some(to)) = (self.tab_index(id), self.tab_index(target))
+            && reorder_tabs(&mut self.tabs, &mut self.active_tab, from, to)
+        {
+            cx.notify();
+        }
+    }
+
+    fn open_payments(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(workspace) = self._workspace.upgrade() else {
+            return;
+        };
+        let Some(tab_id) = self.active_tab().map(|tab| tab.id) else {
+            return;
+        };
+        let origin = self.active_url();
+        let weak = cx.weak_entity();
+        workspace.update(cx, |workspace, cx| {
+            workspace.toggle_modal(window, cx, move |window, cx| {
+                BrowserPayments::new(
+                    move |card, window, cx| {
+                        weak.update(cx, |this, cx| {
+                            this.fill_card(card, tab_id, &origin, window, cx)
+                        })
+                        .unwrap_or_else(|_| Task::ready(Err(anyhow!("O navegador foi fechado."))))
+                    },
+                    window,
+                    cx,
+                )
+            });
+        });
+    }
+
+    fn fill_card(
+        &self,
+        card: PaymentCard,
+        tab_id: u64,
+        origin: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<usize>> {
+        if self.active_tab().is_none_or(|tab| tab.id != tab_id) {
+            return Task::ready(Err(anyhow!(
+                "A aba mudou. Abra o cofre novamente na aba desejada."
+            )));
+        }
+        let script = match card.fill_script(origin) {
+            Ok(script) => script,
+            Err(error) => return Task::ready(Err(error)),
+        };
+        #[cfg(target_os = "windows")]
+        if let Some(webview) = self.active_native_webview() {
+            let (send, receive) = oneshot::channel();
+            if let Err(error) = webview.evaluate_script(&script, move |result| {
+                if send.send(result).is_err() {
+                    tracing::debug!("Payment fill was cancelled");
+                }
+            }) {
+                return Task::ready(Err(error));
+            }
+            let timeout = cx.background_executor().timer(Duration::from_secs(10));
+            return cx.spawn(async move |_, _| {
+                match futures::future::select(Box::pin(receive), Box::pin(timeout)).await {
+                    futures::future::Either::Left((result, _)) => {
+                        let result = result.context("O preenchimento foi cancelado.")??;
+                        Ok(result.as_u64().unwrap_or_default() as usize)
+                    }
+                    futures::future::Either::Right(_) => {
+                        Err(anyhow!("O preenchimento demorou demais."))
+                    }
+                }
+            });
+        }
+        let (Some(client), Some(page)) = (self.client.clone(), self.active_page()) else {
+            return Task::ready(Err(anyhow!(
+                "A pagina do navegador ainda nao esta disponivel."
+            )));
+        };
+        gpui_tokio::Tokio::spawn_result(cx, async move {
+            let value = client.evaluate(&page, &script).await?;
+            Ok(value.as_u64().unwrap_or_default() as usize)
+        })
+    }
+
     fn active_page(&self) -> Option<BrowserPage> {
         self.active_tab().and_then(|tab| tab.page.clone())
     }
@@ -1279,12 +1381,61 @@ impl BrowserPanel {
         self.address_bar_synced_text = text;
     }
 
+    fn dismiss_suggestions(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.suggestions_open = false;
+        self.selected_suggestion = None;
+        if let Some(field) = self.address_bar.as_ref() {
+            ui::end_popover(field.entity_id(), window, cx);
+        }
+    }
+
+    fn update_suggestions(&mut self, cx: &mut Context<Self>) {
+        let text = self
+            .address_bar
+            .as_ref()
+            .map(|field| field.read(cx).text(cx))
+            .unwrap_or_default();
+        self.address_suggestions =
+            BrowserSession::suggestions(&text, &self.favorites, &self.saved_history);
+        self.selected_suggestion = None;
+        self.suggestions_open = true;
+        self.address_suggestion_scroll.scroll_to_item(0);
+        cx.notify();
+    }
+
+    fn submit_address(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(page) = self
+            .selected_suggestion
+            .and_then(|index| self.address_suggestions.get(index))
+            .cloned()
+        {
+            self.open_saved_page(page, window, cx);
+        } else {
+            self.dismiss_suggestions(window, cx);
+            self.navigate(window, cx);
+        }
+    }
+
+    fn open_saved_page(
+        &mut self,
+        page: SavedBrowserPage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dismiss_suggestions(window, cx);
+        if let Some(field) = self.address_bar.clone() {
+            field.update(cx, |field, cx| field.set_text(&page.url, window, cx));
+            self.navigate(window, cx);
+        }
+    }
+
     fn add_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.tabs.push(BrowserTab::new());
         self.active_tab = self.tabs.len().saturating_sub(1);
         self.viewport_size = None;
         self.viewport_auto = true;
         self.last_mouse_move = None;
+        self.dismiss_suggestions(window, cx);
         self.set_native_visibility(false, cx);
         self.reset_address_bar(window, cx);
         if let Some(address_bar) = self.address_bar.clone() {
@@ -1301,6 +1452,7 @@ impl BrowserPanel {
         self.viewport_size = None;
         self.viewport_auto = true;
         self.last_mouse_move = None;
+        self.dismiss_suggestions(window, cx);
         #[cfg(target_os = "windows")]
         {
             self.native_webview_bounds = None;
@@ -1312,9 +1464,15 @@ impl BrowserPanel {
         cx.notify();
     }
 
-    fn close_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+    fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if index >= self.tabs.len() {
             return;
+        }
+        #[cfg(target_os = "windows")]
+        if index == self.active_tab {
+            self.native_url_task.take();
+            self.native_capture_task.take();
+            self.native_webview_bounds = None;
         }
         let tab = self.tabs.remove(index);
         if let (Some(client), Some(page)) = (self.client.clone(), tab.page) {
@@ -1336,6 +1494,9 @@ impl BrowserPanel {
         self.viewport_size = None;
         self.viewport_auto = true;
         self.last_mouse_move = None;
+        self.dismiss_suggestions(window, cx);
+        self.set_native_visibility(self.active_url() != "about:blank", cx);
+        self.reset_address_bar(window, cx);
         cx.notify();
     }
 
@@ -1352,17 +1513,28 @@ impl BrowserPanel {
             window.focus(&field.read(cx).focus_handle(cx), cx);
         }
         let editor = field.read(cx).editor().clone();
+        ui::begin_popover(&field, window, cx);
         let weak = cx.weak_entity();
         self._address_subscription = Some(editor.subscribe(
-            Box::new(move |event, _window, cx| {
+            Box::new(move |event, window, cx| {
                 if matches!(event, ui_input::ErasedEditorEvent::BufferEdited) {
-                    weak.update(cx, |_this, cx| cx.notify()).ok();
+                    if let Err(error) = weak.update(cx, |this, cx| {
+                        if this.address_bar.as_ref().is_some_and(|field| {
+                            field.read(cx).focus_handle(cx).contains_focused(window, cx)
+                                && field.read(cx).text(cx) != this.address_bar_synced_text
+                        }) {
+                            this.update_suggestions(cx);
+                        }
+                    }) {
+                        tracing::debug!("browser suggestions update failed: {error:#}");
+                    }
                 }
             }),
             window,
             cx,
         ));
         self.address_bar = Some(field);
+        self.reset_address_bar(window, cx);
     }
 
     #[cfg(target_os = "windows")]
@@ -1382,6 +1554,7 @@ impl BrowserPanel {
         let Some(tab) = self.tabs.get(tab_index) else {
             return;
         };
+        let tab_id = tab.id;
         if tab.native_webview.is_none() {
             let parent = match window.window_handle() {
                 Ok(handle) => match handle.as_raw() {
@@ -1406,6 +1579,9 @@ impl BrowserPanel {
             let mut url_app = window.to_async(_cx);
             let on_url_changed = move |url: String| {
                 if let Err(error) = url_weak.update_in(&mut url_app, |this, window, cx| {
+                    let Some(tab_index) = this.tab_index(tab_id) else {
+                        return;
+                    };
                     let changed = this
                         .tabs
                         .get(tab_index)
@@ -1439,6 +1615,9 @@ impl BrowserPanel {
                     return;
                 }
                 if let Err(error) = title_weak.update_in(&mut title_app, |this, _window, cx| {
+                    let Some(tab_index) = this.tab_index(tab_id) else {
+                        return;
+                    };
                     let Some(tab) = this.tabs.get_mut(tab_index) else {
                         return;
                     };
@@ -1462,6 +1641,7 @@ impl BrowserPanel {
                 move |result| {
                     if let Err(error) = weak.update(&mut app, |this, cx| {
                         this.native_webview_pending = false;
+                        let Some(tab_index) = this.tab_index(tab_id) else { return; };
                         match result {
                             Ok(webview) => {
                                 let Some(tab) = this.tabs.get(tab_index) else {
@@ -1538,6 +1718,9 @@ impl BrowserPanel {
         }
 
         let tab_index = self.active_tab;
+        let Some(tab_id) = self.tabs.get(tab_index).map(|tab| tab.id) else {
+            return;
+        };
         if let (Some(client), Some(page)) = (self.client.clone(), self.active_page()) {
             if self.native_url_task.is_none() {
                 self.start_native_url_sync(client, page, tab_index, window, cx);
@@ -1564,6 +1747,10 @@ impl BrowserPanel {
             Some(cx.spawn_in(window, async move |this, cx| match task.await {
                 Ok((client, page, screenshot, screencast, download_events)) => {
                     if let Err(error) = this.update_in(cx, |this, window, cx| {
+                        let Some(tab_index) = this.tab_index(tab_id) else {
+                            this.native_capture_task = None;
+                            return;
+                        };
                         this.client = Some(client.clone());
                         if let Some(tab) = this.tabs.get_mut(tab_index) {
                             let mut page = page.clone();
@@ -1677,6 +1864,9 @@ impl BrowserPanel {
     }
 
     fn sync_history(&mut self, tab_index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab_id) = self.tabs.get(tab_index).map(|tab| tab.id) else {
+            return;
+        };
         let (Some(client), Some(page)) = (
             self.client.clone(),
             self.tabs.get(tab_index).and_then(|tab| tab.page.clone()),
@@ -1691,6 +1881,9 @@ impl BrowserPanel {
         cx.spawn_in(window, async move |this, cx| {
             if let Ok((history_index, history)) = task.await {
                 if let Err(error) = this.update(cx, |this, cx| {
+                    let Some(tab_index) = this.tab_index(tab_id) else {
+                        return;
+                    };
                     if let Some(tab) = this.tabs.get_mut(tab_index) {
                         tab.history_index = history_index;
                         tab.history = history;
@@ -1807,7 +2000,9 @@ impl BrowserPanel {
             }
             return;
         }
-        let tab_index = self.active_tab;
+        let Some(tab_id) = self.active_tab().map(|tab| tab.id) else {
+            return;
+        };
         #[cfg(target_os = "windows")]
         if let Some(webview) = self.active_native_webview() {
             if let Err(error) = webview.navigate(&history_entry.url) {
@@ -1847,9 +2042,13 @@ impl BrowserPanel {
             }
             .await;
             if let Err(error) = this.update_in(cx, |this, window, cx| {
+                let Some(tab_index) = this.tab_index(tab_id) else {
+                    return;
+                };
                 if let Some(tab) = this.tabs.get_mut(tab_index) {
                     match result {
                         Ok((page, screenshot)) => {
+                            tab.current_url = page.url.clone();
                             tab.page = Some(page.clone());
                             tab.image =
                                 Some(Arc::new(Image::from_bytes(ImageFormat::Png, screenshot)));
@@ -2169,11 +2368,66 @@ impl BrowserPanel {
         self.context_menu = Some((menu, position, subscription));
     }
 
+    pub fn capture_screenshot(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(Image, SharedString)>> {
+        let title = self
+            .active_tab()
+            .map(|tab| tab.label())
+            .unwrap_or_else(|| "Navegador".into());
+        let name = format!(
+            "Captura - {title} - {}.png",
+            chrono::Local::now().format("%H-%M-%S%.3f"),
+        )
+        .into();
+        #[cfg(target_os = "windows")]
+        if let Some(webview) = self.active_native_webview() {
+            let (send, receive) = oneshot::channel();
+            if let Err(error) = webview.capture_screenshot(move |result| {
+                if send.send(result).is_err() {
+                    tracing::debug!("Browser screenshot request was cancelled");
+                }
+            }) {
+                return Task::ready(Err(error));
+            }
+            let timeout = cx.background_executor().timer(Duration::from_secs(10));
+            return cx.spawn(async move |_, _| {
+                let bytes = match futures::future::select(receive, Box::pin(timeout)).await {
+                    futures::future::Either::Left((result, _)) => {
+                        result.context("A captura do navegador foi interrompida.")??
+                    }
+                    futures::future::Either::Right(_) => {
+                        return Err(anyhow!(
+                            "A captura do navegador demorou demais. Tente novamente."
+                        ));
+                    }
+                };
+                Ok((Image::from_bytes(ImageFormat::Png, bytes), name))
+            });
+        }
+        let (Some(client), Some(page)) = (self.client.clone(), self.active_page()) else {
+            return Task::ready(Err(anyhow!(
+                "Aguarde a pagina do navegador carregar antes de capturar."
+            )));
+        };
+        gpui_tokio::Tokio::spawn_result(cx, async move {
+            // Capture the target selected at click time, without navigation or focus changes.
+            let bytes =
+                tokio::time::timeout(Duration::from_secs(10), client.capture_screenshot(&page))
+                    .await
+                    .context("A captura do navegador demorou demais. Tente novamente.")??;
+            Ok((Image::from_bytes(ImageFormat::Png, bytes), name))
+        })
+    }
+
     fn save_screenshot(&mut self, cx: &mut Context<Self>) {
         let (Some(client), Some(page)) = (self.client.clone(), self.active_page()) else {
             return;
         };
-        let tab_index = self.active_tab;
+        let Some(tab_id) = self.active_tab().map(|tab| tab.id) else {
+            return;
+        };
         let task = gpui_tokio::Tokio::spawn_result(cx, async move {
             let bytes = client.capture_screenshot(&page).await?;
             let path =
@@ -2186,6 +2440,9 @@ impl BrowserPanel {
         cx.spawn(async move |this, cx| match task.await {
             Ok(path) => {
                 if let Err(error) = this.update(cx, |this, cx| {
+                    let Some(tab_index) = this.tab_index(tab_id) else {
+                        return;
+                    };
                     if let Some(tab) = this.tabs.get_mut(tab_index) {
                         tab.status = format!("Captura salva em {}", path.display());
                     }
@@ -2205,7 +2462,9 @@ impl BrowserPanel {
         let (Some(client), Some(page)) = (self.client.clone(), self.active_page()) else {
             return;
         };
-        let tab_index = self.active_tab;
+        let Some(tab_id) = self.active_tab().map(|tab| tab.id) else {
+            return;
+        };
         let task = gpui_tokio::Tokio::spawn_result(cx, async move {
             let bytes = client.print_to_pdf(&page).await?;
             let path =
@@ -2218,6 +2477,9 @@ impl BrowserPanel {
         cx.spawn(async move |this, cx| match task.await {
             Ok(path) => {
                 if let Err(error) = this.update(cx, |this, cx| {
+                    let Some(tab_index) = this.tab_index(tab_id) else {
+                        return;
+                    };
                     if let Some(tab) = this.tabs.get_mut(tab_index) {
                         tab.status = format!("PDF salvo em {}", path.display());
                     }
@@ -2235,7 +2497,9 @@ impl BrowserPanel {
         let (Some(client), Some(page)) = (self.client.clone(), self.active_page()) else {
             return;
         };
-        let tab_index = self.active_tab;
+        let Some(tab_id) = self.active_tab().map(|tab| tab.id) else {
+            return;
+        };
         let task = gpui_tokio::Tokio::spawn_result(cx, async move {
             client
                 .evaluate(
@@ -2247,6 +2511,9 @@ impl BrowserPanel {
         cx.spawn(async move |this, cx| match task.await {
             Ok(value) => {
                 if let Err(error) = this.update(cx, |this, cx| {
+                    let Some(tab_index) = this.tab_index(tab_id) else {
+                        return;
+                    };
                     if let Some(tab) = this.tabs.get_mut(tab_index) {
                         tab.status = format!("Modo escuro: {}", value.as_str().unwrap_or("ok"));
                     }
@@ -2270,7 +2537,9 @@ impl BrowserPanel {
         let Some(bounds) = self.content_bounds else {
             return;
         };
-        let tab_index = self.active_tab;
+        let Some(tab_id) = self.active_tab().map(|tab| tab.id) else {
+            return;
+        };
         let (Some(client), Some(page)) = (self.client.clone(), self.active_page()) else {
             return;
         };
@@ -2289,6 +2558,9 @@ impl BrowserPanel {
                 tracing::debug!("browser viewport task failed: {error:#}");
             }
             if let Err(error) = this.update(cx, |this, cx| {
+                let Some(tab_index) = this.tab_index(tab_id) else {
+                    return;
+                };
                 if let Some(tab) = this.tabs.get_mut(tab_index) {
                     tab.status = format!("Viewport {}%", (this.viewport_scale * 100.0).round());
                 }
@@ -2497,6 +2769,7 @@ impl BrowserPanel {
     }
 
     fn navigate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss_suggestions(window, cx);
         let Some(address_bar) = &self.address_bar else {
             return;
         };
@@ -2540,7 +2813,9 @@ impl BrowserPanel {
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let tab_index = self.active_tab;
+            let Some(tab_id) = self.active_tab().map(|tab| tab.id) else {
+                return;
+            };
             let endpoint = default_endpoint();
             let existing_client = self.client.clone();
             let existing_page = self.active_page();
@@ -2618,10 +2893,14 @@ impl BrowserPanel {
                 Some(cx.spawn_in(window, async move |this, cx| match task.await {
                     Ok(navigation) => {
                         if let Err(error) = this.update_in(cx, |this, window, cx| {
+                            let Some(tab_index) = this.tab_index(tab_id) else {
+                                return;
+                            };
                             let client = navigation.client.clone();
                             let page = navigation.page.clone();
                             this.client = Some(client.clone());
                             if let Some(tab) = this.tabs.get_mut(tab_index) {
+                                tab.current_url = page.url.clone();
                                 tab.page = Some(page.clone());
                                 tab.title.clear();
                                 tab.image = Some(Arc::new(Image::from_bytes(
@@ -2648,6 +2927,9 @@ impl BrowserPanel {
                     }
                     Err(error) => {
                         if let Err(update_error) = this.update(cx, |this, cx| {
+                            let Some(tab_index) = this.tab_index(tab_id) else {
+                                return;
+                            };
                             if let Some(tab) = this.tabs.get_mut(tab_index) {
                                 tab.status = format!("Falha no navegador: {error:#}");
                             }
@@ -2890,6 +3172,9 @@ impl BrowserPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let Some(tab_id) = self.tabs.get(tab_index).map(|tab| tab.id) else {
+            return;
+        };
         let target_id = page.target_id.clone();
         self.native_url_task = Some(cx.spawn_in(window, async move |this, cx| {
             loop {
@@ -2930,6 +3215,9 @@ impl BrowserPanel {
                 };
 
                 let update = this.update_in(cx, |this, window, cx| {
+                    let Some(tab_index) = this.tab_index(tab_id) else {
+                        return;
+                    };
                     let Some(tab) = this.tabs.get_mut(tab_index) else {
                         return;
                     };
@@ -2967,7 +3255,7 @@ impl BrowserPanel {
                 }
             }
             if let Err(error) = this.update(cx, |this, _cx| {
-                if this.active_tab == tab_index {
+                if this.active_tab().is_some_and(|tab| tab.id == tab_id) {
                     this.native_url_task = None;
                 }
             }) {
@@ -2977,7 +3265,9 @@ impl BrowserPanel {
     }
 
     fn navigate_history(&mut self, delta: i32, window: &mut Window, cx: &mut Context<Self>) {
-        let tab_index = self.active_tab;
+        let Some(tab_id) = self.active_tab().map(|tab| tab.id) else {
+            return;
+        };
         #[cfg(target_os = "windows")]
         if let Some(webview) = self.active_native_webview() {
             let moved = if delta < 0 {
@@ -3020,9 +3310,13 @@ impl BrowserPanel {
             }
             .await;
             if let Err(error) = this.update_in(cx, |this, window, cx| {
+                let Some(tab_index) = this.tab_index(tab_id) else {
+                    return;
+                };
                 if let Some(tab) = this.tabs.get_mut(tab_index) {
                     match result {
                         Ok((page, screenshot)) => {
+                            tab.current_url = page.url.clone();
                             tab.page = Some(page.clone());
                             tab.image =
                                 Some(Arc::new(Image::from_bytes(ImageFormat::Png, screenshot)));
@@ -3044,7 +3338,9 @@ impl BrowserPanel {
     }
 
     fn reload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let tab_index = self.active_tab;
+        let Some(tab_id) = self.active_tab().map(|tab| tab.id) else {
+            return;
+        };
         #[cfg(target_os = "windows")]
         if let Some(webview) = self.active_native_webview() {
             if let Err(error) = webview.reload() {
@@ -3083,9 +3379,13 @@ impl BrowserPanel {
             }
             .await;
             if let Err(error) = this.update_in(cx, |this, window, cx| {
+                let Some(tab_index) = this.tab_index(tab_id) else {
+                    return;
+                };
                 if let Some(tab) = this.tabs.get_mut(tab_index) {
                     match result {
                         Ok((page, screenshot)) => {
+                            tab.current_url = page.url.clone();
                             tab.page = Some(page.clone());
                             tab.image =
                                 Some(Arc::new(Image::from_bytes(ImageFormat::Png, screenshot)));
@@ -3147,6 +3447,36 @@ impl Render for BrowserPanel {
         let download_status = self.download_status.clone().map(SharedString::from);
         let content_bounds_entity = cx.weak_entity();
         let active_tab = self.active_tab;
+        let active_tab_id = self.active_tab().map(|tab| tab.id);
+        let address_focused = address_bar
+            .as_ref()
+            .is_some_and(|field| field.read(cx).focus_handle(cx).contains_focused(window, cx));
+        let show_suggestions =
+            self.suggestions_open && address_focused && !self.address_suggestions.is_empty();
+        if !show_suggestions && let Some(field) = address_bar.as_ref() {
+            ui::end_popover(field.entity_id(), window, cx);
+        }
+        let favorites = BrowserSession::saved_links(&self.favorites, &self.saved_history);
+        let mut quick_links = BrowserSession::saved_links(&self.quick_access, &self.saved_history);
+        for page in BrowserSession::frequent_sites(&self.saved_history) {
+            if !quick_links.iter().any(|link| link.url == page.url) {
+                quick_links.push(page);
+            }
+        }
+        if quick_links.is_empty() {
+            quick_links = [
+                ("https://www.google.com/", "Google"),
+                ("https://www.youtube.com/", "YouTube"),
+                ("https://github.com/", "GitHub"),
+            ]
+            .into_iter()
+            .map(|(url, title)| SavedBrowserPage {
+                url: url.into(),
+                title: title.into(),
+            })
+            .collect();
+        }
+        quick_links.truncate(12);
         let devtools_open = self.devtools_open;
         let devtools_tab = self.devtools_tab;
         let history_open = self.history_open;
@@ -3196,6 +3526,7 @@ impl Render for BrowserPanel {
             .enumerate()
             .map(|(index, tab)| {
                 let label = tab.label();
+                let tab_id = tab.id;
                 let active = index == active_tab;
                 let drag = notebook::DraggedBrowserTab {
                     url: tab
@@ -3204,9 +3535,13 @@ impl Render for BrowserPanel {
                         .map(|page| page.url.clone())
                         .unwrap_or_else(|| tab.current_url.clone()),
                     title: tab.title.clone(),
+                    source_panel: cx.entity_id(),
+                    tab_id,
                 };
                 h_flex()
-                    .id(("browser-tab", index))
+                    .id(("browser-tab", tab_id))
+                    .flex_none()
+                    .max_w(px(220.))
                     .gap_1()
                     .px_2()
                     .py_1()
@@ -3217,15 +3552,35 @@ impl Render for BrowserPanel {
                         cx.theme().colors().border
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.activate_tab(index, window, cx);
+                        if let Some(index) = this.tab_index(tab_id) {
+                            this.activate_tab(index, window, cx);
+                        }
                     }))
                     .on_drag(drag, |tab, _, _, cx| cx.new(|_| tab.clone()))
-                    .child(Label::new(label))
+                    .drag_over::<notebook::DraggedBrowserTab>(|row, _, _, cx| {
+                        row.bg(cx.theme().colors().element_hover)
+                    })
+                    .on_drop(
+                        cx.listener(move |this, tab: &notebook::DraggedBrowserTab, _, cx| {
+                            if tab.source_panel == cx.entity_id() {
+                                this.reorder_tab(tab.tab_id, tab_id, cx);
+                            }
+                        }),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .child(Label::new(label).truncate()),
+                    )
                     .child(
                         IconButton::new(("browser-close-tab", index), IconName::Close)
                             .tooltip(Tooltip::text("Fechar aba"))
-                            .on_click(cx.listener(move |this, _, _window, cx| {
-                                this.close_tab(index, cx);
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                if let Some(index) = this.tab_index(tab_id) {
+                                    this.close_tab(index, window, cx);
+                                }
                             })),
                     )
             })
@@ -3256,7 +3611,7 @@ impl Render for BrowserPanel {
                     .pt_1()
                     .border_b_1()
                     .border_color(cx.theme().colors().border)
-                    .children(tab_labels)
+                    .child(h_flex().id("browser-tab-strip").flex_1().min_w_0().overflow_x_scroll().children(tab_labels))
                     .child(
                         IconButton::new("browser-new-tab", IconName::Plus)
                             .tooltip(Tooltip::text("Nova aba"))
@@ -3282,7 +3637,7 @@ impl Render for BrowserPanel {
                                         .contains_focused(window, cx)
                                 });
                             if address_bar_focused {
-                                this.navigate(window, cx);
+                                this.submit_address(window, cx);
                                 cx.stop_propagation();
                             }
                         },
@@ -3291,7 +3646,7 @@ impl Render for BrowserPanel {
                         if this.address_bar.as_ref().is_some_and(|field| {
                             field.read(cx).focus_handle(cx).contains_focused(window, cx)
                         }) {
-                            this.navigate(window, cx);
+                            this.submit_address(window, cx);
                             cx.stop_propagation();
                         }
                     }))
@@ -3307,9 +3662,33 @@ impl Render for BrowserPanel {
                             if address_bar_focused
                                 && event.keystroke.key.eq_ignore_ascii_case("enter")
                             {
-                                this.navigate(window, cx);
+                                this.submit_address(window, cx);
                                 window.prevent_default();
                                 cx.stop_propagation();
+                            } else if address_bar_focused {
+                                let key = event.keystroke.key.to_ascii_lowercase();
+                                if matches!(key.as_str(), "up" | "down") && !this.address_suggestions.is_empty() {
+                                    this.suggestions_open = true;
+                                    let count = this.address_suggestions.len();
+                                    this.selected_suggestion = Some(match (this.selected_suggestion, key.as_str()) {
+                                        (Some(index), "down") => (index + 1) % count,
+                                        (Some(index), _) => (index + count - 1) % count,
+                                        (None, "down") => 0,
+                                        (None, _) => count - 1,
+                                    });
+                                    if let Some(index) = this.selected_suggestion {
+                                        this.address_suggestion_scroll.scroll_to_item(index);
+                                    }
+                                    cx.notify();
+                                    window.prevent_default();
+                                    cx.stop_propagation();
+                                } else if key == "escape" {
+                                    this.dismiss_suggestions(window, cx);
+                                    this.reset_address_bar(window, cx);
+                                    cx.notify();
+                                    window.prevent_default();
+                                    cx.stop_propagation();
+                                }
                             }
                         },
                     ))
@@ -3345,8 +3724,17 @@ impl Render for BrowserPanel {
                             div()
                                 .flex_1()
                                 .min_w_0()
-                                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
                                     window.focus(&focus, cx);
+                                    this.update_suggestions(cx);
+                                }))
+                                .on_children_prepainted({
+                                    let weak = cx.weak_entity();
+                                    move |bounds, _, cx| {
+                                        if let Err(error) = weak.update(cx, |this, _| this.address_bounds = bounds.first().copied()) {
+                                            tracing::debug!("browser address bounds update failed: {error:#}");
+                                        }
+                                    }
                                 })
                                 .child(address_bar),
                         )
@@ -3362,7 +3750,7 @@ impl Render for BrowserPanel {
                     .child(
                         IconButton::new("browser-go", IconName::ArrowRight)
                             .tooltip(Tooltip::text("Navegar"))
-                            .on_click(cx.listener(|this, _, window, cx| this.navigate(window, cx))),
+                            .on_click(cx.listener(|this, _, window, cx| this.submit_address(window, cx))),
                     )
                     .child(
                         IconButton::new("browser-favorite", favorite_icon)
@@ -3371,8 +3759,25 @@ impl Render for BrowserPanel {
                                 this.toggle_favorite(cx);
                             })),
                     )
+                    .child(IconButton::new("browser-payment-cards", IconName::LockOutlined)
+                        .tooltip(Tooltip::text("Cartoes salvos"))
+                        .on_click(cx.listener(|this, _, window, cx| this.open_payments(window, cx))))
                     .children(activity_control),
             )
+            .when(!favorites.is_empty(), |this| {
+                this.child(h_flex().id("browser-bookmarks-bar").w_full().h(px(30.)).flex_none().min_w_0()
+                    .overflow_x_scroll().gap_1().px_2().border_b_1().border_color(cx.theme().colors().border)
+                    .children(favorites.into_iter().enumerate().map(|(index, page)| {
+                        let url = page.url.clone();
+                        let title = page.title.clone();
+                        h_flex().id(("browser-bookmark", index)).flex_none().max_w(px(180.)).min_w_0().px_2().py_1().gap_1()
+                            .cursor_pointer().hover(|row| row.bg(cx.theme().colors().element_hover))
+                            .tooltip(Tooltip::text(url))
+                            .on_click(cx.listener(move |this, _, window, cx| this.open_saved_page(page.clone(), window, cx)))
+                            .child(Icon::new(IconName::Star).size(IconSize::XSmall))
+                            .child(Label::new(title).size(LabelSize::Small).truncate())
+                    })))
+            })
             .when(history_open, |this| {
                 let rows = history_entries
                     .clone()
@@ -3443,12 +3848,30 @@ impl Render for BrowserPanel {
                                     (bounds.size.height.as_f32() * scale).round().max(1.0) as i32,
                                 )
                             };
+                            #[cfg(target_os = "windows")]
+                            let native_clip = {
+                                let mask = window.content_mask().bounds;
+                                let scale = window.scale_factor();
+                                (
+                                    (mask.left().as_f32() * scale).round() as i32,
+                                    (mask.top().as_f32() * scale).round() as i32,
+                                    (mask.right().as_f32() * scale).round() as i32,
+                                    (mask.bottom().as_f32() * scale).round() as i32,
+                                )
+                            };
                             if let Err(error) = content_bounds_entity.update(cx, |this, _cx| {
                                 this.content_bounds = Some(bounds);
                             }) {
                                 tracing::debug!("browser content bounds update failed: {error:#}");
                             } else if let Err(error) =
                                 content_bounds_entity.update(cx, |this, cx| {
+                                    #[cfg(target_os = "windows")]
+                                    if let Some(webview) = this.tabs.get(active_tab)
+                                        .and_then(|tab| tab.native_webview.as_ref())
+                                        && let Err(error) = webview.set_clip_bounds(Some(native_clip))
+                                    {
+                                        tracing::debug!("browser panel clipping failed: {error:#}");
+                                    }
                                     #[cfg(target_os = "windows")]
                                     if !this.native_webview_pending
                                         && (this
@@ -3460,6 +3883,10 @@ impl Render for BrowserPanel {
                                     {
                                         this.native_webview_pending = true;
                                         cx.defer_in(window, move |this, window, cx| {
+                                            let Some(active_tab) = active_tab_id.and_then(|id| this.tab_index(id)) else {
+                                                this.native_webview_pending = false;
+                                                return;
+                                            };
                                             let has_webview = this
                                                 .tabs
                                                 .get(active_tab)
@@ -3486,6 +3913,9 @@ impl Render for BrowserPanel {
                                                 } else {
                                                     this.native_webview_bounds =
                                                         Some(native_bounds);
+                                                }
+                                                if let Err(error) = webview.set_clip_bounds(Some(native_clip)) {
+                                                    tracing::debug!("browser panel clipping failed: {error:#}");
                                                 }
                                                 this.native_webview_pending = false;
                                             }
@@ -3578,7 +4008,7 @@ impl Render for BrowserPanel {
                         } else if command && key == "t" {
                             this.add_tab(window, cx);
                         } else if command && key == "w" {
-                            this.close_tab(this.active_tab, cx);
+                            this.close_tab(this.active_tab, window, cx);
                         } else if command && key == "r" {
                             this.reload(window, cx);
                         } else if event.keystroke.modifiers.alt && key == "left" {
@@ -3626,21 +4056,29 @@ impl Render for BrowserPanel {
                         |this| {
                             this.child(
                                 v_flex()
+                                    .id("browser-start-content")
                                     .size_full()
                                     .items_center()
-                                    .justify_center()
+                                    .overflow_y_scroll()
+                                    .when(!new_tab, |this| this.justify_center())
                                     .gap_2()
-                                    .child(Icon::new(IconName::Public).size(IconSize::XLarge))
-                                    .child(Label::new(if new_tab {
-                                        "Nova aba"
-                                    } else {
-                                        status.as_ref()
-                                    }))
+                                    .when(!new_tab, |this| this.child(Icon::new(IconName::Public).size(IconSize::XLarge))
+                                        .child(Label::new(status.clone())))
                                     .when(new_tab, |this| {
-                                        this.child(
-                                            Label::new("Digite uma URL ou pesquise no Google")
-                                                .color(Color::Muted),
-                                        )
+                                        this.child(v_flex().id("browser-new-tab-links").w_full().max_w(px(850.)).flex_none().p_4().gap_3()
+                                            .child(Label::new("Mais acessados").size(LabelSize::Large))
+                                            .child(h_flex().w_full().flex_wrap().gap_3().children(quick_links.iter().cloned().enumerate().map(|(index, page)| {
+                                                let url = page.url.clone();
+                                                let title = page.title.clone();
+                                                v_flex().id(("browser-quick-link", index)).w(px(140.)).max_w_full().h(px(94.)).gap_2().p_3().min_w_0()
+                                                    .rounded_sm().border_1().border_color(cx.theme().colors().border)
+                                                    .bg(cx.theme().colors().element_background).cursor_pointer()
+                                                    .hover(|tile| tile.bg(cx.theme().colors().element_hover))
+                                                    .tooltip(Tooltip::text(url))
+                                                    .on_click(cx.listener(move |this, _, window, cx| this.open_saved_page(page.clone(), window, cx)))
+                                                    .child(Icon::new(IconName::Public).size(IconSize::XLarge))
+                                                    .child(Label::new(title).size(LabelSize::Small).truncate())
+                                            }))))
                                     }),
                             )
                         },
@@ -3714,6 +4152,40 @@ impl Render for BrowserPanel {
                             .gap_0p5()
                             .children(output),
                     )
+            })
+            .when(show_suggestions, |this| {
+                let Some(bounds) = self.address_bounds else { return this; };
+                let Some(field) = self.address_bar.as_ref() else { return this; };
+                let rows = self.address_suggestions.iter().cloned().enumerate().map(|(index, page)| {
+                    let selected = self.selected_suggestion == Some(index);
+                    let favorite = self.favorites.contains(&page.url);
+                    let title = page.title.clone();
+                    let url = page.url.clone();
+                    h_flex().id(("browser-suggestion", index)).w_full().min_w_0().gap_2().px_3().py_2().cursor_pointer()
+                        .when(selected, |row| row.bg(cx.theme().colors().element_selected))
+                        .hover(|row| row.bg(cx.theme().colors().element_hover))
+                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _, window, cx| {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                            this.open_saved_page(page.clone(), window, cx);
+                        }))
+                        .child(Icon::new(if favorite { IconName::Star } else { IconName::HistoryRerun }).size(IconSize::Small))
+                        .child(v_flex().flex_1().min_w_0()
+                            .child(Label::new(title).truncate())
+                            .child(Label::new(url).size(LabelSize::Small).color(Color::Muted).truncate()))
+                });
+                let available_height = (window.viewport_size().height - bounds.bottom() - px(8.)).max(px(40.));
+                let menu = v_flex().id("browser-address-suggestions").w(bounds.size.width).max_h(px(360.).min(available_height)).overflow_y_scroll()
+                    .track_scroll(&self.address_suggestion_scroll)
+                    .elevation_2(cx).rounded_sm().py_1().children(rows)
+                    .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                        if this.address_bounds.is_none_or(|bounds| !bounds.contains(&event.position)) {
+                            this.dismiss_suggestions(window, cx);
+                            cx.notify();
+                        }
+                    }));
+                this.child(deferred(anchored().position(gpui::point(bounds.origin.x, bounds.bottom()))
+                    .anchor(gpui::Anchor::TopLeft).child(ui::native_surface_overlay(field.entity_id(), menu))).with_priority(2))
             })
             .children(self.context_menu.as_ref().map(|(menu, position, _)| {
                 deferred(

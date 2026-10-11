@@ -610,6 +610,9 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     /// Move e redimensiona a janela (posição + tamanho). No-op nas plataformas que não
     /// implementam. ponytail: usado pra centralizar a janela ao recolher/expandir.
     fn set_window_bounds(&mut self, _bounds: Bounds<Pixels>) {}
+    /// Temporarily clips the native window to content bounds in screen coordinates,
+    /// without resizing its rendering surface. None restores the full window.
+    fn set_window_clip(&mut self, _bounds: Option<Bounds<Pixels>>) {}
     /// Mantém a janela sempre por cima das outras (topmost). No-op onde não implementado.
     /// ponytail: modo recolhido (pill) não pode ser coberto/perdido.
     fn set_always_on_top(&mut self, _always_on_top: bool) {}

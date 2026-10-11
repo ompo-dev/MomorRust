@@ -2136,6 +2136,12 @@ impl Window {
         self.platform_window.set_window_bounds(bounds);
     }
 
+    /// Clips the visible native window without resizing its rendering surface.
+    /// Bounds are in screen coordinates; None restores the full window.
+    pub fn set_window_clip(&mut self, bounds: Option<Bounds<Pixels>>) {
+        self.platform_window.set_window_clip(bounds);
+    }
+
     /// Mantém (ou não) a janela sempre por cima das outras.
     pub fn set_always_on_top(&mut self, always_on_top: bool) {
         self.platform_window.set_always_on_top(always_on_top);

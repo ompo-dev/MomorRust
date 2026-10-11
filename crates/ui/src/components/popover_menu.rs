@@ -1,4 +1,8 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    rc::Rc,
+};
 
 use gpui::{
     Anchor, AnyElement, AnyView, App, Bounds, DismissEvent, DispatchPhase, Element, ElementId,
@@ -46,6 +50,7 @@ pub struct PopoverMenuHandle<M>(Rc<RefCell<Option<PopoverMenuHandleState<M>>>>);
 #[derive(Default)]
 pub struct NativeSurfaceOcclusions {
     bounds: HashMap<(WindowId, EntityId), Bounds<Pixels>>,
+    release_hooks: HashSet<(WindowId, EntityId)>,
 }
 
 impl Global for NativeSurfaceOcclusions {}
@@ -65,8 +70,21 @@ pub fn native_surface_occlusions(window: &Window, cx: &App) -> Vec<Bounds<Pixels
 
 pub fn begin_popover<M: 'static>(menu: &Entity<M>, window: &Window, cx: &mut App) {
     let key = (window.window_handle().window_id(), menu.entity_id());
-    cx.observe_release(menu, move |_, cx| remove_occlusion(key, cx))
+    if !cx
+        .try_global::<NativeSurfaceOcclusions>()
+        .is_some_and(|state| state.release_hooks.contains(&key))
+    {
+        cx.default_global::<NativeSurfaceOcclusions>()
+            .release_hooks
+            .insert(key);
+        cx.observe_release(menu, move |_, cx| {
+            remove_occlusion(key, cx);
+            cx.global_mut::<NativeSurfaceOcclusions>()
+                .release_hooks
+                .remove(&key);
+        })
         .detach();
+    }
 }
 
 pub fn end_popover(menu_id: EntityId, window: &Window, cx: &mut App) {
@@ -85,13 +103,16 @@ fn remove_occlusion(key: (WindowId, EntityId), cx: &mut App) {
 }
 
 pub fn native_surface_menu<M: ManagedView>(menu: Entity<M>) -> impl IntoElement {
-    let menu_id = menu.entity_id();
+    native_surface_overlay(menu.entity_id(), menu)
+}
+
+pub fn native_surface_overlay(id: EntityId, content: impl IntoElement) -> impl IntoElement {
     div()
         .occlude()
-        .child(menu)
+        .child(content)
         .on_children_prepainted(move |children, window, cx| {
             if let Some(bounds) = children.first().copied() {
-                let key = (window.window_handle().window_id(), menu_id);
+                let key = (window.window_handle().window_id(), id);
                 if cx
                     .try_global::<NativeSurfaceOcclusions>()
                     .and_then(|state| state.bounds.get(&key))

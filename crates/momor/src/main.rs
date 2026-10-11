@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod browser;
+mod browser_payments;
 mod browser_mcp;
 mod browser_session;
 mod momor;

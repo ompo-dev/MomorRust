@@ -1495,6 +1495,8 @@ pub struct DraggedNotebookItem {
 pub struct DraggedBrowserTab {
     pub url: String,
     pub title: String,
+    pub source_panel: gpui::EntityId,
+    pub tab_id: u64,
 }
 
 impl Render for DraggedBrowserTab {

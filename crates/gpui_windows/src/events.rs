@@ -1228,7 +1228,7 @@ impl WindowsWindowInner {
     }
 
     #[inline]
-    fn draw_window(&self, handle: HWND, force_render: bool) -> Option<isize> {
+    pub(crate) fn draw_window(&self, handle: HWND, force_render: bool) -> Option<isize> {
         let mut request_frame = self.state.callbacks.request_frame.take()?;
 
         self.state.direct_manipulation.update();

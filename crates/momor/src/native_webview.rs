@@ -6,6 +6,7 @@
 #![cfg(target_os = "windows")]
 
 use anyhow::{Context as _, Result, anyhow};
+use base64::Engine as _;
 use std::{
     cell::{Cell, RefCell},
     collections::HashSet,
@@ -16,7 +17,7 @@ use webview2_com::{
     CallDevToolsProtocolMethodCompletedHandler, CoTaskMemPWSTR, CoreWebView2EnvironmentOptions,
     CreateCoreWebView2ControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler,
     DevToolsProtocolEventReceivedEventHandler, DocumentTitleChangedEventHandler,
-    Microsoft::Web::WebView2::Win32::*, SourceChangedEventHandler,
+    ExecuteScriptCompletedHandler, Microsoft::Web::WebView2::Win32::*, SourceChangedEventHandler,
 };
 use windows_062::{
     Win32::{
@@ -39,6 +40,8 @@ pub struct NativeWebView {
     parent: HWND,
     host: Rc<ChildHost>,
     visible: Cell<bool>,
+    clip_bounds: Cell<Option<(i32, i32, i32, i32)>>,
+    applied_region: RefCell<BrowserRegion>,
     controller: ICoreWebView2Controller,
     webview: ICoreWebView2,
     source_changed_token: i64,
@@ -56,6 +59,12 @@ struct ChildHost {
     window: HWND,
     bounds: Cell<(i32, i32, i32, i32)>,
     occlusions: RefCell<Vec<(i32, i32, i32, i32)>>,
+}
+
+#[derive(Default, PartialEq)]
+struct BrowserRegion {
+    clip: Option<(i32, i32, i32, i32)>,
+    occlusions: Vec<(i32, i32, i32, i32)>,
 }
 
 impl Drop for ChildHost {
@@ -243,14 +252,34 @@ impl NativeWebView {
                                     .Settings()?
                                     .SetAreDevToolsEnabled(true)
                                     .context("não foi possível habilitar o DevTools")?;
+                                let autofill: ICoreWebView2Settings4 =
+                                    webview.Settings()?.cast().context(
+                                        "WebView2 nao expos as configuracoes de preenchimento",
+                                    )?;
+                                autofill.SetIsGeneralAutofillEnabled(true).context(
+                                    "nao foi possivel habilitar o preenchimento de formularios",
+                                )?;
+                                autofill
+                                    .SetIsPasswordAutosaveEnabled(true)
+                                    .context("nao foi possivel habilitar o salvamento de senhas")?;
                                 controller.SetIsVisible(false).context(
                                     "não foi possível inicializar a visibilidade do WebView2",
                                 )?;
+                                controller
+                                    .SetBounds(RECT {
+                                        left: 0,
+                                        top: 0,
+                                        right: 1,
+                                        bottom: 1,
+                                    })
+                                    .context("failed to initialize browser viewport")?;
                             }
                             Ok(Self {
                                 parent,
                                 host: host.clone(),
                                 visible: Cell::new(false),
+                                clip_bounds: Cell::new(None),
+                                applied_region: RefCell::new(BrowserRegion::default()),
                                 controller,
                                 webview,
                                 source_changed_token,
@@ -322,6 +351,10 @@ impl NativeWebView {
 
     pub fn set_bounds(&self, left: i32, top: i32, width: i32, height: i32) -> Result<()> {
         let bounds = (left, top, width.max(1), height.max(1));
+        let previous = self.host.bounds.get();
+        if previous == bounds {
+            return Ok(());
+        }
         unsafe {
             SetWindowPos(
                 self.host.window,
@@ -333,17 +366,25 @@ impl NativeWebView {
                 SWP_NOACTIVATE | SWP_NOZORDER,
             )
             .context("failed to position browser host")?;
-            self.controller
-                .SetBounds(RECT {
-                    left: 0,
-                    top: 0,
-                    right: bounds.2,
-                    bottom: bounds.3,
-                })
-                .context("não foi possível redimensionar o WebView2")?;
+            if (previous.2, previous.3) != (bounds.2, bounds.3) {
+                self.controller
+                    .SetBounds(RECT {
+                        left: 0,
+                        top: 0,
+                        right: bounds.2,
+                        bottom: bounds.3,
+                    })
+                    .context("não foi possível redimensionar o WebView2")?;
+            }
         }
         self.host.bounds.set(bounds);
-        self.apply_occlusions(&self.host.occlusions.borrow())?;
+        self.apply_occlusions(&self.host.occlusions.borrow(), self.clip_bounds.get())?;
+        Ok(())
+    }
+
+    pub fn set_clip_bounds(&self, bounds: Option<(i32, i32, i32, i32)>) -> Result<()> {
+        self.apply_occlusions(&self.host.occlusions.borrow(), bounds)?;
+        self.clip_bounds.set(bounds);
         Ok(())
     }
 
@@ -351,23 +392,53 @@ impl NativeWebView {
         if self.host.occlusions.borrow().as_slice() == rectangles {
             return Ok(());
         }
-        self.apply_occlusions(rectangles)?;
+        self.apply_occlusions(rectangles, self.clip_bounds.get())?;
         *self.host.occlusions.borrow_mut() = rectangles.to_vec();
         Ok(())
     }
 
-    fn apply_occlusions(&self, rectangles: &[(i32, i32, i32, i32)]) -> Result<()> {
+    fn apply_occlusions(
+        &self,
+        rectangles: &[(i32, i32, i32, i32)],
+        clip_bounds: Option<(i32, i32, i32, i32)>,
+    ) -> Result<()> {
         let (left, top, width, height) = self.host.bounds.get();
-        if rectangles.is_empty() {
+        let local_rectangle = |(x1, y1, x2, y2): (i32, i32, i32, i32)| {
+            (
+                (x1 - left).clamp(0, width),
+                (y1 - top).clamp(0, height),
+                (x2 - left).clamp(0, width),
+                (y2 - top).clamp(0, height),
+            )
+        };
+        let occlusions: Vec<_> = rectangles
+            .iter()
+            .copied()
+            .map(local_rectangle)
+            .filter(|&(x1, y1, x2, y2)| x2 > x1 && y2 > y1)
+            .collect();
+        let desired = BrowserRegion {
+            clip: clip_bounds
+                .map(local_rectangle)
+                .filter(|bounds| *bounds != (0, 0, width, height))
+                .or_else(|| (!occlusions.is_empty()).then_some((0, 0, width, height))),
+            occlusions,
+        };
+        if *self.applied_region.borrow() == desired {
+            return Ok(());
+        }
+        if desired.clip.is_none() && desired.occlusions.is_empty() {
             anyhow::ensure!(
                 unsafe { SetWindowRgn(self.host.window, None, true) } != 0,
                 "failed to clear browser clipping region"
             );
+            *self.applied_region.borrow_mut() = desired;
             return Ok(());
         }
-        let mut region = OwnedRegion::rectangle(0, 0, width, height)?;
-        for &(x1, y1, x2, y2) in rectangles {
-            let cutout = OwnedRegion::rectangle(x1 - left, y1 - top, x2 - left, y2 - top)?;
+        let (x1, y1, x2, y2) = desired.clip.unwrap_or((0, 0, width, height));
+        let mut region = OwnedRegion::rectangle(x1, y1, x2, y2)?;
+        for &(x1, y1, x2, y2) in &desired.occlusions {
+            let cutout = OwnedRegion::rectangle(x1, y1, x2, y2)?;
             anyhow::ensure!(
                 unsafe { CombineRgn(region.0, region.0, cutout.0, RGN_DIFF) }.0 != 0,
                 "failed to combine browser clipping regions"
@@ -379,6 +450,7 @@ impl NativeWebView {
         );
         // SetWindowRgn owns the region after success.
         region.0.take();
+        *self.applied_region.borrow_mut() = desired;
         Ok(())
     }
 
@@ -495,6 +567,66 @@ impl NativeWebView {
             self.frame_receivers.push((receiver, token));
         }
         Ok(())
+    }
+
+    pub fn capture_screenshot(
+        &self,
+        on_complete: impl FnOnce(Result<Vec<u8>>) + 'static,
+    ) -> Result<()> {
+        let handler =
+            CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |status, json| {
+                let result = (|| {
+                    status.context("O WebView2 nao conseguiu capturar a pagina")?;
+                    let result: serde_json::Value = serde_json::from_str(&json)
+                        .context("O WebView2 retornou uma captura invalida")?;
+                    anyhow::ensure!(
+                        result.get("error").is_none(),
+                        "Falha ao capturar a pagina: {result}"
+                    );
+                    let data = result
+                        .get("data")
+                        .and_then(|value| value.as_str())
+                        .context("O WebView2 nao retornou a imagem da pagina")?;
+                    base64::engine::general_purpose::STANDARD
+                        .decode(data)
+                        .context("O WebView2 retornou uma imagem invalida")
+                })();
+                on_complete(result);
+                Ok(())
+            }));
+        // Address the displayed controller directly, independently of remote CDP discovery.
+        unsafe {
+            self.webview.CallDevToolsProtocolMethod(
+                w!("Page.captureScreenshot"),
+                w!(r#"{"format":"png"}"#),
+                &handler,
+            )
+        }
+        .context("Nao foi possivel solicitar a captura da pagina")
+    }
+
+    pub fn evaluate_script(
+        &self,
+        script: &str,
+        on_complete: impl FnOnce(Result<serde_json::Value>) + 'static,
+    ) -> Result<()> {
+        let handler = ExecuteScriptCompletedHandler::create(Box::new(move |status, json| {
+            on_complete(
+                status
+                    .context("Nao foi possivel preencher os campos da pagina")
+                    .and_then(|()| {
+                        serde_json::from_str(&json)
+                            .context("A pagina retornou um resultado invalido")
+                    }),
+            );
+            Ok(())
+        }));
+        let script = CoTaskMemPWSTR::from(script);
+        unsafe {
+            self.webview
+                .ExecuteScript(*script.as_ref().as_pcwstr(), &handler)
+        }
+        .context("Nao foi possivel solicitar o preenchimento da pagina")
     }
 
     pub fn reload(&self) -> Result<()> {
@@ -758,6 +890,7 @@ mod tests {
     use super::*;
     use std::time::{Duration, Instant};
     use webview2_com::ExecuteScriptCompletedHandler;
+    use windows_062::Win32::Graphics::Gdi::{GetWindowRgn, PtInRegion};
     use windows_062::Win32::UI::WindowsAndMessaging::{
         DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage, WS_OVERLAPPED,
     };
@@ -930,6 +1063,258 @@ mod tests {
             }
             anyhow::ensure!(Instant::now() < deadline, "Nested iframe did not respond");
         }
+    }
+
+    #[test]
+    fn animated_panel_clipping_preserves_viewport_and_page_state() -> Result<()> {
+        let parent = ChildHost {
+            window: unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE::default(),
+                    w!("STATIC"),
+                    w!("Momor panel animation test"),
+                    WS_OVERLAPPED,
+                    0,
+                    0,
+                    900,
+                    600,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            }?,
+            bounds: Cell::new((0, 0, 900, 600)),
+            occlusions: RefCell::new(Vec::new()),
+        };
+        let profile = tempfile::tempdir()?;
+        let view = create_view(parent.window, profile.path(), false)?;
+        view.set_bounds(0, 80, 640, 480)?;
+        view.set_visible(true)?;
+        load_fixture(&view, "animation")?;
+        evaluate(
+            &view,
+            "first.value = 'unsaved input'; window.sessionMarker = Math.random();
+            window.resizeCount = 0; addEventListener('resize', () => window.resizeCount++); true",
+        )?;
+        let state = "({ marker: window.marker, session: window.sessionMarker,
+            value: first.value, width: innerWidth, height: innerHeight })";
+        let before = evaluate(&view, state)?;
+        for step in 0..40 {
+            let left = step * 3;
+            let revealed = 50 + step * 14;
+            view.set_bounds(left, 80, 640, 480)?;
+            view.set_bounds(left, 80, 640, 480)?;
+            view.set_clip_bounds(Some((left, 80, left + revealed, 560)))?;
+            view.set_occlusions(&[(left, 80, left + 20, 120)])?;
+            let region = OwnedRegion::rectangle(0, 0, 1, 1)?;
+            let handle = region.0.expect("region allocated");
+            assert!(unsafe { GetWindowRgn(view.host.window, handle) }.0 > 0);
+            assert!(
+                !unsafe { PtInRegion(handle, 10, 10) }.as_bool(),
+                "menu occlusion"
+            );
+            assert!(unsafe { PtInRegion(handle, revealed - 1, 60) }.as_bool());
+            assert!(
+                !unsafe { PtInRegion(handle, revealed + 1, 60) }.as_bool(),
+                "panel clip"
+            );
+            let mut bounds = RECT::default();
+            unsafe { view.controller.Bounds(&mut bounds) }?;
+            assert_eq!((bounds.right, bounds.bottom), (640, 480));
+        }
+        view.set_clip_bounds(None)?;
+        view.set_occlusions(&[])?;
+        assert!(view.applied_region.borrow().clip.is_none());
+        assert!(view.applied_region.borrow().occlusions.is_empty());
+        assert!(view.visible.get());
+        assert_eq!(evaluate(&view, state)?, before);
+        assert_eq!(evaluate(&view, "window.resizeCount")?, serde_json::json!(0));
+        assert!(!unsafe { IsChild(parent.window, GetFocus()) }.as_bool());
+        Ok(())
+    }
+
+    #[test]
+    fn native_autofill_and_explicit_payment_fill_preserve_the_page() -> Result<()> {
+        let parent = ChildHost {
+            window: unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE::default(),
+                    w!("STATIC"),
+                    w!("Momor autofill test"),
+                    WS_OVERLAPPED,
+                    0,
+                    0,
+                    640,
+                    480,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            }?,
+            bounds: Cell::new((0, 0, 640, 480)),
+            occlusions: RefCell::new(Vec::new()),
+        };
+        let profile = tempfile::tempdir()?;
+        let fixtures = tempfile::tempdir()?;
+        std::fs::write(
+            fixtures.path().join("checkout.html"),
+            r#"<!doctype html>
+            <form onsubmit="window.submitted = true; return false">
+              <input id="owner" autocomplete="cc-name">
+              <input id="number" autocomplete="cc-number">
+              <select id="month" autocomplete="cc-exp-month"><option value="1">January</option><option value="12">December</option></select>
+              <input id="year" autocomplete="cc-exp-year" maxlength="2">
+              <input id="expiry" type="month" autocomplete="cc-exp">
+              <input id="cvv" autocomplete="cc-csc" value="untouched">
+              <input id="hidden" type="hidden" autocomplete="cc-number" value="untouched">
+              <input id="disabled" disabled autocomplete="cc-number" value="untouched">
+              <button type="submit">Pay</button>
+            </form>
+            <div id="shadow"></div>
+            <iframe srcdoc='<input id="inner" autocomplete="cc-name">'></iframe>
+            <iframe sandbox="allow-scripts" srcdoc='<input autocomplete="cc-number">'></iframe>
+            <script>
+              window.marker = Math.random(); window.changes = 0; window.submitted = false;
+              document.addEventListener('input', () => window.changes++);
+              shadow.attachShadow({mode:'open'}).innerHTML = '<input autocomplete="cc-name">';
+            </script>"#,
+        )?;
+        let view = create_view(parent.window, profile.path(), false)?;
+        view.set_bounds(0, 0, 640, 480)?;
+        view.set_visible(true)?;
+        let settings: ICoreWebView2Settings4 = unsafe { view.webview.Settings() }?.cast()?;
+        let mut autofill = BOOL::default();
+        let mut passwords = BOOL::default();
+        unsafe {
+            settings.IsGeneralAutofillEnabled(&mut autofill)?;
+            settings.IsPasswordAutosaveEnabled(&mut passwords)?;
+            let virtual_host: ICoreWebView2_3 = view.webview.cast()?;
+            let name = CoTaskMemPWSTR::from("momor-autofill.test");
+            let folder = CoTaskMemPWSTR::from(fixtures.path().to_string_lossy().as_ref());
+            virtual_host.SetVirtualHostNameToFolderMapping(
+                *name.as_ref().as_pcwstr(),
+                *folder.as_ref().as_pcwstr(),
+                COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_DENY_CORS,
+            )?;
+        }
+        assert!(autofill.as_bool() && passwords.as_bool());
+        view.navigate("https://momor-autofill.test/checkout.html")?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while evaluate(
+            &view,
+            "Boolean(window.marker && document.querySelector('iframe').contentDocument.querySelector('input'))",
+        )? != serde_json::json!(true)
+        {
+            anyhow::ensure!(Instant::now() < deadline, "Checkout fixture did not load");
+        }
+        let marker = evaluate(&view, "window.marker")?;
+        let card: crate::browser_payments::PaymentCard = serde_json::from_value(
+            serde_json::json!({
+                "id": "test", "name": "Test Holder", "number": "4111111111111111", "month": 12, "year": 2099
+            }),
+        )?;
+        let script = card.fill_script("https://momor-autofill.test/checkout.html")?;
+        assert!(evaluate(&view, &card.fill_script("https://different-origin.test/")?)?.is_null());
+        assert_eq!(evaluate(&view, "number.value")?, serde_json::json!(""));
+        let result = Rc::new(RefCell::new(None));
+        let done = result.clone();
+        view.evaluate_script(&script, move |result| *done.borrow_mut() = Some(result))?;
+        assert_eq!(wait_for(&result)??, serde_json::json!(7));
+        assert_eq!(
+            evaluate(
+                &view,
+                r#"({ name: owner.value, number: number.value,
+            month: month.value, year: year.value, expiry: expiry.value,
+            cvv: cvv.value, hidden: hidden.value, disabled: disabled.value,
+            shadow: shadow.shadowRoot.querySelector('input').value,
+            frame: document.querySelector('iframe').contentDocument.querySelector('input').value,
+            changes: window.changes, submitted: window.submitted })"#
+            )?,
+            serde_json::json!({
+                "name": "Test Holder", "number": "4111111111111111", "month": "12", "year": "99", "expiry": "2099-12",
+                "cvv": "untouched", "hidden": "untouched", "disabled": "untouched", "shadow": "Test Holder", "frame": "Test Holder",
+                "changes": 5, "submitted": false
+            })
+        );
+        assert_eq!(evaluate(&view, "window.marker")?, marker);
+        view.set_occlusions(&[(0, 0, 160, 32)])?;
+        view.set_occlusions(&[])?;
+        assert_eq!(evaluate(&view, "window.marker")?, marker);
+        assert!(!unsafe { IsChild(parent.window, GetFocus()) }.as_bool());
+        Ok(())
+    }
+
+    #[test]
+    fn native_screenshot_preserves_page_and_captures_requested_view() -> Result<()> {
+        // Keep this test's parent hidden so it cannot steal the user's focus.
+        let parent = ChildHost {
+            window: unsafe {
+                CreateWindowExW(
+                    WINDOW_EX_STYLE::default(),
+                    w!("STATIC"),
+                    w!("Momor screenshot test"),
+                    WS_OVERLAPPED,
+                    0,
+                    0,
+                    640,
+                    480,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            }?,
+            bounds: Cell::new((0, 0, 640, 480)),
+            occlusions: RefCell::new(Vec::new()),
+        };
+        let profile = tempfile::tempdir()?;
+        let first = create_view(parent.window, profile.path(), false)?;
+        let second = create_view(parent.window, profile.path(), false)?;
+        for (view, marker, color) in [
+            (&first, "first", "rgb(255, 0, 0)"),
+            (&second, "second", "rgb(0, 0, 255)"),
+        ] {
+            view.set_bounds(0, 0, 320, 240)?;
+            view.set_visible(true)?;
+            load_fixture(view, marker)?;
+            evaluate(
+                view,
+                &format!(
+                    "document.documentElement.style.background = '{color}';
+                     document.body.style.background = '{color}';
+                     document.querySelector('iframe').remove();
+                     first.value = 'unsaved input'; second.focus();
+                     window.sessionMarker = Math.random(); true"
+                ),
+            )?;
+        }
+
+        let state = "({ url: location.href, marker: window.marker,
+            session: window.sessionMarker, value: first.value,
+            focused: document.activeElement.id })";
+        let first_before = evaluate(&first, state)?;
+        let second_before = evaluate(&second, state)?;
+        // Both views have about:blank URLs. No remote client or URL matching is involved.
+        assert_eq!(first_before["url"], second_before["url"]);
+        for (view, color) in [(&first, [255, 0, 0]), (&second, [0, 0, 255])] {
+            let result = Rc::new(RefCell::new(None));
+            let done = result.clone();
+            view.capture_screenshot(move |image| *done.borrow_mut() = Some(image))?;
+            let bytes = wait_for(&result)??;
+            let image =
+                image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)?.to_rgb8();
+            assert!(image.width() >= 320 && image.height() >= 240);
+            assert_eq!(
+                image.get_pixel(image.width() / 2, image.height() / 2).0,
+                color
+            );
+        }
+        assert_eq!(evaluate(&first, state)?, first_before);
+        assert_eq!(evaluate(&second, state)?, second_before);
+        assert!(!unsafe { IsChild(parent.window, GetFocus()) }.as_bool());
+        Ok(())
     }
 
     #[test]

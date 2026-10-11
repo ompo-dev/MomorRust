@@ -1,4 +1,4 @@
-use std::{cell::UnsafeCell, sync::Mutex};
+use std::{cell::UnsafeCell, sync::Once};
 
 use anyhow::Context as _;
 use thiserror::Error;
@@ -34,7 +34,7 @@ fn module_callback<'s>(
     Some(module)
 }
 
-static INITIALIZED: Mutex<bool> = Mutex::new(false);
+static INITIALIZED: Once = Once::new();
 
 /// Exceptions related to this crate
 #[derive(Error, Debug)]
@@ -60,12 +60,11 @@ type InitializationResults = (UnsafeCell<OwnedIsolate>, Global<Context>);
 
 /// Initialization: JIT compilation and function object registration
 fn initialize() -> InitializationResults {
-    if !*INITIALIZED.lock().unwrap() {
+    INITIALIZED.call_once(|| {
         let platform = v8::new_default_platform(0, false).make_shared();
         v8::V8::initialize_platform(platform);
         v8::V8::initialize();
-        *INITIALIZED.lock().unwrap() = true;
-    }
+    });
 
     let mut isolate = v8::Isolate::new(Default::default());
     let global_context;

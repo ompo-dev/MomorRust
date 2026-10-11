@@ -10,6 +10,7 @@ mod multi_workspace_tests;
 pub mod notifications;
 pub mod pane;
 pub mod pane_group;
+mod panel_layout;
 pub mod path_list {
     pub use util::path_list::{PathList, SerializedPathList};
 }
@@ -113,6 +114,7 @@ use settings::{
     CenteredPaddingSettings, Settings, SettingsLocation, SettingsStore, update_settings_file,
 };
 
+use momor_actions::{Spawn, feedback::FileBugReport, theme::ToggleMode};
 use sqlez::{
     bindable::{Bind, Column, StaticColumnCount},
     statement::Statement,
@@ -155,7 +157,6 @@ pub use workspace_settings::{
     AutosaveSetting, BottomDockLayout, FocusFollowsMouse, RestoreOnStartupBehavior,
     StatusBarSettings, TabBarSettings, WorkspaceSettings,
 };
-use momor_actions::{Spawn, feedback::FileBugReport, theme::ToggleMode};
 
 use crate::{dock::PanelSizeState, item::ItemBufferKind, notifications::NotificationId};
 use crate::{
@@ -1380,6 +1381,9 @@ pub struct Workspace {
     _schedule_serialize_ssh_paths: Option<Task<()>>,
     pane_history_timestamp: Arc<AtomicUsize>,
     bounds: Bounds<Pixels>,
+    panel_layout: panel_layout::PanelLayout,
+    panel_animation: Option<(panel_layout::PanelAnimation, f32)>,
+    panel_animation_task: Option<Task<()>>,
     pub centered_layout: bool,
     bounds_save_task_queued: Option<Task<()>>,
     on_prompt_for_new_path: Option<PromptForNewPath>,
@@ -1826,6 +1830,9 @@ impl Workspace {
             workspace_actions: Default::default(),
             // This data will be incorrect, but it will be overwritten by the time it needs to be used.
             bounds: Default::default(),
+            panel_layout: panel_layout::PanelLayout::default(),
+            panel_animation: None,
+            panel_animation_task: None,
             centered_layout: false,
             bounds_save_task_queued: None,
             on_prompt_for_new_path: None,
@@ -8406,7 +8413,12 @@ pub struct BrowserSlot {
     pub open: bool,
     pub width: f32,
     pub set_visibility: Option<Rc<dyn Fn(bool, &mut App)>>,
+    rendered: bool,
+    capture_screenshot: Option<BrowserScreenshotCallback>,
 }
+
+pub type BrowserScreenshotCallback =
+    Rc<dyn Fn(&mut App) -> Task<Result<(gpui::Image, SharedString)>>>;
 
 impl Default for BrowserSlot {
     fn default() -> Self {
@@ -8415,11 +8427,45 @@ impl Default for BrowserSlot {
             open: false,
             width: 720.0,
             set_visibility: None,
+            rendered: false,
+            capture_screenshot: None,
         }
     }
 }
 
 impl gpui::Global for BrowserSlot {}
+
+pub struct ChatSlot {
+    pub open: bool,
+}
+
+impl Default for ChatSlot {
+    fn default() -> Self {
+        Self { open: true }
+    }
+}
+
+impl gpui::Global for ChatSlot {}
+
+pub fn chat_open(cx: &App) -> bool {
+    cx.try_global::<ChatSlot>().is_none_or(|slot| slot.open)
+}
+
+pub fn set_chat_open(open: bool, cx: &mut App) {
+    cx.default_global::<ChatSlot>().open = open;
+}
+
+pub fn toggle_chat(cx: &mut App) -> bool {
+    let open = !chat_open(cx);
+    set_chat_open(open, cx);
+    let store = db::kvp::KeyValueStore::global(cx);
+    db::write_and_log(cx, move || async move {
+        store
+            .write_kvp("momor_chat_open".into(), open.to_string())
+            .await
+    });
+    open
+}
 
 #[derive(Clone)]
 pub(crate) struct DraggedNotebookDivider;
@@ -8487,15 +8533,46 @@ pub fn set_browser_view(view: gpui::AnyView, cx: &mut App) {
 }
 
 pub fn set_browser_visibility_callback(callback: Rc<dyn Fn(bool, &mut App)>, cx: &mut App) {
-    cx.default_global::<BrowserSlot>().set_visibility = Some(callback);
+    let slot = cx.default_global::<BrowserSlot>();
+    slot.set_visibility = Some(callback.clone());
+    let visible = slot.rendered;
+    callback(visible, cx);
+}
+
+pub fn set_browser_screenshot_callback(callback: BrowserScreenshotCallback, cx: &mut App) {
+    cx.default_global::<BrowserSlot>().capture_screenshot = Some(callback);
+}
+
+pub fn capture_browser_screenshot(cx: &mut App) -> Task<Result<(gpui::Image, SharedString)>> {
+    let callback = cx
+        .try_global::<BrowserSlot>()
+        .and_then(|slot| slot.open.then(|| slot.capture_screenshot.clone()).flatten());
+    match callback {
+        Some(callback) => callback(cx),
+        None => Task::ready(Err(anyhow!(
+            "Abra uma pagina no navegador do Momor para capturar."
+        ))),
+    }
 }
 
 fn update_browser_visibility(visible: bool, cx: &mut App) {
-    let callback = cx
-        .try_global::<BrowserSlot>()
-        .and_then(|slot| slot.set_visibility.clone());
+    let slot = cx.default_global::<BrowserSlot>();
+    if slot.rendered == visible {
+        return;
+    }
+    slot.rendered = visible;
+    let callback = slot.set_visibility.clone();
     if let Some(callback) = callback {
-        callback(visible, cx);
+        // Showing or hiding a child HWND can synchronously return focus to GPUI.
+        // Wait until rendering releases the window, and ignore superseded requests.
+        cx.defer(move |cx| {
+            if cx
+                .try_global::<BrowserSlot>()
+                .is_some_and(|slot| slot.rendered == visible)
+            {
+                callback(visible, cx);
+            }
+        });
     }
 }
 
@@ -8515,7 +8592,9 @@ pub fn toggle_browser(cx: &mut App) -> bool {
         slot.open = !slot.open;
         slot.open
     };
-    update_browser_visibility(open, cx);
+    if open {
+        update_browser_visibility(true, cx);
+    }
     let store = db::kvp::KeyValueStore::global(cx);
     db::write_and_log(cx, move || async move {
         store
@@ -8639,7 +8718,7 @@ impl Render for Workspace {
         // window_min_size do OS foi baixado pra caber o pill).
         if !compact_active(cx) {
             let vs = window.viewport_size();
-            let w = f32::from(vs.width).max(400.0);
+            let w = f32::from(vs.width).max(150.0);
             let h = f32::from(vs.height).max(360.0);
             if (w - f32::from(vs.width)).abs() > 0.5 || (h - f32::from(vs.height)).abs() > 0.5 {
                 window.resize(gpui::size(px(w), px(h)));
@@ -8649,6 +8728,11 @@ impl Render for Workspace {
         // ponytail: modo recolhido — a janela é um pill; só o titlebar_item (que se
         // desenha como pill) preenche a janelinha.
         if compact_active(cx) {
+            self.panel_animation_task = None;
+            self.panel_animation = None;
+            self.panel_layout.cancel_resize();
+            window.set_window_clip(None);
+            update_browser_visibility(false, cx);
             return div()
                 .size_full()
                 .overflow_hidden()
@@ -8664,6 +8748,7 @@ impl Render for Workspace {
         // completo com welcome/status bar). Duas colunas: o painel Notion (slot global)
         // quando aberto + o agent panel (chat) preenchendo o resto. O agent vem de qual
         // dock a config do usuário puser (esquerda/direita/baixo).
+        let chat_open = chat_open(cx);
         let agent_panel = self
             .left_dock
             .read(cx)
@@ -8673,12 +8758,184 @@ impl Render for Workspace {
             .map(|panel| panel.to_any());
         let browser = cx
             .try_global::<BrowserSlot>()
-            .filter(|slot| slot.open)
             .and_then(|slot| slot.view.clone());
         let notebook = cx
             .try_global::<NotebookSlot>()
-            .filter(|slot| slot.open)
             .and_then(|slot| slot.view.clone());
+        let panel_visibility = [
+            notebook_open(cx) && notebook.is_some(),
+            browser_open(cx) && browser.is_some(),
+            chat_open && agent_panel.is_some(),
+        ];
+        if let Some(resize) = self.panel_layout.update(
+            panel_visibility,
+            [notebook_width(cx), browser_width(cx), 400.],
+            f32::from(window.viewport_size().width),
+        ) {
+            if panel_visibility[panel_layout::NOTES] {
+                set_notebook_width(self.panel_layout.width(panel_layout::NOTES), cx);
+            }
+            if panel_visibility[panel_layout::BROWSER] {
+                set_browser_width(self.panel_layout.width(panel_layout::BROWSER), cx);
+            }
+            let from_bounds = window.bounds();
+            let previous_frame = self.panel_animation.map(|(animation, progress)| {
+                animation.frame(progress, f32::from(from_bounds.origin.x))
+            });
+            let from_widths = previous_frame.as_ref().map_or_else(
+                || {
+                    std::array::from_fn(|index| {
+                        if resize.previous[index] {
+                            self.panel_layout.width(index)
+                        } else {
+                            0.
+                        }
+                    })
+                },
+                |frame| frame.widths,
+            );
+            let from_origin = previous_frame
+                .as_ref()
+                .map_or(f32::from(from_bounds.origin.x), |frame| frame.origin);
+            let from_width = previous_frame
+                .as_ref()
+                .map_or(f32::from(from_bounds.size.width), |frame| frame.width);
+            let mut bounds = from_bounds;
+            bounds.size.width = px(resize.width);
+            let available_range = window.display(cx).and_then(|display| {
+                let usable = display.visible_bounds();
+                (bounds.size.width <= usable.size.width).then(|| {
+                    (
+                        f32::from(usable.left()),
+                        f32::from(usable.right() - bounds.size.width),
+                    )
+                })
+            });
+            let target_origin = (0..3)
+                .find(|&index| panel_visibility[index] && from_widths[index] > 0.)
+                .map(|anchor| {
+                    let position = previous_frame.as_ref().map_or(
+                        f32::from(from_bounds.origin.x) + resize.previous_offsets[anchor],
+                        |frame| frame.positions[anchor],
+                    );
+                    position
+                        - (0..anchor)
+                            .filter(|&index| panel_visibility[index])
+                            .map(|index| self.panel_layout.width(index))
+                            .sum::<f32>()
+                })
+                .unwrap_or(from_origin);
+            bounds.origin.x = px(if previous_frame.is_some() {
+                self.panel_layout
+                    .set_resize_origin(target_origin, available_range)
+            } else {
+                self.panel_layout.resize_origin(
+                    f32::from(from_bounds.origin.x),
+                    resize.origin_offset,
+                    available_range,
+                )
+            });
+            if window.is_maximized() {
+                window.zoom_window();
+            }
+            // Resizing the native swap chain every animation frame blanks the
+            // other panels. Keep space for surviving panels until they settle.
+            let shrink_after_animation = bounds.size.width < from_bounds.size.width;
+            if !shrink_after_animation {
+                window.set_window_bounds(bounds);
+            }
+            let animation = panel_layout::PanelAnimation {
+                from_origin,
+                from_width,
+                to_origin: f32::from(bounds.origin.x),
+                to_width: resize.width,
+                widths: std::array::from_fn(|index| self.panel_layout.width(index)),
+                from_widths,
+                visible: panel_visibility,
+            };
+            self.panel_animation = Some((animation, 0.));
+            self.panel_animation_task = Some(cx.spawn_in(window, async move |this, cx| {
+                let start = cx.background_executor().now();
+                let mut final_resize_requested = false;
+                loop {
+                    let elapsed = cx.background_executor().now().duration_since(start);
+                    let progress = (elapsed.as_secs_f32() / 0.22).min(1.);
+                    let result = this.update_in(cx, |this, window, cx| {
+                        if compact_active(cx) {
+                            return false;
+                        }
+                        if progress >= 1. && shrink_after_animation && !final_resize_requested {
+                            let mut final_bounds = window.bounds();
+                            final_bounds.origin.x = bounds.origin.x;
+                            final_bounds.size.width = bounds.size.width;
+                            window.set_window_bounds(final_bounds);
+                            final_resize_requested = true;
+                        }
+                        let bounds_applied =
+                            (f32::from(window.bounds().origin.x) - animation.to_origin).abs() <= 1.
+                                && (f32::from(window.viewport_size().width) - animation.to_width)
+                                    .abs()
+                                    <= 1.;
+                        let waiting_for_bounds = cfg!(target_os = "windows")
+                            && !bounds_applied
+                            && elapsed < Duration::from_secs(1);
+                        if progress >= 1. && !bounds_applied && elapsed >= Duration::from_secs(1) {
+                            log::warn!(
+                                "Panel animation timed out waiting for native window bounds"
+                            );
+                        }
+                        let continuing = progress < 1. || waiting_for_bounds;
+                        // Keep the terminal frame until the native resize is acknowledged,
+                        // otherwise its offsets are reset against the old window origin.
+                        this.panel_animation = continuing.then_some((animation, progress));
+                        cx.notify();
+                        continuing
+                    });
+                    if !result.log_err().unwrap_or(false) {
+                        break;
+                    }
+                    cx.background_executor()
+                        .timer(Duration::from_millis(16))
+                        .await;
+                }
+            }));
+        }
+        let animation_frame = self.panel_animation.map(|(animation, progress)| {
+            animation.frame(progress, f32::from(window.bounds().origin.x))
+        });
+        let render_visibility = animation_frame
+            .as_ref()
+            .map_or(panel_visibility, |frame| frame.visible);
+        let notebook = notebook.filter(|_| render_visibility[panel_layout::NOTES]);
+        let browser = browser.filter(|_| render_visibility[panel_layout::BROWSER]);
+        let agent_panel = agent_panel.filter(|_| render_visibility[panel_layout::CHAT]);
+        let chat_open = render_visibility[panel_layout::CHAT];
+        let browser_open = render_visibility[panel_layout::BROWSER];
+        update_browser_visibility(browser_open, cx);
+        let visible_bounds = animation_frame.as_ref().map(|frame| {
+            gpui::Bounds::new(
+                gpui::point(px(frame.origin), window.bounds().origin.y),
+                gpui::size(px(frame.width), window.viewport_size().height),
+            )
+        });
+        window.set_window_clip(visible_bounds);
+        let titlebar_left = animation_frame.as_ref().map_or(0., |frame| {
+            frame.origin - f32::from(window.bounds().origin.x)
+        });
+        let titlebar_width = animation_frame
+            .as_ref()
+            .map_or(window.viewport_size().width, |frame| px(frame.width));
+        let panel_resizing = self.panel_layout.resizing() || animation_frame.is_some();
+        let panel_widths = animation_frame.as_ref().map_or_else(
+            || std::array::from_fn(|index| self.panel_layout.width(index)),
+            |frame| frame.widths,
+        );
+        let panel_offsets = animation_frame
+            .as_ref()
+            .map_or([0.; 3], |frame| frame.offsets);
+        let notes_width = panel_widths[panel_layout::NOTES];
+        let browser_panel_width = panel_widths[panel_layout::BROWSER];
+        let chat_width = panel_widths[panel_layout::CHAT];
         {
             return div()
                 .relative()
@@ -8689,13 +8946,39 @@ impl Render for Workspace {
                 .text_color(colors.text)
                 .bg(colors.background)
                 .overflow_hidden()
-                .children(self.titlebar_item.clone())
+                .child(
+                    div()
+                        .relative()
+                        .left(px(titlebar_left))
+                        .w(titlebar_width)
+                        .flex_none()
+                        .children(self.titlebar_item.clone()),
+                )
                 .child(
                     h_flex()
                         .flex_1()
                         .min_h(px(0.))
                         .w_full()
                         .overflow_hidden()
+                        .on_children_prepainted({
+                            let weak = cx.weak_entity();
+                            move |bounds, window, cx| {
+                                let widths = bounds
+                                    .iter()
+                                    .map(|bounds| f32::from(bounds.size.width))
+                                    .collect::<Vec<_>>();
+                                weak.update(cx, |this, _| {
+                                    if this.panel_animation.is_none() {
+                                        this.panel_layout.record_rendered_widths(
+                                            panel_visibility,
+                                            &widths,
+                                            f32::from(window.viewport_size().width),
+                                        );
+                                    }
+                                })
+                                .log_err();
+                            }
+                        })
                         .on_mouse_down(MouseButton::Left, |_, window, _cx| {
                             // Keep the browser child alive while the user works in
                             // notes or chat. It is constrained to its own column, so
@@ -8707,29 +8990,47 @@ impl Render for Workspace {
                             this.child(
                                 div()
                                     .relative()
-                                    .w(px(notebook_width(cx)))
+                                    .left(px(panel_offsets[panel_layout::NOTES]))
+                                    .w(px(notes_width))
                                     .h_full()
                                     .flex_none()
+                                    .when(!chat_open && !browser_open && !panel_resizing, |this| {
+                                        this.flex_1().min_w_0()
+                                    })
                                     .overflow_hidden()
                                     .border_r_1()
                                     .border_color(colors.border)
                                     .on_drag_move(cx.listener(
-                                        |_this,
-                                         event: &DragMoveEvent<DraggedNotebookDivider>,
-                                         window,
-                                         cx| {
+                                        move |_this,
+                                              event: &DragMoveEvent<DraggedNotebookDivider>,
+                                              window,
+                                              cx| {
                                             let viewport_width =
                                                 f32::from(window.viewport_size().width);
+                                            let reserved_width =
+                                                if browser_open { browser_width(cx) } else { 0.0 }
+                                                    + if chat_open { 300.0 } else { 0.0 };
                                             let max_width =
-                                                (viewport_width - browser_width(cx) - 300.0)
-                                                    .max(280.0);
+                                                (viewport_width - reserved_width).max(280.0);
                                             let width = f32::from(event.event.position.x)
                                                 .clamp(280.0, max_width);
                                             set_notebook_width(width, cx);
                                             cx.notify();
                                         },
                                     ))
-                                    .child(panel)
+                                    .child(
+                                        div()
+                                            .h_full()
+                                            .when(panel_resizing, |this| {
+                                                this.w(px((self
+                                                    .panel_layout
+                                                    .width(panel_layout::NOTES)
+                                                    - 1.)
+                                                    .max(0.)))
+                                            })
+                                            .when(!panel_resizing, |this| this.w_full())
+                                            .child(panel),
+                                    )
                                     .child(gpui::deferred(
                                         div()
                                             .id("notebook-chat-resize")
@@ -8754,54 +9055,95 @@ impl Render for Workspace {
                             this.child(
                                 div()
                                     .relative()
-                                    .w(px(browser_width(cx)))
+                                    .left(px(panel_offsets[panel_layout::BROWSER]))
+                                    .w(px(browser_panel_width))
                                     .h_full()
                                     .flex_none()
+                                    .when(!chat_open && !panel_resizing, |this| {
+                                        this.flex_1().min_w_0()
+                                    })
                                     .overflow_hidden()
                                     .border_r_1()
                                     .border_color(colors.border)
                                     .on_drag_move(cx.listener(
-                                        |_this,
-                                         event: &DragMoveEvent<DraggedBrowserDivider>,
-                                         window,
-                                         cx| {
+                                        move |_this,
+                                              event: &DragMoveEvent<DraggedBrowserDivider>,
+                                              window,
+                                              cx| {
                                             let viewport_width =
                                                 f32::from(window.viewport_size().width);
                                             let browser_left = f32::from(event.bounds.left());
+                                            let chat_width = if chat_open { 300.0 } else { 0.0 };
                                             let max_width =
-                                                (viewport_width - browser_left - 300.0)
+                                                (viewport_width - browser_left - chat_width)
                                                     .max(50.0);
                                             let width = f32::from(
                                                 event.event.position.x - event.bounds.left(),
                                             )
-                                                .clamp(50.0, max_width);
+                                            .clamp(50.0, max_width);
                                             set_browser_width(width, cx);
                                             cx.notify();
                                         },
                                     ))
-                                    .child(panel)
-                                    .child(gpui::deferred(
+                                    .child(
                                         div()
-                                            .id("browser-chat-resize")
-                                            .absolute()
-                                            .top_0()
-                                            .right(px(-3.))
-                                            .w(px(6.))
                                             .h_full()
-                                            .cursor_col_resize()
-                                            .on_drag(DraggedBrowserDivider, |d, _, _, cx| {
-                                                cx.stop_propagation();
-                                                cx.new(|_| d.clone())
+                                            .when(panel_resizing, |this| {
+                                                this.w(px((self
+                                                    .panel_layout
+                                                    .width(panel_layout::BROWSER)
+                                                    - 1.)
+                                                    .max(0.)))
                                             })
-                                            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
-                                                cx.stop_propagation()
-                                            })
-                                            .occlude(),
-                                    )),
+                                            .when(!panel_resizing, |this| this.w_full())
+                                            .child(panel),
+                                    )
+                                    .when(chat_open, |this| {
+                                        this.child(gpui::deferred(
+                                            div()
+                                                .id("browser-chat-resize")
+                                                .absolute()
+                                                .top_0()
+                                                .right(px(-3.))
+                                                .w(px(6.))
+                                                .h_full()
+                                                .cursor_col_resize()
+                                                .on_drag(DraggedBrowserDivider, |d, _, _, cx| {
+                                                    cx.stop_propagation();
+                                                    cx.new(|_| d.clone())
+                                                })
+                                                .on_mouse_down(
+                                                    gpui::MouseButton::Left,
+                                                    |_, _, cx| cx.stop_propagation(),
+                                                )
+                                                .occlude(),
+                                        ))
+                                    }),
                             )
                         })
                         .when_some(agent_panel, |this, panel| {
-                            this.child(div().flex_1().h_full().overflow_hidden().child(panel))
+                            this.child(
+                                div()
+                                    .relative()
+                                    .left(px(panel_offsets[panel_layout::CHAT]))
+                                    .h_full()
+                                    .overflow_hidden()
+                                    // flex_none does not reset the zero basis from flex_1.
+                                    // Apply only one mode so animation widths cannot collapse.
+                                    .when(!panel_resizing, |this| this.flex_1())
+                                    .when(panel_resizing, |this| this.flex_none().w(px(chat_width)))
+                                    .child(
+                                        div()
+                                            .h_full()
+                                            .when(panel_resizing, |this| {
+                                                this.w(px(self
+                                                    .panel_layout
+                                                    .width(panel_layout::CHAT)))
+                                            })
+                                            .when(!panel_resizing, |this| this.w_full())
+                                            .child(panel),
+                                    ),
+                            )
                         }),
                 )
                 .children(self.render_notifications(window, cx))
@@ -11447,6 +11789,73 @@ mod tests {
     use settings::SettingsStore;
     use util::path;
     use util::rel_path::rel_path;
+
+    #[gpui::test]
+    async fn test_chat_visibility_preserves_browser_and_notebook(cx: &mut TestAppContext) {
+        init_test(cx);
+        cx.update(|cx| {
+            set_browser_open(true, cx);
+            set_browser_width(600.0, cx);
+            set_notebook_open(true, cx);
+            assert!(chat_open(cx));
+            assert!(!toggle_chat(cx));
+            assert!(browser_open(cx));
+            assert!(notebook_open(cx));
+            assert_eq!(browser_width(cx), 600.0);
+            assert!(toggle_chat(cx));
+            assert!(browser_open(cx));
+            assert!(notebook_open(cx));
+        });
+    }
+
+    #[gpui::test]
+    async fn test_browser_screenshot_uses_registered_surface_only_when_open(
+        cx: &mut TestAppContext,
+    ) {
+        let captures = Rc::new(std::cell::Cell::new(0));
+        let callback_captures = captures.clone();
+        cx.update(|cx| {
+            set_browser_screenshot_callback(
+                Rc::new(move |_| {
+                    callback_captures.set(callback_captures.get() + 1);
+                    Task::ready(Ok((
+                        gpui::Image::from_bytes(gpui::ImageFormat::Png, Vec::new()),
+                        "Captura.png".into(),
+                    )))
+                }),
+                cx,
+            );
+        });
+        assert!(cx.update(capture_browser_screenshot).await.is_err());
+        assert_eq!(captures.get(), 0);
+        cx.update(|cx| set_browser_open(true, cx));
+        let (_, name) = cx
+            .update(capture_browser_screenshot)
+            .await
+            .expect("capture active surface");
+        assert_eq!(name.as_ref(), "Captura.png");
+        assert_eq!(captures.get(), 1);
+        cx.update(|cx| set_browser_open(false, cx));
+        assert!(cx.update(capture_browser_screenshot).await.is_err());
+        assert_eq!(captures.get(), 1);
+    }
+
+    #[gpui::test]
+    async fn test_browser_screenshot_propagates_capture_error(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            set_browser_open(true, cx);
+            set_browser_screenshot_callback(
+                Rc::new(|_| Task::ready(Err(anyhow!("capture failed")))),
+                cx,
+            );
+        });
+        let error = cx
+            .update(capture_browser_screenshot)
+            .await
+            .err()
+            .expect("capture must fail");
+        assert_eq!(error.to_string(), "capture failed");
+    }
 
     #[gpui::test]
     async fn test_tab_disambiguation(cx: &mut TestAppContext) {
@@ -16044,9 +16453,9 @@ mod tests {
 
     #[gpui::test]
     async fn test_toggle_theme_mode_persists_and_updates_active_theme(cx: &mut TestAppContext) {
+        use momor_actions::theme::ToggleMode;
         use settings::{ThemeName, ThemeSelection};
         use theme::SystemAppearance;
-        use momor_actions::theme::ToggleMode;
 
         init_test(cx);
 
